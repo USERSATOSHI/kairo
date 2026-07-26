@@ -345,10 +345,12 @@ Status: **Complete** (accepted 2026-07-26)
 
 ### T4 — Forgejo Issues
 
-- [ ] Configurable instances and version detection
-- [ ] Per-instance capability detection
-- [ ] Core issue, comment, label, assignee, and milestone operations
-- [ ] Webhooks where supported and polling fallback
+Status: **Complete** (accepted 2026-07-26)
+
+- [x] Configurable instances and version detection
+- [x] Per-instance capability detection
+- [x] Core issue, comment, label, assignee, and milestone operations
+- [x] Webhooks where supported and polling fallback
 
 ### T5 — Ticket migration
 

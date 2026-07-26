@@ -241,7 +241,7 @@ remote isolation, automatic merge, and deployment remain deferred.
 
 ## Project status
 
-Milestones M1 through M7 are accepted:
+Milestones M1 through M7 and ticket milestones T1 through T4 are accepted:
 
 - deterministic compiler, reducer, scheduler, transitions, loops, and recovery;
 - durable SQLite runtime and approval execution;
@@ -249,7 +249,9 @@ Milestones M1 through M7 are accepted:
 - provider-neutral agent harness execution;
 - bounded feature-development workflow;
 - HTTP API and execution console;
-- distributable local CLI and worker composition.
+- distributable local CLI and worker composition;
+- local ticket planning, immutable run snapshots, and GitHub/Forgejo issue
+  synchronization.
 
 The detailed acceptance evidence lives under [milestones](milestones). Future
 scope and explicit exclusions live in [the implementation plan](../plan.md) and

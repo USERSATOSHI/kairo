@@ -60,10 +60,12 @@ export interface TicketProviderCapabilities {
 
 export interface ProviderCreateTicketInput extends CreateTicketInput {
   readonly marker?: string;
+  readonly milestone?: string;
 }
 
 export interface ProviderUpdateTicketInput extends Omit<UpdateTicketInput, 'expectedRevision'> {
   readonly expectedRevision?: string;
+  readonly milestone?: string | null;
 }
 
 export interface TicketProvider {

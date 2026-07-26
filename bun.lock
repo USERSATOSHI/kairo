@@ -15,6 +15,7 @@
         "@kairo/persistence-sqlite": "0.1.0",
         "@kairo/runtime": "0.1.0",
         "@kairo/sandbox-worktree": "0.1.0",
+        "@kairo/ticket-provider-forgejo": "0.1.0",
         "@kairo/ticket-provider-github": "0.1.0",
         "@kairo/ticket-provider-local": "0.1.0",
         "@kairo/tickets": "0.1.0",
@@ -122,6 +123,14 @@
         "@usersatoshi/results": "^1.0.0",
       },
     },
+    "packages/ticket-provider-forgejo": {
+      "name": "@kairo/ticket-provider-forgejo",
+      "version": "0.1.0",
+      "dependencies": {
+        "@kairo/tickets": "0.1.0",
+        "@usersatoshi/results": "^1.0.0",
+      },
+    },
     "packages/ticket-provider-github": {
       "name": "@kairo/ticket-provider-github",
       "version": "0.1.0",
@@ -192,6 +201,8 @@
     "@kairo/runtime": ["@kairo/runtime@workspace:packages/runtime"],
 
     "@kairo/sandbox-worktree": ["@kairo/sandbox-worktree@workspace:packages/sandbox-worktree"],
+
+    "@kairo/ticket-provider-forgejo": ["@kairo/ticket-provider-forgejo@workspace:packages/ticket-provider-forgejo"],
 
     "@kairo/ticket-provider-github": ["@kairo/ticket-provider-github@workspace:packages/ticket-provider-github"],
 

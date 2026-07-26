@@ -54,6 +54,7 @@
     "@kairo/persistence-sqlite": "0.1.0",
     "@kairo/runtime": "0.1.0",
     "@kairo/sandbox-worktree": "0.1.0",
+    "@kairo/ticket-provider-forgejo": "0.1.0",
     "@kairo/ticket-provider-github": "0.1.0",
     "@kairo/ticket-provider-local": "0.1.0",
     "@kairo/tickets": "0.1.0",

@@ -4,8 +4,13 @@ import { safeCall, type Result } from '@usersatoshi/results';
 
 import type { TicketError } from '../errors.ts';
 import { TicketErrorKind, toErr } from '../errors.ts';
-import type { TicketSyncStore } from '../integration/ports.ts';
-import type { ExternalTicketEvent, TicketSyncState } from '../integration/types.ts';
+import type { ForgejoMetadataStore, TicketSyncStore } from '../integration/ports.ts';
+import type {
+  ExternalTicketEvent,
+  ForgejoInstanceMetadata,
+  TicketSyncState,
+} from '../integration/types.ts';
+import type { TicketProviderCapabilities } from '../provider/types.ts';
 
 interface SyncStateRow {
   readonly ticket_id: string;
@@ -16,6 +21,43 @@ interface SyncStateRow {
   readonly next_retry_at: string | null;
 }
 
+interface ForgejoMetadataRow {
+  readonly instance_url: string;
+  readonly version: string;
+  readonly api_version: string | null;
+  readonly capabilities_json: string;
+  readonly last_checked_at: string;
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function parseCapabilities(value: string): TicketProviderCapabilities {
+  const parsed: unknown = JSON.parse(value);
+  if (
+    !isRecord(parsed) ||
+    typeof parsed.issues !== 'boolean' ||
+    typeof parsed.comments !== 'boolean' ||
+    typeof parsed.labels !== 'boolean' ||
+    typeof parsed.assignees !== 'boolean' ||
+    typeof parsed.milestones !== 'boolean' ||
+    typeof parsed.webhooks !== 'boolean' ||
+    typeof parsed.projects !== 'boolean'
+  ) {
+    throw new Error('Stored Forgejo capabilities are malformed');
+  }
+  return {
+    issues: parsed.issues,
+    comments: parsed.comments,
+    labels: parsed.labels,
+    assignees: parsed.assignees,
+    milestones: parsed.milestones,
+    webhooks: parsed.webhooks,
+    projects: parsed.projects,
+  };
+}
+
 function databaseError(operation: string, error: unknown): TicketError {
   return toErr(TicketErrorKind.DatabaseFailure, {
     operation,
@@ -23,7 +65,7 @@ function databaseError(operation: string, error: unknown): TicketError {
   });
 }
 
-export class SqliteTicketSyncStore implements TicketSyncStore {
+export class SqliteTicketSyncStore implements TicketSyncStore, ForgejoMetadataStore {
   private readonly database: Database;
 
   constructor(path: string) {
@@ -66,6 +108,13 @@ export class SqliteTicketSyncStore implements TicketSyncStore {
             last_error TEXT,
             received_at TEXT NOT NULL,
             PRIMARY KEY (provider, provider_event_id)
+          );
+          CREATE TABLE IF NOT EXISTS forgejo_instance_metadata (
+            instance_url TEXT PRIMARY KEY,
+            version TEXT NOT NULL,
+            api_version TEXT,
+            capabilities_json TEXT NOT NULL,
+            last_checked_at TEXT NOT NULL
           );
         `);
       },
@@ -178,6 +227,56 @@ export class SqliteTicketSyncStore implements TicketSyncStore {
           );
       },
       (error) => databaseError('setSyncState', error),
+    );
+  }
+
+  saveForgejoMetadata(metadata: ForgejoInstanceMetadata): Result<void, TicketError> {
+    return safeCall(
+      () => {
+        this.database
+          .query(
+            `INSERT INTO forgejo_instance_metadata (
+              instance_url, version, api_version, capabilities_json, last_checked_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(instance_url) DO UPDATE SET
+              version = excluded.version,
+              api_version = excluded.api_version,
+              capabilities_json = excluded.capabilities_json,
+              last_checked_at = excluded.last_checked_at`,
+          )
+          .run(
+            metadata.instanceUrl,
+            metadata.version,
+            metadata.apiVersion ?? null,
+            JSON.stringify(metadata.capabilities),
+            metadata.lastCheckedAt,
+          );
+      },
+      (error) => databaseError('saveForgejoMetadata', error),
+    );
+  }
+
+  getForgejoMetadata(
+    instanceUrl: string,
+  ): Result<ForgejoInstanceMetadata | undefined, TicketError> {
+    return safeCall(
+      () => {
+        const row = this.database
+          .query<ForgejoMetadataRow, [string]>(
+            `SELECT instance_url, version, api_version, capabilities_json, last_checked_at
+             FROM forgejo_instance_metadata WHERE instance_url = ?`,
+          )
+          .get(instanceUrl);
+        if (!row) return undefined;
+        return {
+          instanceUrl: row.instance_url,
+          version: row.version,
+          ...(row.api_version === null ? {} : { apiVersion: row.api_version }),
+          capabilities: parseCapabilities(row.capabilities_json),
+          lastCheckedAt: row.last_checked_at,
+        };
+      },
+      (error) => databaseError('getForgejoMetadata', error),
     );
   }
 

@@ -21,10 +21,10 @@ finishes successfully.
 Kairo runs locally. Repository worktrees, run history, logs, and artifacts stay
 on your machine.
 
-Kairo also contains the T1 local ticket foundation for planning greenfield work
-before Git exists. The ticket domain, SQLite persistence, local provider, and
-planning Kanban projection are available as internal packages; ticket API and
-UI surfaces are planned for later ticket milestones.
+Kairo also contains the accepted T1–T4 ticket foundation: local greenfield
+planning, immutable run snapshots, GitHub Issues synchronization, and
+capability-aware Forgejo Issues synchronization. Ticket API and UI surfaces are
+planned for later ticket milestones.
 
 ## Install
 
