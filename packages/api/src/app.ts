@@ -70,6 +70,8 @@ export function createKairoApp(services: ApiServices) {
         body: t.Object({
           adw: t.String({ minLength: 1 }),
           repositoryPath: t.String({ minLength: 1 }),
+          task: t.Optional(t.String({ minLength: 1 })),
+          ticket: t.Optional(t.String({ minLength: 1 })),
           harnesses: t.Optional(t.Array(t.String({ minLength: 1 }))),
           harnessesByNode: t.Optional(
             t.Record(

@@ -30,6 +30,43 @@ import {
 
 type Tab = 'details' | 'events' | 'artifacts' | 'approval';
 
+interface WorkItemView {
+  readonly provider: string;
+  readonly reference: string;
+  readonly title: string;
+  readonly description: string;
+  readonly acceptanceCriteria: readonly string[];
+  readonly checksum: string;
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function workItemFor(run: RunDetails): WorkItemView | undefined {
+  const value = run.state.configuration.workItem;
+  if (
+    !isRecord(value) ||
+    typeof value.provider !== 'string' ||
+    typeof value.reference !== 'string' ||
+    typeof value.title !== 'string' ||
+    typeof value.description !== 'string' ||
+    !Array.isArray(value.acceptanceCriteria) ||
+    !value.acceptanceCriteria.every((criterion) => typeof criterion === 'string') ||
+    typeof value.checksum !== 'string'
+  ) {
+    return undefined;
+  }
+  return {
+    provider: value.provider,
+    reference: value.reference,
+    title: value.title,
+    description: value.description,
+    acceptanceCriteria: value.acceptanceCriteria,
+    checksum: value.checksum,
+  };
+}
+
 function stateClass(state: string): string {
   return `state state-${state.replaceAll('_', '-')}`;
 }
@@ -119,8 +156,26 @@ function NodeDetails({
 }) {
   if (!node) return <p className="empty">Select a node to inspect its durable execution state.</p>;
   const invocations = run.state.invocations.filter(({ nodeId }) => nodeId === node.id);
+  const workItem = workItemFor(run);
   return (
     <div className="detail-stack">
+      {workItem ? (
+        <article className="definition work-item">
+          <span className="node-type">
+            {workItem.provider} · {workItem.reference}
+          </span>
+          <h3>{workItem.title}</h3>
+          <p>{workItem.description}</p>
+          {workItem.acceptanceCriteria.length > 0 ? (
+            <ul>
+              {workItem.acceptanceCriteria.map((criterion) => (
+                <li key={criterion}>{criterion}</li>
+              ))}
+            </ul>
+          ) : null}
+          <small>{workItem.checksum}</small>
+        </article>
+      ) : null}
       <div className="definition">
         <span className="node-type">{node.type}</span>
         <h3>{node.title}</h3>

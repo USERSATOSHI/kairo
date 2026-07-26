@@ -5,6 +5,20 @@ export type JsonValue =
   | readonly JsonValue[]
   | { readonly [key: string]: JsonValue };
 
+export interface WorkItemSnapshot {
+  readonly schemaVersion: 1;
+  readonly kind: 'inline' | 'ticket';
+  readonly provider: string;
+  readonly reference: string;
+  readonly revision?: string;
+  readonly url?: string;
+  readonly title: string;
+  readonly description: string;
+  readonly acceptanceCriteria: readonly string[];
+  readonly labels: readonly string[];
+  readonly checksum: `sha256:${string}`;
+}
+
 export type RecoveryPolicy =
   | 'replay_safe'
   | 'verify_then_replay'

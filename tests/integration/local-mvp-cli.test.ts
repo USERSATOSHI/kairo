@@ -3,9 +3,17 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
-import { createLocalRequestHandler, LocalKairoHost, type LocalPaths } from '@kairo/cli';
+import {
+  createInlineWorkItem,
+  createLocalRequestHandler,
+  LocalKairoHost,
+  resolveTicketWorkItem,
+  type LocalPaths,
+} from '@kairo/cli';
 import { compileAdwPackage, compileWorkflow } from '@kairo/adw';
+import { ScriptedFakeTicketProvider, type TicketProvider } from '@kairo/executors';
 import { ScriptedFakeHarness } from '@kairo/harnesses';
+import { ok } from '@usersatoshi/results';
 
 async function process(
   command: readonly string[],
@@ -77,6 +85,7 @@ describe('M7 runnable local MVP and operator CLI', () => {
     );
     expect(help.stdout).toContain('feature-development, hotfix, bug-fix, chore');
     expect(help.stdout).toContain('kairo run <adw> --repo <path>');
+    expect(help.stdout).toContain('--ticket <provider:reference>');
     expect(help.stdout).toContain('kairo pause|resume|cancel <run-id>');
 
     const version = await process(
@@ -262,6 +271,135 @@ describe('M7 runnable local MVP and operator CLI', () => {
     }
   });
 
+  test('feature development requires one durable work item before repository side effects', async () => {
+    const root = await mkdtemp(resolve(tmpdir(), 'kairo-m8-required-'));
+    roots.push(root);
+    const host = new LocalKairoHost(localPaths(root), []);
+    try {
+      expect((await host.initialize()).isOk()).toBe(true);
+      const repository = resolve(root, 'repository-that-does-not-exist');
+      const missing = await host.create({
+        adw: 'feature-development',
+        repositoryPath: repository,
+        actor: 'operator',
+      });
+      expect(missing.isErr()).toBe(true);
+      if (missing.isErr()) expect(missing.error.code).toBe('work_item_required');
+
+      const unknownProvider = await host.create({
+        adw: 'feature-development',
+        repositoryPath: repository,
+        ticket: 'linear:ENG-123',
+        actor: 'operator',
+      });
+      expect(unknownProvider.isErr()).toBe(true);
+      if (unknownProvider.isErr()) {
+        expect(unknownProvider.error.code).toBe('ticket_provider_not_configured');
+      }
+      expect(await Bun.file(repository).exists()).toBe(false);
+    } finally {
+      host.dispose();
+    }
+  });
+
+  test('work-item checksums are stable across insignificant provider ordering', async () => {
+    const inline = createInlineWorkItem('  Implement the ticket input.  ').unwrap();
+    expect(createInlineWorkItem('Implement the ticket input.').unwrap().checksum).toBe(
+      inline.checksum,
+    );
+    let providerCalls = 0;
+    const provider: TicketProvider = {
+      id: 'kanban',
+      resolve(reference) {
+        providerCalls += 1;
+        return Promise.resolve(
+          ok({
+            reference,
+            revision: '7',
+            title: 'Stable snapshot',
+            description: 'Normalize provider data.',
+            acceptanceCriteria: ['First', 'Second'],
+            labels: providerCalls === 1 ? ['runtime', 'feature'] : ['feature', 'runtime'],
+          }),
+        );
+      },
+    };
+    const providers = new Map([[provider.id, provider]]);
+    const first = await resolveTicketWorkItem('kanban:ENG-123', providers);
+    const second = await resolveTicketWorkItem('kanban:ENG-123', providers);
+    expect(first.isOk()).toBe(true);
+    expect(second.isOk()).toBe(true);
+    expect(first.unwrap().labels).toEqual(['feature', 'runtime']);
+    expect(second.unwrap().labels).toEqual(['feature', 'runtime']);
+    expect(second.unwrap().checksum).toBe(first.unwrap().checksum);
+  });
+
+  test('ticket resolution snapshots and delivers one immutable work item to the agent', async () => {
+    const root = await mkdtemp(resolve(tmpdir(), 'kairo-m8-ticket-'));
+    roots.push(root);
+    const repository = resolve(root, 'repository');
+    await createRepository(repository);
+    const paths = localPaths(root);
+    const harness = new ScriptedFakeHarness('fake', [
+      {
+        output: { summary: 'Plan ticket', steps: ['Implement', 'Test'] },
+        transcript: 'planned',
+      },
+    ]);
+    const provider = new ScriptedFakeTicketProvider('kanban', [
+      {
+        reference: 'ENG-123',
+        revision: '42',
+        url: 'https://kanban.example.test/tickets/ENG-123',
+        title: 'Add durable ticket input',
+        description: 'Make the requested change available to every agent.',
+        acceptanceCriteria: ['Planner receives the ticket', 'Restart does not refetch'],
+        labels: ['runtime', 'feature'],
+      },
+    ]);
+    const host = new LocalKairoHost(paths, [harness], [provider]);
+    let runId = '';
+    try {
+      expect((await host.initialize()).isOk()).toBe(true);
+      const created = await host.create({
+        adw: 'feature-development',
+        repositoryPath: repository,
+        ticket: 'kanban:ENG-123',
+        harnesses: ['fake'],
+        actor: 'operator',
+      });
+      expect(created.isOk()).toBe(true);
+      runId = created.unwrap().runId;
+      expect(provider.references).toEqual(['ENG-123']);
+      const aggregate = host.store.loadRun(runId).unwrap();
+      expect(aggregate.state.configuration.workItem).toMatchObject({
+        schemaVersion: 1,
+        kind: 'ticket',
+        provider: 'kanban',
+        reference: 'ENG-123',
+        revision: '42',
+        title: 'Add durable ticket input',
+      });
+      expect(aggregate.state.configuration.workItem).toHaveProperty(
+        'checksum',
+        expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      );
+      expect(harness.calls).toHaveLength(1);
+      expect(harness.calls[0]?.request.prompt).toContain('Immutable work item for this run');
+      expect(harness.calls[0]?.request.prompt).toContain('Planner receives the ticket');
+    } finally {
+      host.dispose();
+    }
+    const restarted = new LocalKairoHost(paths, [new ScriptedFakeHarness('fake', [])], [provider]);
+    try {
+      expect((await restarted.initialize()).isOk()).toBe(true);
+      expect(restarted.store.loadRun(runId).isOk()).toBe(true);
+      expect(provider.references).toEqual(['ENG-123']);
+    } finally {
+      restarted.dispose();
+    }
+  });
+
   test('packaged workflow survives restart and reaches a merge-ready branch', async () => {
     const root = await mkdtemp(resolve(tmpdir(), 'kairo-m7-'));
     roots.push(root);
@@ -287,6 +425,7 @@ describe('M7 runnable local MVP and operator CLI', () => {
     const created = await first.create({
       adw: 'feature-development',
       repositoryPath: repository,
+      task: 'Implement and validate the fixture change.',
       harnesses: ['fake'],
       actor: 'operator',
     });
@@ -330,6 +469,12 @@ describe('M7 runnable local MVP and operator CLI', () => {
     expect(approved.isOk()).toBe(true);
     aggregate = await first.worker.runUntilStable(runId);
     expect(aggregate.state.status).toBe('waiting_for_approval');
+    expect(harness.calls).toHaveLength(3);
+    expect(
+      harness.calls.every(({ request }) =>
+        request.prompt.includes('Implement and validate the fixture change.'),
+      ),
+    ).toBe(true);
     first.dispose();
 
     const restarted = new LocalKairoHost(paths, [new ScriptedFakeHarness('fake', [])]);

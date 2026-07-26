@@ -260,6 +260,108 @@ Status: **Complete** (accepted 2026-07-26)
 
 ---
 
+## M8 — Durable work-item input and ticket-driven runs
+
+Status: **In progress** — provider-neutral core complete; first concrete
+ticket-provider adapter pending
+
+### Invariant
+
+Every feature-development run is bound to an immutable work-item snapshot.
+Agents receive that snapshot as workflow input and cannot replace, broaden, or
+silently refresh it during the run.
+
+### Deliverables
+
+- [x] ADR for durable workflow inputs and external work-item resolution
+- [x] Provider-neutral `WorkItem` contract and ticket-provider port
+- [x] Source-qualified ticket references with a configured provider
+- [x] Normalized title, description, acceptance criteria, labels, and source URL
+- [x] Source revision and content checksum captured at run creation
+- [ ] Large ticket attachments stored as checksum-bearing artifacts
+- [x] Work-item snapshot recorded in durable run configuration
+- [x] Deterministic prompt composition for planner, implementer, and reviewer
+- [x] CLI support for `--ticket <reference>`
+- [x] CLI fallback for `--task <text>` and `--task-file <path>`
+- [x] API contracts and validation for ticket and inline task inputs
+- [x] Run inspection displays the bound work item and its source
+- [x] Ticket-provider contract tests and fake provider
+- [x] Integration coverage for resolution, restart, replay, and prompt delivery
+- [x] User-guide examples for ticket-driven and inline-task runs
+
+### CLI surface
+
+- [x] `kairo run <adw> --repo <path> --ticket <reference> [--harness <id>]`
+- [x] `kairo run <adw> --repo <path> --task <text> [--harness <id>]`
+- [x] `kairo run <adw> --repo <path> --task-file <path> [--harness <id>]`
+
+### Exit criteria
+
+- [x] `feature-development` refuses to start without exactly one work-item input
+- [x] A ticket is resolved before the repository worktree begins execution
+- [x] Replaying or restarting a run uses the original snapshot without refetching
+- [x] Editing the external ticket after run creation cannot alter the active run
+- [x] Every agent node receives the same objective and acceptance criteria
+- [x] Ticket-provider failures are typed and do not create a partial run
+- [x] Inline tasks follow the same durable contract as provider-backed tickets
+- [x] Provider credentials and secrets are never persisted in events or artifacts
+
+---
+
+## Ticket system
+
+### T1 — Local ticket foundation
+
+Status: **Complete** (accepted 2026-07-26)
+
+- [x] Ticket domain and stable Kairo ticket IDs
+- [x] Local SQLite persistence
+- [x] Comments, labels, assignees, priorities, and relationships
+- [x] Optimistic revisions and typed failures
+- [x] Local provider with no Git, network, remote, or token dependency
+- [x] Pure Backlog, Ready, Blocked, Done, and Cancelled Kanban projection
+- [x] Explicit planning move rules
+- [x] Unit and restart integration coverage
+
+### T2 — Kairo run integration
+
+- [ ] Immutable ticket snapshots
+- [ ] Ticket-to-run links
+- [ ] Existing run-start application service integration
+- [ ] Active implementation-run uniqueness
+- [ ] Derived execution columns
+- [ ] Active-run ticket-change policy
+
+### T3 — GitHub Issues
+
+- [ ] GitHub provider and contract coverage
+- [ ] Import, create, update, comments, labels, and assignees
+- [ ] Webhooks and polling reconciliation
+- [ ] Idempotent run-status synchronization
+
+### T4 — Forgejo Issues
+
+- [ ] Configurable instances and version detection
+- [ ] Per-instance capability detection
+- [ ] Core issue, comment, label, assignee, and milestone operations
+- [ ] Webhooks where supported and polling fallback
+
+### T5 — Ticket migration
+
+- [ ] Durable local-to-GitHub migration
+- [ ] Durable local-to-Forgejo migration
+- [ ] Remote verification and duplicate prevention
+- [ ] Interruption and resume coverage
+
+### T6 — Ticket UI
+
+- [ ] Ticket list and details
+- [ ] Unified planning and derived execution Kanban
+- [ ] Run, snapshot, sync, and migration history
+- [ ] Provider configuration
+
+---
+
 ## Deferred (post-MVP)
 
 - [ ] Bug-fix, chore, and hotfix ADWs
@@ -268,7 +370,7 @@ Status: **Complete** (accepted 2026-07-26)
 - [ ] Installable Git-based ADW packs and lockfiles
 - [ ] Hosted registry or marketplace
 - [ ] Kyuki and Vedh integrations
-- [ ] Ticket and Git hosting integrations
+- [ ] Additional ticket providers and Git hosting integrations
 - [ ] Docker, VM, SSH, or remote-worker sandboxes
 - [ ] PostgreSQL and separate workers
 - [ ] Visual workflow editing

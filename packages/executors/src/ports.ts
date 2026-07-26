@@ -8,6 +8,35 @@ import type {
 } from '@kairo/domain';
 import type { Result } from '@usersatoshi/results';
 
+export interface ResolvedTicket {
+  readonly reference: string;
+  readonly revision: string;
+  readonly url?: string;
+  readonly title: string;
+  readonly description: string;
+  readonly acceptanceCriteria?: readonly string[];
+  readonly labels?: readonly string[];
+}
+
+export const enum TicketProviderErrorKind {
+  InvalidReference = 0,
+  Authentication = 1,
+  NotFound = 2,
+  Unavailable = 3,
+  InvalidResponse = 4,
+}
+
+export interface TicketProviderError {
+  readonly kind: TicketProviderErrorKind;
+  readonly code: string;
+  readonly message: string;
+}
+
+export interface TicketProvider {
+  readonly id: string;
+  resolve(reference: string): Promise<Result<ResolvedTicket, TicketProviderError>>;
+}
+
 export const enum RunStoreErrorKind {
   DatabaseFailure = 0,
   RunNotFound = 1,

@@ -73,6 +73,11 @@ An optional non-empty `models` map selects a model by resolved harness ID. The
 resolved value is recorded on the attempt, and a missing entry preserves the
 harness's configured default.
 
+`WorkItemSnapshot` is the immutable requested change bound at run creation. It
+records normalized inline or provider-backed ticket content, its external
+revision when available, and a `sha256:` checksum. The snapshot lives in
+durable run configuration so replay and resume never refetch a mutable ticket.
+
 ## State Machine Types
 
 ### Three-Level Hierarchy

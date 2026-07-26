@@ -21,6 +21,11 @@ finishes successfully.
 Kairo runs locally. Repository worktrees, run history, logs, and artifacts stay
 on your machine.
 
+Kairo also contains the T1 local ticket foundation for planning greenfield work
+before Git exists. The ticket domain, SQLite persistence, local provider, and
+planning Kanban projection are available as internal packages; ticket API and
+UI surfaces are planned for later ticket milestones.
+
 ## Install
 
 Install directly from GitHub without cloning the repository:
@@ -77,8 +82,23 @@ Run the built-in feature-development workflow against a Git repository:
 ```bash
 kairo run feature-development \
   --repo /path/to/your/repository \
+  --task "Add account export with tests" \
   --harness codex
 ```
+
+For kanban-backed work, use a source-qualified ticket reference after
+configuring that ticket provider:
+
+```bash
+kairo run feature-development \
+  --repo /path/to/your/repository \
+  --ticket kanban:ENG-123 \
+  --harness codex
+```
+
+Kairo resolves the ticket before creating a worktree, stores an immutable
+snapshot in the run, and gives the same objective and acceptance criteria to
+every agent. Use `--task-file request.md` for longer standalone requests.
 
 Kairo returns the new run ID and its current status:
 
@@ -143,6 +163,7 @@ Use one harness for every unpinned agent node:
 ```bash
 kairo run feature-development \
   --repo /path/to/repository \
+  --task "Implement the requested change" \
   --harness codex
 ```
 
@@ -151,6 +172,7 @@ Route individual nodes to different harnesses:
 ```bash
 kairo run feature-development \
   --repo /path/to/repository \
+  --task "Implement the requested change" \
   --harness plan=claude-code \
   --harness implement=opencode \
   --harness review=codex
@@ -161,6 +183,7 @@ Repeat a route to define fallback order:
 ```bash
 kairo run feature-development \
   --repo /path/to/repository \
+  --task "Implement the requested change" \
   --harness implement=opencode \
   --harness implement=codex
 ```

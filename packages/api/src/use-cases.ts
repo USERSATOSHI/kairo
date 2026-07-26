@@ -304,16 +304,22 @@ export async function createRun(
   services: ApiServices,
   request: CreateRunRequest,
 ): Promise<Result<CreateRunResponse, ApiError>> {
+  const task = request.task?.trim();
+  const ticket = request.ticket?.trim();
   if (
     !services.runCreator ||
     !request.adw.trim() ||
     !request.repositoryPath.trim() ||
-    !request.actor.trim()
+    !request.actor.trim() ||
+    (request.task !== undefined && !task) ||
+    (request.ticket !== undefined && !ticket) ||
+    (task !== undefined && ticket !== undefined) ||
+    (request.adw === 'feature-development' && task === undefined && ticket === undefined)
   ) {
     return apiErr(
       ApiErrorKind.InvalidInput,
       'invalid_run_request',
-      'adw, repositoryPath, and actor are required',
+      'adw, repositoryPath, actor, and exactly one feature-development work item are required',
     );
   }
   const created = await services.runCreator.create(request);

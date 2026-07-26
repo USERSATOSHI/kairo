@@ -12,6 +12,7 @@ import {
   BunCommandRunner,
   RunCoordinator,
   type RunAggregate,
+  type TicketProvider,
 } from '@kairo/executors';
 import {
   ClaudeCodeHarness,
@@ -27,6 +28,7 @@ import { ok, type Result } from '@usersatoshi/results';
 
 import { CliErrorKind, cliErr, type CliError } from './errors.ts';
 import { resolveLocalPaths, type LocalPaths } from './paths.ts';
+import { createInlineWorkItem, resolveTicketWorkItem, workItemConfiguration } from './work-item.ts';
 import { LocalWorker } from './worker.ts';
 
 interface RunConfiguration {
@@ -120,6 +122,7 @@ export class LocalKairoHost {
   readonly sandbox: WorktreeSandboxProvider;
   readonly worker: LocalWorker;
   private readonly registry: HarnessRegistry;
+  private readonly ticketProviders: ReadonlyMap<string, TicketProvider>;
   private readonly artifactWriter: LocalArtifactWriter;
   private initialized = false;
 
@@ -131,12 +134,14 @@ export class LocalKairoHost {
       new OpenCodeHarness(),
       new PiHarness(),
     ],
+    ticketProviders: readonly TicketProvider[] = [],
   ) {
     mkdirSync(paths.dataDirectory, { recursive: true });
     this.store = new SqliteEventStore(paths.databasePath);
     this.sandbox = new WorktreeSandboxProvider(paths.worktreeDirectory);
     this.artifactWriter = new LocalArtifactWriter(paths.artifactDirectory);
     this.registry = new HarnessRegistry(harnesses);
+    this.ticketProviders = new Map(ticketProviders.map((provider) => [provider.id, provider]));
     this.worker = new LocalWorker(this.store, {
       coordinatorFor: (aggregate) => this.coordinatorFor(aggregate),
       finalize: (aggregate) => this.finalize(aggregate),
@@ -197,6 +202,44 @@ export class LocalKairoHost {
     if (routeError) {
       return cliErr(CliErrorKind.InvalidArguments, 'invalid_harness_route', routeError);
     }
+    const task = request.task?.trim();
+    const ticket = request.ticket?.trim();
+    if (request.task !== undefined && !task) {
+      return cliErr(
+        CliErrorKind.InvalidArguments,
+        'invalid_work_item',
+        'Task text must be non-empty',
+      );
+    }
+    if (request.ticket !== undefined && !ticket) {
+      return cliErr(
+        CliErrorKind.InvalidArguments,
+        'invalid_ticket_reference',
+        'Ticket reference must be non-empty',
+      );
+    }
+    if (task && ticket) {
+      return cliErr(
+        CliErrorKind.InvalidArguments,
+        'multiple_work_items',
+        'Use exactly one of task or ticket',
+      );
+    }
+    if (request.adw === 'feature-development' && !task && !ticket) {
+      return cliErr(
+        CliErrorKind.InvalidArguments,
+        'work_item_required',
+        'feature-development requires --ticket, --task, or --task-file',
+      );
+    }
+    const workItem = task
+      ? createInlineWorkItem(task)
+      : ticket
+        ? await resolveTicketWorkItem(ticket, this.ticketProviders)
+        : undefined;
+    if (workItem?.isErr()) {
+      return cliErr(CliErrorKind.InvalidArguments, workItem.error.code, workItem.error.message);
+    }
     const id = runId();
     const repoId = repositoryId(request.repositoryPath);
     const registered = await this.sandbox.registerRepository(repoId, request.repositoryPath);
@@ -226,6 +269,7 @@ export class LocalKairoHost {
         adw: request.adw,
         agentHarnesses: harnesses,
         ...(request.harnessesByNode ? { agentHarnessesByNode: request.harnessesByNode } : {}),
+        ...(workItem?.isOk() ? { workItem: workItemConfiguration(workItem.unwrap()) } : {}),
         requestedPermissions: compiled.unwrap().bundle.permissions ?? [],
         repositoryId: repoId,
         repositoryPath: pinned.unwrap().repositoryPath,

@@ -41,6 +41,8 @@ interface ApiErrorResponse {
 interface CreateRunRequest {
   readonly adw: string;               // ADW package path or identifier
   readonly repositoryPath: string;    // Git repository to run against
+  readonly task?: string;             // Inline work-item text
+  readonly ticket?: string;           // Source-qualified provider reference
   readonly harnesses?: readonly string[];  // Default ordered harness policy
   readonly harnessesByNode?: Readonly<Record<string, readonly string[]>>;
   readonly actor: string;             // Who created the run

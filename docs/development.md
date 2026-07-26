@@ -20,8 +20,13 @@ bun run kairo --help
 bun run kairo diagnostics
 bun run kairo run feature-development \
   --repo /path/to/repository \
+  --task "Implement the requested change" \
   --harness codex
 ```
+
+The built-in feature workflow requires exactly one of `--ticket`, `--task`, or
+`--task-file`. Ticket references use `<provider>:<reference>` and are resolved
+to an immutable snapshot before repository side effects begin.
 
 Agent nodes can pin a model for each harness they may use:
 

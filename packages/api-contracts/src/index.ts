@@ -96,6 +96,8 @@ export interface ApprovalDecisionResponse {
 export interface CreateRunRequest {
   readonly adw: string;
   readonly repositoryPath: string;
+  readonly task?: string;
+  readonly ticket?: string;
   readonly harnesses?: readonly string[];
   readonly harnessesByNode?: Readonly<Record<string, readonly string[]>>;
   readonly actor: string;

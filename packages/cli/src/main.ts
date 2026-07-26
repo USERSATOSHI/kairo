@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import { listRuns, getRun } from '@kairo/api';
@@ -13,7 +14,7 @@ const HELP = `Kairo ${VERSION}
 
 Usage:
   kairo create adw <name> [--template <template>] [--output <directory>]
-  kairo run <adw> --repo <path> [--harness <id|node=id>]...
+  kairo run <adw> --repo <path> (--ticket <provider:reference> | --task <text> | --task-file <path>) [--harness <id|node=id>]...
   kairo runs
   kairo status <run-id>
   kairo approve <run-id> <invocation> --reason <text>
@@ -101,9 +102,18 @@ async function main(): Promise<number> {
   try {
     if (command === 'run') {
       const { harnesses, harnessesByNode } = harnessOptions(args);
+      const taskFile = option(args, '--task-file');
+      const inlineTask = option(args, '--task');
+      if (taskFile && inlineTask) {
+        throw new Error('Use exactly one of --task and --task-file');
+      }
+      const task = taskFile ? await readFile(resolve(taskFile), 'utf8') : inlineTask;
+      const ticket = option(args, '--ticket');
       const result = await host.create({
         adw: required(args[1], 'adw'),
         repositoryPath: required(option(args, '--repo'), '--repo'),
+        ...(task ? { task } : {}),
+        ...(ticket ? { ticket } : {}),
         ...(harnesses.length ? { harnesses } : {}),
         ...(Object.keys(harnessesByNode).length ? { harnessesByNode } : {}),
         actor,

@@ -15,6 +15,8 @@
         "@kairo/persistence-sqlite": "0.1.0",
         "@kairo/runtime": "0.1.0",
         "@kairo/sandbox-worktree": "0.1.0",
+        "@kairo/ticket-provider-local": "0.1.0",
+        "@kairo/tickets": "0.1.0",
         "@kairo/web": "0.1.0",
         "@types/bun": "latest",
         "oxfmt": "^0.60.0",
@@ -118,6 +120,21 @@
         "@usersatoshi/results": "^1.0.0",
       },
     },
+    "packages/ticket-provider-local": {
+      "name": "@kairo/ticket-provider-local",
+      "version": "0.1.0",
+      "dependencies": {
+        "@kairo/tickets": "0.1.0",
+        "@usersatoshi/results": "^1.0.0",
+      },
+    },
+    "packages/tickets": {
+      "name": "@kairo/tickets",
+      "version": "0.1.0",
+      "dependencies": {
+        "@usersatoshi/results": "^1.0.0",
+      },
+    },
     "packages/web": {
       "name": "@kairo/web",
       "version": "0.1.0",
@@ -165,6 +182,10 @@
     "@kairo/runtime": ["@kairo/runtime@workspace:packages/runtime"],
 
     "@kairo/sandbox-worktree": ["@kairo/sandbox-worktree@workspace:packages/sandbox-worktree"],
+
+    "@kairo/ticket-provider-local": ["@kairo/ticket-provider-local@workspace:packages/ticket-provider-local"],
+
+    "@kairo/tickets": ["@kairo/tickets@workspace:packages/tickets"],
 
     "@kairo/web": ["@kairo/web@workspace:packages/web"],
 

@@ -22,7 +22,8 @@ From a repository checkout:
 bun run kairo create adw my-feature --template feature-development
 
 # Run a feature development workflow
-bun run kairo run feature-development --repo /path/to/repository --harness codex
+bun run kairo run feature-development --repo /path/to/repository \
+  --task "Implement the requested change" --harness codex
 
 # List all runs
 bun run kairo runs
@@ -93,18 +94,30 @@ Available templates:
 
 The command refuses to replace an existing folder.
 
-### `kairo run <adw> --repo <path> [--harness <id|node=id>]...`
+### `kairo run <adw> --repo <path> <work-item> [--harness <id|node=id>]...`
 
 Creates and executes a new run:
+
 1. Compiles the ADW package (bundled `feature-development` or custom path)
-2. Registers the target Git repository
-3. Pins the starting commit (`HEAD`)
-4. Creates a Git worktree sandbox
-5. Creates the run and advances it to its first stable boundary
+2. Resolves and snapshots the work item
+3. Registers the target Git repository
+4. Pins the starting commit (`HEAD`)
+5. Creates a Git worktree sandbox
+6. Creates the run and advances it to its first stable boundary
 
 The `<adw>` argument can be:
 - `feature-development` — the bundled workflow
 - A path to an ADW package directory
+
+The built-in feature workflow requires exactly one work-item option:
+
+- `--ticket <provider:reference>` resolves a configured ticket provider.
+- `--task <text>` supplies an inline request.
+- `--task-file <path>` reads a longer inline request.
+
+The normalized work item is checksummed, persisted in durable run
+configuration, and added to every agent prompt. Provider credentials are not
+persisted.
 
 An unqualified harness adds to the run's default ordered fallback policy.
 Qualify repeated options with a compiled agent node ID to route different
@@ -112,6 +125,7 @@ agents independently:
 
 ```bash
 bun run kairo run feature-development --repo /path/to/repository \
+  --task "Implement the requested change" \
   --harness plan=claude-code \
   --harness implement=opencode \
   --harness review=codex
@@ -166,6 +180,7 @@ await host.initialize();
 const { runId, status } = await host.create({
   adw: 'feature-development',
   repositoryPath: '/path/to/repo',
+  task: 'Implement the requested change',
   harnesses: ['codex'],
   actor: 'user',
 });

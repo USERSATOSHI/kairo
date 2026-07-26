@@ -295,6 +295,20 @@ h1 {
   font-size: 13px;
 }
 
+.work-item {
+  grid-column: 1 / -1;
+}
+
+.work-item ul {
+  color: #aebfd3;
+  font-size: 13px;
+}
+
+.work-item small {
+  color: #657b99;
+  overflow-wrap: anywhere;
+}
+
 .invocation > div {
   display: flex;
   align-items: center;

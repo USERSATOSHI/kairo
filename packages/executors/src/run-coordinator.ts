@@ -118,6 +118,12 @@ function promptWithSourceFeedback(
   return `${basePrompt}\n\nWorkflow feedback from ${source.nodeId} (${source.outcome ?? 'completed'}):\n${JSON.stringify(source.output, null, 2)}`;
 }
 
+function promptWithWorkItem(aggregate: RunAggregate, basePrompt: string): string {
+  const workItem = aggregate.state.configuration.workItem;
+  if (workItem === undefined) return basePrompt;
+  return `${basePrompt}\n\nImmutable work item for this run:\n${JSON.stringify(workItem, null, 2)}`;
+}
+
 function serializedAgentFailure(error: AgentExecutorError): {
   readonly kind: string;
   readonly message: string;
@@ -820,7 +826,9 @@ export class RunCoordinator {
     const outputSchema = definition.outputSchema
       ? aggregate.artifact.bundle.schemas?.[definition.outputSchema]
       : undefined;
-    const basePrompt = aggregate.artifact.bundle.prompts?.[definition.prompt] ?? definition.prompt;
+    const declaredPrompt =
+      aggregate.artifact.bundle.prompts?.[definition.prompt] ?? definition.prompt;
+    const basePrompt = promptWithWorkItem(aggregate, declaredPrompt);
     const prompt = promptWithSourceFeedback(aggregate, invocationSequence, basePrompt);
     const executed = await this.agentExecutor.execute({
       runId: aggregate.runId,

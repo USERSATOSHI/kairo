@@ -160,6 +160,11 @@ After choosing the harness, the coordinator resolves the model from the
 compiled node's `models` map. It records that selection on `attempt.started`,
 passes it to the harness, and reuses the recorded model when resuming.
 
+When run configuration contains a `workItem`, the coordinator serializes that
+immutable snapshot into every agent prompt before adding transition feedback.
+`TicketProvider` is the provider-neutral resolution port used at run creation;
+provider credentials and APIs remain in infrastructure adapters.
+
 ## BunCommandRunner
 
 Executes shell commands via `Bun.spawn`:

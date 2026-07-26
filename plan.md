@@ -556,7 +556,32 @@ Exit criteria:
 - end-to-end CLI tests use real subprocess, SQLite, Git, worktree, restart, and
   in-process HTTP boundaries without requiring a real model provider.
 
-## 14. Deferred work
+## 14. Ticket-system roadmap
+
+The ticket system is a planning bounded domain beside the existing runtime:
+
+```text
+Tickets describe what should be done.
+Kairo runs record how the work was executed.
+```
+
+The implementation is split into six coherent milestones:
+
+1. T1 local ticket foundation;
+2. T2 immutable ticket snapshots, run links, and derived execution columns;
+3. T3 GitHub Issues synchronization;
+4. T4 capability-aware Forgejo Issues synchronization;
+5. T5 resumable local-to-remote migration;
+6. T6 ticket list, details, Kanban, provider configuration, and sync UI.
+
+T1 was accepted on 2026-07-26. See
+[`docs/milestones/t1.md`](docs/milestones/t1.md). T2–T6 remain planned.
+
+The runtime continues to consume immutable work-item snapshots. Mutable ticket
+rows, provider events, polling, migrations, and Kanban projections remain
+outside the deterministic runtime.
+
+## 15. Deferred work
 
 After the core is stable:
 
@@ -566,13 +591,13 @@ After the core is stable:
 - installable Git-based ADW packs and lockfiles;
 - hosted registry or marketplace;
 - Kyuki and Vedh integrations;
-- ticket and Git hosting integrations;
+- provider-backed ticket synchronization beyond the ticket roadmap;
 - Docker, VM, SSH, or remote-worker sandboxes;
 - PostgreSQL and separate workers;
 - visual workflow editing;
 - deployment and merge automation.
 
-## 15. Foundational ADRs
+## 16. Foundational ADRs
 
 Before full implementation, Kairo must accept and test:
 
@@ -592,7 +617,7 @@ Each ADR contains:
 - at least one counterexample;
 - executable acceptance scenarios.
 
-## 16. First proof
+## 17. First proof
 
 The first proof contains no database, HTTP server, Git operation, filesystem
 effect, or real model call:

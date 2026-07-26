@@ -5234,6 +5234,7 @@ var require_dist = __commonJS((exports) => {
 
 // packages/cli/src/main.ts
 import { randomUUID as randomUUID6 } from "crypto";
+import { readFile as readFile7 } from "fs/promises";
 import { resolve as resolve8 } from "path";
 
 // node_modules/.bun/memoirist@0.4.0/node_modules/memoirist/dist/bun/index.js
@@ -21875,6 +21876,15 @@ function promptWithSourceFeedback(aggregate, invocationSequence, basePrompt) {
 Workflow feedback from ${source.nodeId} (${source.outcome ?? "completed"}):
 ${JSON.stringify(source.output, null, 2)}`;
 }
+function promptWithWorkItem(aggregate, basePrompt) {
+  const workItem = aggregate.state.configuration.workItem;
+  if (workItem === undefined)
+    return basePrompt;
+  return `${basePrompt}
+
+Immutable work item for this run:
+${JSON.stringify(workItem, null, 2)}`;
+}
 function serializedAgentFailure(error) {
   switch (error.kind) {
     case 0 /* Harness */:
@@ -22384,7 +22394,8 @@ class RunCoordinator {
       throw new Error("Agent execution dependencies were validated before completion");
     }
     const outputSchema = definition.outputSchema ? aggregate.artifact.bundle.schemas?.[definition.outputSchema] : undefined;
-    const basePrompt = aggregate.artifact.bundle.prompts?.[definition.prompt] ?? definition.prompt;
+    const declaredPrompt = aggregate.artifact.bundle.prompts?.[definition.prompt] ?? definition.prompt;
+    const basePrompt = promptWithWorkItem(aggregate, declaredPrompt);
     const prompt = promptWithSourceFeedback(aggregate, invocationSequence, basePrompt);
     const executed = await this.agentExecutor.execute({
       runId: aggregate.runId,
@@ -22587,8 +22598,10 @@ function decideApproval(services, runId, invocationSequence, request) {
   });
 }
 async function createRun(services, request) {
-  if (!services.runCreator || !request.adw.trim() || !request.repositoryPath.trim() || !request.actor.trim()) {
-    return apiErr(1 /* InvalidInput */, "invalid_run_request", "adw, repositoryPath, and actor are required");
+  const task = request.task?.trim();
+  const ticket = request.ticket?.trim();
+  if (!services.runCreator || !request.adw.trim() || !request.repositoryPath.trim() || !request.actor.trim() || request.task !== undefined && !task || request.ticket !== undefined && !ticket || task !== undefined && ticket !== undefined || request.adw === "feature-development" && task === undefined && ticket === undefined) {
+    return apiErr(1 /* InvalidInput */, "invalid_run_request", "adw, repositoryPath, actor, and exactly one feature-development work item are required");
   }
   const created = await services.runCreator.create(request);
   return created.isErr() ? apiErr(2 /* Conflict */, "run_creation_failed", created.error.message) : created;
@@ -22688,6 +22701,8 @@ function createKairoApp(services) {
     body: t.Object({
       adw: t.String({ minLength: 1 }),
       repositoryPath: t.String({ minLength: 1 }),
+      task: t.Optional(t.String({ minLength: 1 })),
+      ticket: t.Optional(t.String({ minLength: 1 })),
       harnesses: t.Optional(t.Array(t.String({ minLength: 1 }))),
       harnessesByNode: t.Optional(t.Record(t.String({ minLength: 1 }), t.Array(t.String({ minLength: 1 }), { minItems: 1 }))),
       actor: t.String({ minLength: 1 })
@@ -23397,7 +23412,7 @@ function isAdwTemplate(value) {
 }
 
 // packages/cli/src/local-host.ts
-import { createHash as createHash5, randomUUID as randomUUID5 } from "crypto";
+import { createHash as createHash6, randomUUID as randomUUID5 } from "crypto";
 import { mkdirSync } from "fs";
 import { mkdir as mkdir4, readFile as readFile6, readdir as readdir2 } from "fs/promises";
 import { resolve as resolve7 } from "path";
@@ -24625,6 +24640,121 @@ function resolveLocalPaths(environment = process.env) {
   };
 }
 
+// packages/cli/src/work-item.ts
+import { createHash as createHash5 } from "crypto";
+function normalizedStrings(values, sort) {
+  const normalized = [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+  return sort ? normalized.toSorted() : normalized;
+}
+function checksum3(source) {
+  return `sha256:${createHash5("sha256").update(JSON.stringify(source)).digest("hex")}`;
+}
+function snapshot(source) {
+  if (!source.title.trim() || !source.description.trim()) {
+    return err({
+      kind: 0 /* InvalidInput */,
+      code: "invalid_work_item",
+      message: "Work-item title and description must be non-empty"
+    });
+  }
+  const normalized = {
+    ...source,
+    title: source.title.trim(),
+    description: source.description.trim(),
+    acceptanceCriteria: normalizedStrings(source.acceptanceCriteria, false),
+    labels: normalizedStrings(source.labels, true)
+  };
+  return ok({
+    schemaVersion: 1,
+    ...normalized,
+    checksum: checksum3(normalized)
+  });
+}
+function inlineTitle(task) {
+  const firstLine = task.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+  return firstLine?.replace(/^#+\s*/, "") ?? "";
+}
+function createInlineWorkItem(task) {
+  const description = task.trim();
+  return snapshot({
+    kind: "inline",
+    provider: "inline",
+    reference: "inline",
+    title: inlineTitle(description),
+    description,
+    acceptanceCriteria: [],
+    labels: []
+  });
+}
+function splitTicketReference(ticket) {
+  const separator = ticket.indexOf(":");
+  const provider = separator < 0 ? "" : ticket.slice(0, separator).trim();
+  const reference = separator < 0 ? "" : ticket.slice(separator + 1).trim();
+  return provider && reference ? ok({ provider, reference }) : err({
+    kind: 0 /* InvalidInput */,
+    code: "invalid_ticket_reference",
+    message: "Ticket references must use <provider>:<reference>"
+  });
+}
+function ticketSnapshot(provider, ticket) {
+  if (!ticket.reference.trim() || !ticket.revision.trim()) {
+    return err({
+      kind: 1 /* Provider */,
+      code: "invalid_ticket",
+      message: `Ticket provider ${provider} returned an empty reference or revision`
+    });
+  }
+  return snapshot({
+    kind: "ticket",
+    provider,
+    reference: ticket.reference,
+    revision: ticket.revision,
+    ...ticket.url?.trim() ? { url: ticket.url.trim() } : {},
+    title: ticket.title,
+    description: ticket.description,
+    acceptanceCriteria: ticket.acceptanceCriteria ?? [],
+    labels: ticket.labels ?? []
+  });
+}
+async function resolveTicketWorkItem(ticket, providers) {
+  const parsed = splitTicketReference(ticket);
+  if (parsed.isErr())
+    return parsed;
+  const { provider, reference } = parsed.unwrap();
+  const adapter = providers.get(provider);
+  if (!adapter) {
+    return err({
+      kind: 0 /* InvalidInput */,
+      code: "ticket_provider_not_configured",
+      message: `Ticket provider ${provider} is not configured`
+    });
+  }
+  const resolved = await adapter.resolve(reference);
+  if (resolved.isErr()) {
+    return err({
+      kind: 1 /* Provider */,
+      code: resolved.error.code,
+      message: resolved.error.message
+    });
+  }
+  return ticketSnapshot(provider, resolved.unwrap());
+}
+function workItemConfiguration(workItem) {
+  return {
+    schemaVersion: workItem.schemaVersion,
+    kind: workItem.kind,
+    provider: workItem.provider,
+    reference: workItem.reference,
+    ...workItem.revision ? { revision: workItem.revision } : {},
+    ...workItem.url ? { url: workItem.url } : {},
+    title: workItem.title,
+    description: workItem.description,
+    acceptanceCriteria: workItem.acceptanceCriteria,
+    labels: workItem.labels,
+    checksum: workItem.checksum
+  };
+}
+
 // packages/cli/src/worker.ts
 function stableBoundary(aggregate) {
   return aggregate.state.status !== "running" || aggregate.state.invocations.some(({ state }) => state === "waiting_for_approval");
@@ -24725,7 +24855,7 @@ function message(error) {
   return error instanceof Error ? error.message : JSON.stringify(error);
 }
 function repositoryId(path) {
-  return `repo-${createHash5("sha256").update(resolve7(path)).digest("hex").slice(0, 16)}`;
+  return `repo-${createHash6("sha256").update(resolve7(path)).digest("hex").slice(0, 16)}`;
 }
 function runId() {
   return `run-${Date.now().toString(36)}-${randomUUID5().slice(0, 8)}`;
@@ -24770,6 +24900,7 @@ class LocalKairoHost {
   sandbox;
   worker;
   registry;
+  ticketProviders;
   artifactWriter;
   initialized = false;
   constructor(paths = resolveLocalPaths(), harnesses = [
@@ -24777,13 +24908,14 @@ class LocalKairoHost {
     new ClaudeCodeHarness,
     new OpenCodeHarness,
     new PiHarness
-  ]) {
+  ], ticketProviders = []) {
     this.paths = paths;
     mkdirSync(paths.dataDirectory, { recursive: true });
     this.store = new SqliteEventStore(paths.databasePath);
     this.sandbox = new WorktreeSandboxProvider(paths.worktreeDirectory);
     this.artifactWriter = new LocalArtifactWriter(paths.artifactDirectory);
     this.registry = new HarnessRegistry(harnesses);
+    this.ticketProviders = new Map(ticketProviders.map((provider) => [provider.id, provider]));
     this.worker = new LocalWorker(this.store, {
       coordinatorFor: (aggregate) => this.coordinatorFor(aggregate),
       finalize: (aggregate) => this.finalize(aggregate)
@@ -24824,6 +24956,24 @@ class LocalKairoHost {
     if (routeError) {
       return cliErr(0 /* InvalidArguments */, "invalid_harness_route", routeError);
     }
+    const task = request.task?.trim();
+    const ticket = request.ticket?.trim();
+    if (request.task !== undefined && !task) {
+      return cliErr(0 /* InvalidArguments */, "invalid_work_item", "Task text must be non-empty");
+    }
+    if (request.ticket !== undefined && !ticket) {
+      return cliErr(0 /* InvalidArguments */, "invalid_ticket_reference", "Ticket reference must be non-empty");
+    }
+    if (task && ticket) {
+      return cliErr(0 /* InvalidArguments */, "multiple_work_items", "Use exactly one of task or ticket");
+    }
+    if (request.adw === "feature-development" && !task && !ticket) {
+      return cliErr(0 /* InvalidArguments */, "work_item_required", "feature-development requires --ticket, --task, or --task-file");
+    }
+    const workItem = task ? createInlineWorkItem(task) : ticket ? await resolveTicketWorkItem(ticket, this.ticketProviders) : undefined;
+    if (workItem?.isErr()) {
+      return cliErr(0 /* InvalidArguments */, workItem.error.code, workItem.error.message);
+    }
     const id = runId();
     const repoId = repositoryId(request.repositoryPath);
     const registered = await this.sandbox.registerRepository(repoId, request.repositoryPath);
@@ -24847,6 +24997,7 @@ class LocalKairoHost {
         adw: request.adw,
         agentHarnesses: harnesses,
         ...request.harnessesByNode ? { agentHarnessesByNode: request.harnessesByNode } : {},
+        ...workItem?.isOk() ? { workItem: workItemConfiguration(workItem.unwrap()) } : {},
         requestedPermissions: compiled.unwrap().bundle.permissions ?? [],
         repositoryId: repoId,
         repositoryPath: pinned.unwrap().repositoryPath,
@@ -24999,7 +25150,7 @@ var HELP = `Kairo ${VERSION}
 
 Usage:
   kairo create adw <name> [--template <template>] [--output <directory>]
-  kairo run <adw> --repo <path> [--harness <id|node=id>]...
+  kairo run <adw> --repo <path> (--ticket <provider:reference> | --task <text> | --task-file <path>) [--harness <id|node=id>]...
   kairo runs
   kairo status <run-id>
   kairo approve <run-id> <invocation> --reason <text>
@@ -25083,9 +25234,18 @@ async function main() {
   try {
     if (command === "run") {
       const { harnesses, harnessesByNode } = harnessOptions(args);
+      const taskFile = option(args, "--task-file");
+      const inlineTask = option(args, "--task");
+      if (taskFile && inlineTask) {
+        throw new Error("Use exactly one of --task and --task-file");
+      }
+      const task = taskFile ? await readFile7(resolve8(taskFile), "utf8") : inlineTask;
+      const ticket = option(args, "--ticket");
       const result = await host.create({
         adw: required(args[1], "adw"),
         repositoryPath: required(option(args, "--repo"), "--repo"),
+        ...task ? { task } : {},
+        ...ticket ? { ticket } : {},
         ...harnesses.length ? { harnesses } : {},
         ...Object.keys(harnessesByNode).length ? { harnessesByNode } : {},
         actor
