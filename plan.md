@@ -574,12 +574,13 @@ The implementation is split into six coherent milestones:
 5. T5 resumable local-to-remote migration;
 6. T6 ticket list, details, Kanban, provider configuration, and sync UI.
 
-T1 through T5 were accepted on 2026-07-26. See
+T1 through T6 were accepted on 2026-07-26. See
 [`docs/milestones/t1.md`](docs/milestones/t1.md) and
 [`docs/milestones/t2.md`](docs/milestones/t2.md),
 [`docs/milestones/t3.md`](docs/milestones/t3.md),
 [`docs/milestones/t4.md`](docs/milestones/t4.md), and
-[`docs/milestones/t5.md`](docs/milestones/t5.md). T6 remains planned.
+[`docs/milestones/t5.md`](docs/milestones/t5.md), and
+[`docs/milestones/t6.md`](docs/milestones/t6.md).
 
 The runtime continues to consume immutable work-item snapshots. Mutable ticket
 rows, provider events, polling, migrations, and Kanban projections remain

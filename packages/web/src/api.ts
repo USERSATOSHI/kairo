@@ -5,6 +5,10 @@ import type {
   ArtifactView,
   RunDetails,
   RunSummary,
+  TicketDetails,
+  TicketListItem,
+  TicketProjectView,
+  TicketProviderConfigurationView,
 } from '@kairo/api-contracts';
 
 export interface ReplayedEvent {
@@ -67,6 +71,47 @@ function isApprovalDecisionResponse(value: unknown): value is ApprovalDecisionRe
   );
 }
 
+function isTicketListItem(value: unknown): value is TicketListItem {
+  return (
+    isRecord(value) &&
+    isRecord(value.ticket) &&
+    typeof value.ticket.id === 'string' &&
+    typeof value.ticket.projectId === 'string' &&
+    typeof value.ticket.title === 'string' &&
+    typeof value.ticket.status === 'string' &&
+    typeof value.column === 'string'
+  );
+}
+
+function isTicketDetails(value: unknown): value is TicketDetails {
+  return (
+    isRecord(value) &&
+    isTicketListItem(value) &&
+    Array.isArray(value.comments) &&
+    Array.isArray(value.relationships) &&
+    Array.isArray(value.runs) &&
+    Array.isArray(value.snapshots) &&
+    isRecord(value.syncState) &&
+    Array.isArray(value.syncOperations) &&
+    Array.isArray(value.migrations)
+  );
+}
+
+function isTicketProject(value: unknown): value is TicketProjectView {
+  return isRecord(value) && typeof value.id === 'string' && typeof value.ticketCount === 'number';
+}
+
+function isTicketProviderConfiguration(value: unknown): value is TicketProviderConfigurationView {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.displayName === 'string' &&
+    typeof value.configured === 'boolean' &&
+    typeof value.credentialSource === 'string' &&
+    typeof value.message === 'string'
+  );
+}
+
 async function json(response: Response): Promise<unknown> {
   if (!response.ok) throw new Error(`Kairo API request failed (${response.status})`);
   return response.json();
@@ -76,6 +121,38 @@ export async function fetchRuns(): Promise<readonly RunSummary[]> {
   const value = await json(await fetch('/api/runs'));
   if (!Array.isArray(value) || !value.every(isRunSummary)) {
     throw new Error('Kairo API returned malformed run summaries');
+  }
+  return value;
+}
+
+export async function fetchTicketProjects(): Promise<readonly TicketProjectView[]> {
+  const value = await json(await fetch('/api/ticket-projects'));
+  if (!Array.isArray(value) || !value.every(isTicketProject)) {
+    throw new Error('Kairo API returned malformed ticket projects');
+  }
+  return value;
+}
+
+export async function fetchTickets(projectId: string): Promise<readonly TicketListItem[]> {
+  const value = await json(await fetch(`/api/tickets?projectId=${encodeURIComponent(projectId)}`));
+  if (!Array.isArray(value) || !value.every(isTicketListItem)) {
+    throw new Error('Kairo API returned malformed tickets');
+  }
+  return value;
+}
+
+export async function fetchTicket(ticketId: string): Promise<TicketDetails> {
+  const value = await json(await fetch(`/api/tickets/${encodeURIComponent(ticketId)}`));
+  if (!isTicketDetails(value)) throw new Error('Kairo API returned malformed ticket details');
+  return value;
+}
+
+export async function fetchTicketProviderConfigurations(): Promise<
+  readonly TicketProviderConfigurationView[]
+> {
+  const value = await json(await fetch('/api/ticket-providers'));
+  if (!Array.isArray(value) || !value.every(isTicketProviderConfiguration)) {
+    throw new Error('Kairo API returned malformed ticket provider configurations');
   }
   return value;
 }

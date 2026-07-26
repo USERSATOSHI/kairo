@@ -31,6 +31,8 @@ import type {
   LocalRunCreator,
   ObservableRunStore,
   RepositoryQuery,
+  TicketProviderConfigurationQuery,
+  TicketReadServices,
 } from './ports.ts';
 
 export interface ApiServices {
@@ -39,6 +41,8 @@ export interface ApiServices {
   readonly artifacts?: ArtifactContentReader;
   readonly repositories?: RepositoryQuery;
   readonly runCreator?: LocalRunCreator;
+  readonly tickets?: TicketReadServices;
+  readonly ticketProviders?: TicketProviderConfigurationQuery;
 }
 
 function fromStore<T>(result: Result<T, RunStoreError>): Result<T, ApiError> {

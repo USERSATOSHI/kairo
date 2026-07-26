@@ -22656,6 +22656,1072 @@ async function getRepository(services, repositoryId) {
   const repository = repositories.find(({ id }) => id === repositoryId);
   return repository ? ok(repository) : apiErr(0 /* NotFound */, "repository_not_found", `Repository ${repositoryId} was not found`);
 }
+// packages/tickets/src/errors.ts
+function toErr4(kind, details) {
+  return { kind, ...details };
+}
+function toTicketError(kind, details) {
+  return err(toErr4(kind, details));
+}
+
+// packages/tickets/src/kanban/planning-board.ts
+function derivePlanningColumn(ticket) {
+  return ticket.status;
+}
+
+// packages/tickets/src/integration/policy.ts
+function deriveTicketBoardColumn(ticket, activeRun) {
+  if (activeRun?.active)
+    return activeRun.column;
+  return derivePlanningColumn(ticket);
+}
+// packages/tickets/src/domain/validation.ts
+var ticketStatuses = [
+  "backlog",
+  "ready",
+  "blocked",
+  "done",
+  "cancelled"
+];
+var ticketStatusValues = new Set(ticketStatuses);
+// packages/tickets/src/persistence/sqlite-ticket-run-store.ts
+import { Database } from "bun:sqlite";
+function databaseError(operation, error) {
+  return toErr4(7 /* DatabaseFailure */, {
+    operation,
+    message: error instanceof Error ? error.message : "SQLite ticket-run operation failed"
+  });
+}
+function stringArray(serialized, entity) {
+  const decoded = safeCall(() => JSON.parse(serialized), () => toErr4(8 /* CorruptData */, {
+    entity,
+    reason: "value is not valid JSON"
+  }));
+  if (decoded.isErr())
+    return decoded;
+  const parsed = decoded.unwrap();
+  if (!Array.isArray(parsed) || !parsed.every((value) => typeof value === "string")) {
+    return err(toErr4(8 /* CorruptData */, {
+      entity,
+      reason: "value is not a string array"
+    }));
+  }
+  return ok(parsed);
+}
+
+class SqliteTicketRunStore {
+  database;
+  constructor(path) {
+    this.database = new Database(path, { create: true, strict: true });
+  }
+  initialize() {
+    return safeCall(() => {
+      this.database.exec("PRAGMA foreign_keys = ON");
+      this.database.exec("PRAGMA journal_mode = WAL");
+      this.database.exec(`
+          CREATE TABLE IF NOT EXISTS ticket_snapshots (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL UNIQUE,
+            ticket_id TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL,
+            priority TEXT,
+            labels_json TEXT NOT NULL,
+            assignees_json TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            provider_revision TEXT NOT NULL,
+            captured_at TEXT NOT NULL,
+            FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE RESTRICT
+          );
+          CREATE INDEX IF NOT EXISTS ticket_snapshots_ticket
+            ON ticket_snapshots(ticket_id, captured_at, id);
+
+          CREATE TABLE IF NOT EXISTS ticket_run_links (
+            ticket_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (
+              kind IN ('planning', 'implementation', 'review', 'remediation')
+            ),
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (ticket_id, run_id),
+            FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE RESTRICT
+          );
+          CREATE INDEX IF NOT EXISTS ticket_run_links_ticket_created
+            ON ticket_run_links(ticket_id, created_at, run_id);
+        `);
+    }, (error) => databaseError("initializeTicketRuns", error));
+  }
+  dispose() {
+    this.database.close();
+  }
+  recordRunStart(snapshot, link) {
+    const transaction = this.database.transaction(() => {
+      this.database.query(`INSERT INTO ticket_snapshots (
+            id, run_id, ticket_id, project_id, title, description, priority,
+            labels_json, assignees_json, provider, provider_revision, captured_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(run_id) DO NOTHING`).run(snapshot.id, snapshot.runId, snapshot.ticketId, snapshot.projectId, snapshot.title, snapshot.description, snapshot.priority ?? null, JSON.stringify(snapshot.labels), JSON.stringify(snapshot.assignees), snapshot.provider, snapshot.providerRevision, snapshot.capturedAt);
+      this.database.query(`INSERT INTO ticket_run_links (ticket_id, run_id, kind, created_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(ticket_id, run_id) DO NOTHING`).run(link.ticketId, link.runId, link.kind, link.createdAt);
+    });
+    return safeCall(() => transaction(), (error) => databaseError("recordRunStart", error));
+  }
+  listSnapshots(ticketId) {
+    const loaded = safeCall(() => {
+      const snapshots = [];
+      const rows = this.database.query(`SELECT id, run_id, ticket_id, project_id, title, description, priority,
+                    labels_json, assignees_json, provider, provider_revision, captured_at
+             FROM ticket_snapshots
+             WHERE ticket_id = ?
+             ORDER BY captured_at, id`).all(ticketId);
+      for (const row of rows) {
+        const labels = stringArray(row.labels_json, `ticket_snapshot:${row.id}:labels`);
+        if (labels.isErr())
+          return labels;
+        const assignees = stringArray(row.assignees_json, `ticket_snapshot:${row.id}:assignees`);
+        if (assignees.isErr())
+          return assignees;
+        snapshots.push({
+          id: row.id,
+          runId: row.run_id,
+          ticketId: row.ticket_id,
+          projectId: row.project_id,
+          title: row.title,
+          description: row.description,
+          ...row.priority === null ? {} : { priority: row.priority },
+          labels: labels.unwrap(),
+          assignees: assignees.unwrap(),
+          provider: row.provider,
+          providerRevision: row.provider_revision,
+          capturedAt: row.captured_at
+        });
+      }
+      return ok(snapshots);
+    }, (error) => databaseError("listSnapshots", error));
+    return loaded.isErr() ? loaded : loaded.unwrap();
+  }
+  listRunLinks(ticketId) {
+    return safeCall(() => this.database.query(`SELECT ticket_id, run_id, kind, created_at
+             FROM ticket_run_links
+             WHERE ticket_id = ?
+             ORDER BY created_at, run_id`).all(ticketId).map((row) => ({
+      ticketId: row.ticket_id,
+      runId: row.run_id,
+      kind: row.kind,
+      createdAt: row.created_at
+    })), (error) => databaseError("listRunLinks", error));
+  }
+}
+// packages/tickets/src/persistence/sqlite-ticket-repository.ts
+import { Database as Database2 } from "bun:sqlite";
+function messageFor(error) {
+  return error instanceof Error ? error.message : "SQLite ticket operation failed";
+}
+function databaseError2(operation, error) {
+  return toErr4(7 /* DatabaseFailure */, {
+    operation,
+    message: messageFor(error)
+  });
+}
+function corruptData(entity, reason) {
+  return toErr4(8 /* CorruptData */, { entity, reason });
+}
+function bindingFromRow(row, ticketId) {
+  if (row.provider === "local")
+    return ok({ kind: "local" });
+  if (row.owner === null || row.repository === null || row.issue_number === null || row.external_url === null) {
+    return err(corruptData(`ticket_binding:${ticketId}`, "provider binding is incomplete"));
+  }
+  if (row.provider === "github") {
+    return ok({
+      kind: "github",
+      owner: row.owner,
+      repository: row.repository,
+      issueNumber: row.issue_number,
+      externalUrl: row.external_url,
+      ...row.last_synced_revision === null ? {} : { lastSyncedRevision: row.last_synced_revision }
+    });
+  }
+  if (row.instance_url === null) {
+    return err(corruptData(`ticket_binding:${ticketId}`, "Forgejo binding has no instance URL"));
+  }
+  return ok({
+    kind: "forgejo",
+    instanceUrl: row.instance_url,
+    owner: row.owner,
+    repository: row.repository,
+    issueNumber: row.issue_number,
+    externalUrl: row.external_url,
+    ...row.last_synced_revision === null ? {} : { lastSyncedRevision: row.last_synced_revision }
+  });
+}
+function commentBinding(serialized, commentId) {
+  const decoded = safeCall(() => JSON.parse(serialized), () => corruptData(`ticket_comment:${commentId}`, "binding is not valid JSON"));
+  if (decoded.isErr())
+    return decoded;
+  const parsed = decoded.unwrap();
+  if (parsed !== null && typeof parsed === "object" && "kind" in parsed) {
+    const kind = parsed.kind;
+    if (kind === "local")
+      return ok({ kind });
+    if ((kind === "github" || kind === "forgejo") && "externalId" in parsed && typeof parsed.externalId === "string") {
+      return ok({ kind, externalId: parsed.externalId });
+    }
+  }
+  return err(corruptData(`ticket_comment:${commentId}`, "binding is malformed"));
+}
+
+class SqliteTicketRepository {
+  database;
+  constructor(path) {
+    this.database = new Database2(path, {
+      create: true,
+      strict: true
+    });
+  }
+  initialize() {
+    return safeCall(() => {
+      this.database.exec("PRAGMA foreign_keys = ON");
+      this.database.exec("PRAGMA journal_mode = WAL");
+      this.database.exec(`
+          CREATE TABLE IF NOT EXISTS tickets (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (
+              status IN ('backlog', 'ready', 'blocked', 'done', 'cancelled')
+            ),
+            priority TEXT CHECK (
+              priority IS NULL OR priority IN ('low', 'medium', 'high', 'critical')
+            ),
+            revision INTEGER NOT NULL CHECK (revision >= 1),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS tickets_project_updated
+            ON tickets(project_id, updated_at DESC, id);
+
+          CREATE TABLE IF NOT EXISTS ticket_bindings (
+            ticket_id TEXT PRIMARY KEY,
+            provider TEXT NOT NULL CHECK (provider IN ('local', 'github', 'forgejo')),
+            instance_url TEXT,
+            owner TEXT,
+            repository TEXT,
+            issue_number INTEGER,
+            external_url TEXT,
+            last_synced_revision TEXT,
+            FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+          );
+          CREATE UNIQUE INDEX IF NOT EXISTS ticket_external_binding
+            ON ticket_bindings(
+              provider,
+              COALESCE(instance_url, ''),
+              COALESCE(owner, ''),
+              COALESCE(repository, ''),
+              issue_number
+            )
+            WHERE provider <> 'local';
+
+          CREATE TABLE IF NOT EXISTS ticket_comments (
+            id TEXT PRIMARY KEY,
+            ticket_id TEXT NOT NULL,
+            author TEXT NOT NULL,
+            body TEXT NOT NULL,
+            binding_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT,
+            FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+          );
+          CREATE INDEX IF NOT EXISTS ticket_comments_ticket_created
+            ON ticket_comments(ticket_id, created_at, id);
+
+          CREATE TABLE IF NOT EXISTS ticket_labels (
+            ticket_id TEXT NOT NULL,
+            label TEXT NOT NULL,
+            PRIMARY KEY (ticket_id, label),
+            FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+          );
+
+          CREATE TABLE IF NOT EXISTS ticket_assignees (
+            ticket_id TEXT NOT NULL,
+            assignee TEXT NOT NULL,
+            PRIMARY KEY (ticket_id, assignee),
+            FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+          );
+
+          CREATE TABLE IF NOT EXISTS ticket_relationships (
+            source_ticket_id TEXT NOT NULL,
+            target_ticket_id TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (
+              kind IN ('blocks', 'blocked_by', 'parent', 'child', 'related')
+            ),
+            PRIMARY KEY (source_ticket_id, target_ticket_id, kind),
+            CHECK (source_ticket_id <> target_ticket_id),
+            FOREIGN KEY (source_ticket_id) REFERENCES tickets(id) ON DELETE CASCADE,
+            FOREIGN KEY (target_ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+          );
+
+          CREATE TABLE IF NOT EXISTS kanban_planning_state (
+            ticket_id TEXT PRIMARY KEY,
+            status TEXT NOT NULL CHECK (
+              status IN ('backlog', 'ready', 'blocked', 'done', 'cancelled')
+            ),
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+          );
+        `);
+    }, (error) => databaseError2("initialize", error));
+  }
+  dispose() {
+    this.database.close();
+  }
+  create(ticket) {
+    return this.executeTransaction("create", () => {
+      if (this.readTicketRow(ticket.id)) {
+        return toTicketError(3 /* AlreadyExists */, { ticketId: ticket.id });
+      }
+      this.database.query(`INSERT INTO tickets (
+            id, project_id, title, description, status, priority,
+            revision, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(ticket.id, ticket.projectId, ticket.title, ticket.description, ticket.status, ticket.priority ?? null, ticket.revision, ticket.createdAt, ticket.updatedAt);
+      this.insertBinding(ticket.id, ticket.binding);
+      this.replaceValues("ticket_labels", "label", ticket.id, ticket.labels);
+      this.replaceValues("ticket_assignees", "assignee", ticket.id, ticket.assignees);
+      this.database.query(`INSERT INTO kanban_planning_state (ticket_id, status, updated_at)
+           VALUES (?, ?, ?)`).run(ticket.id, ticket.status, ticket.updatedAt);
+      return ok(ticket);
+    });
+  }
+  get(ticketId) {
+    const loaded = safeCall(() => this.loadTicketUnsafe(ticketId), (error) => databaseError2("get", error));
+    return loaded.isErr() ? loaded : loaded.unwrap();
+  }
+  list(projectId) {
+    const loaded = safeCall(() => this.database.query(`SELECT id FROM tickets
+             WHERE project_id = ?
+             ORDER BY updated_at DESC, id`).all(projectId).map(({ id }) => this.loadTicketUnsafe(id)), (error) => databaseError2("list", error));
+    if (loaded.isErr())
+      return loaded;
+    const tickets = [];
+    for (const result of loaded.unwrap()) {
+      if (result.isErr())
+        return result;
+      tickets.push(result.unwrap());
+    }
+    return ok(tickets);
+  }
+  listProjects() {
+    return safeCall(() => this.database.query(`SELECT project_id, COUNT(*) AS ticket_count
+             FROM tickets
+             GROUP BY project_id
+             ORDER BY project_id`).all().map((row) => ({ id: row.project_id, ticketCount: row.ticket_count })), (error) => databaseError2("listTicketProjects", error));
+  }
+  findByBinding(binding) {
+    if (binding.kind === "local")
+      return ok(undefined);
+    const loaded = safeCall(() => {
+      const row = this.database.query(`SELECT ticket_id
+             FROM ticket_bindings
+             WHERE provider = ?
+               AND COALESCE(instance_url, '') = ?
+               AND owner = ?
+               AND repository = ?
+               AND issue_number = ?`).get(binding.kind, binding.kind === "forgejo" ? binding.instanceUrl : "", binding.owner, binding.repository, binding.issueNumber);
+      return row ? this.loadTicketUnsafe(row.ticket_id) : ok(undefined);
+    }, (error) => databaseError2("findByBinding", error));
+    return loaded.isErr() ? loaded : loaded.unwrap();
+  }
+  update(ticketId, input, updatedAt) {
+    return this.executeTransaction("update", () => {
+      const current = this.loadTicketUnsafe(ticketId);
+      if (current.isErr())
+        return current;
+      const ticket = current.unwrap();
+      if (ticket.revision !== input.expectedRevision) {
+        return toTicketError(4 /* RevisionConflict */, {
+          ticketId,
+          expected: input.expectedRevision,
+          actual: ticket.revision
+        });
+      }
+      const nextPriority = input.priority === undefined ? ticket.priority : input.priority === null ? undefined : input.priority;
+      this.database.query(`UPDATE tickets
+           SET title = ?, description = ?, priority = ?, revision = ?, updated_at = ?
+           WHERE id = ? AND revision = ?`).run(input.title ?? ticket.title, input.description ?? ticket.description, nextPriority ?? null, ticket.revision + 1, updatedAt, ticketId, ticket.revision);
+      if (input.labels !== undefined) {
+        this.replaceValues("ticket_labels", "label", ticketId, input.labels);
+      }
+      if (input.assignees !== undefined) {
+        this.replaceValues("ticket_assignees", "assignee", ticketId, input.assignees);
+      }
+      return this.loadTicketUnsafe(ticketId);
+    });
+  }
+  setStatus(ticketId, expectedRevision, status2, updatedAt) {
+    return this.executeTransaction("setStatus", () => {
+      const current = this.loadTicketUnsafe(ticketId);
+      if (current.isErr())
+        return current;
+      const ticket = current.unwrap();
+      if (ticket.revision !== expectedRevision) {
+        return toTicketError(4 /* RevisionConflict */, {
+          ticketId,
+          expected: expectedRevision,
+          actual: ticket.revision
+        });
+      }
+      this.database.query(`UPDATE tickets
+           SET status = ?, revision = ?, updated_at = ?
+           WHERE id = ? AND revision = ?`).run(status2, ticket.revision + 1, updatedAt, ticketId, ticket.revision);
+      this.database.query(`UPDATE kanban_planning_state SET status = ?, updated_at = ?
+           WHERE ticket_id = ?`).run(status2, updatedAt, ticketId);
+      return this.loadTicketUnsafe(ticketId);
+    });
+  }
+  applyExternal(ticketId, projection, updatedAt) {
+    return this.executeTransaction("applyExternal", () => {
+      const current = this.loadTicketUnsafe(ticketId);
+      if (current.isErr())
+        return current;
+      const ticket = current.unwrap();
+      this.database.query(`UPDATE tickets
+           SET title = ?, description = ?, status = ?, revision = ?, updated_at = ?
+           WHERE id = ?`).run(projection.title, projection.description, projection.status, ticket.revision + 1, updatedAt, ticketId);
+      this.replaceValues("ticket_labels", "label", ticketId, projection.labels);
+      this.replaceValues("ticket_assignees", "assignee", ticketId, projection.assignees);
+      this.database.query("DELETE FROM ticket_bindings WHERE ticket_id = ?").run(ticketId);
+      this.insertBinding(ticketId, projection.binding);
+      this.database.query(`UPDATE kanban_planning_state SET status = ?, updated_at = ?
+           WHERE ticket_id = ?`).run(projection.status, updatedAt, ticketId);
+      return this.loadTicketUnsafe(ticketId);
+    });
+  }
+  setBinding(ticketId, expectedRevision, binding, updatedAt) {
+    return this.executeTransaction("setBinding", () => {
+      const current = this.loadTicketUnsafe(ticketId);
+      if (current.isErr())
+        return current;
+      const ticket = current.unwrap();
+      if (ticket.revision !== expectedRevision) {
+        return toTicketError(4 /* RevisionConflict */, {
+          ticketId,
+          expected: expectedRevision,
+          actual: ticket.revision
+        });
+      }
+      this.database.query("DELETE FROM ticket_bindings WHERE ticket_id = ?").run(ticketId);
+      this.insertBinding(ticketId, binding);
+      this.database.query(`UPDATE tickets
+           SET revision = revision + 1, updated_at = ?
+           WHERE id = ? AND revision = ?`).run(updatedAt, ticketId, expectedRevision);
+      return this.loadTicketUnsafe(ticketId);
+    });
+  }
+  addComment(comment, updatedAt) {
+    return this.executeTransaction("addComment", () => {
+      const ticket = this.loadTicketUnsafe(comment.ticketId);
+      if (ticket.isErr())
+        return ticket;
+      this.database.query(`INSERT INTO ticket_comments (
+            id, ticket_id, author, body, binding_json, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(comment.id, comment.ticketId, comment.author, comment.body, JSON.stringify(comment.binding), comment.createdAt, comment.updatedAt ?? null);
+      this.database.query("UPDATE tickets SET revision = revision + 1, updated_at = ? WHERE id = ?").run(updatedAt, comment.ticketId);
+      return ok(comment);
+    });
+  }
+  listComments(ticketId) {
+    const loaded = safeCall(() => {
+      const ticket = this.loadTicketUnsafe(ticketId);
+      if (ticket.isErr())
+        return ticket;
+      const comments = [];
+      const rows = this.database.query(`SELECT id, ticket_id, author, body, binding_json, created_at, updated_at
+             FROM ticket_comments
+             WHERE ticket_id = ?
+             ORDER BY created_at, id`).all(ticketId);
+      for (const row of rows) {
+        const binding = commentBinding(row.binding_json, row.id);
+        if (binding.isErr())
+          return binding;
+        comments.push({
+          id: row.id,
+          ticketId: row.ticket_id,
+          author: row.author,
+          body: row.body,
+          binding: binding.unwrap(),
+          createdAt: row.created_at,
+          ...row.updated_at === null ? {} : { updatedAt: row.updated_at }
+        });
+      }
+      return ok(comments);
+    }, (error) => databaseError2("listComments", error));
+    return loaded.isErr() ? loaded : loaded.unwrap();
+  }
+  addRelationship(relationship) {
+    return this.executeTransaction("addRelationship", () => {
+      const source = this.loadTicketUnsafe(relationship.sourceTicketId);
+      if (source.isErr())
+        return source;
+      const target = this.loadTicketUnsafe(relationship.targetTicketId);
+      if (target.isErr())
+        return target;
+      const existing = this.database.query(`SELECT source_ticket_id, target_ticket_id, kind
+           FROM ticket_relationships
+           WHERE source_ticket_id = ? AND target_ticket_id = ? AND kind = ?`).get(relationship.sourceTicketId, relationship.targetTicketId, relationship.kind);
+      if (existing) {
+        return toTicketError(6 /* RelationshipConflict */, {
+          sourceTicketId: relationship.sourceTicketId,
+          targetTicketId: relationship.targetTicketId,
+          reason: "relationship already exists"
+        });
+      }
+      this.database.query(`INSERT INTO ticket_relationships (
+            source_ticket_id, target_ticket_id, kind
+          ) VALUES (?, ?, ?)`).run(relationship.sourceTicketId, relationship.targetTicketId, relationship.kind);
+      return ok(relationship);
+    });
+  }
+  listRelationships(ticketId) {
+    const loaded = safeCall(() => {
+      const ticket = this.loadTicketUnsafe(ticketId);
+      if (ticket.isErr())
+        return ticket;
+      return ok(this.database.query(`SELECT source_ticket_id, target_ticket_id, kind
+               FROM ticket_relationships
+               WHERE source_ticket_id = ? OR target_ticket_id = ?
+               ORDER BY source_ticket_id, target_ticket_id, kind`).all(ticketId, ticketId).map((row) => ({
+        sourceTicketId: row.source_ticket_id,
+        targetTicketId: row.target_ticket_id,
+        kind: row.kind
+      })));
+    }, (error) => databaseError2("listRelationships", error));
+    return loaded.isErr() ? loaded : loaded.unwrap();
+  }
+  executeTransaction(operation, callback) {
+    const transaction = this.database.transaction(callback);
+    const executed = safeCall(() => transaction(), (error) => databaseError2(operation, error));
+    return executed.isErr() ? executed : executed.unwrap();
+  }
+  readTicketRow(ticketId) {
+    return this.database.query(`SELECT id, project_id, title, description, status, priority,
+                revision, created_at, updated_at
+         FROM tickets
+         WHERE id = ?`).get(ticketId);
+  }
+  loadTicketUnsafe(ticketId) {
+    const row = this.readTicketRow(ticketId);
+    if (!row)
+      return toTicketError(2 /* NotFound */, { ticketId });
+    const binding = this.database.query(`SELECT provider, instance_url, owner, repository, issue_number,
+                external_url, last_synced_revision
+         FROM ticket_bindings
+         WHERE ticket_id = ?`).get(ticketId);
+    if (!binding) {
+      return err(corruptData(`ticket:${ticketId}`, "ticket has no provider binding"));
+    }
+    const parsedBinding = bindingFromRow(binding, ticketId);
+    if (parsedBinding.isErr())
+      return parsedBinding;
+    const labels = this.readValues("ticket_labels", "label", ticketId);
+    const assignees = this.readValues("ticket_assignees", "assignee", ticketId);
+    return ok({
+      id: row.id,
+      projectId: row.project_id,
+      title: row.title,
+      description: row.description,
+      status: row.status,
+      ...row.priority === null ? {} : { priority: row.priority },
+      labels,
+      assignees,
+      binding: parsedBinding.unwrap(),
+      revision: row.revision,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    });
+  }
+  insertBinding(ticketId, binding) {
+    this.database.query(`INSERT INTO ticket_bindings (
+          ticket_id, provider, instance_url, owner, repository, issue_number,
+          external_url, last_synced_revision
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(ticketId, binding.kind, binding.kind === "forgejo" ? binding.instanceUrl : null, binding.kind === "local" ? null : binding.owner, binding.kind === "local" ? null : binding.repository, binding.kind === "local" ? null : binding.issueNumber, binding.kind === "local" ? null : binding.externalUrl, binding.kind === "local" ? null : binding.lastSyncedRevision ?? null);
+  }
+  readValues(table, column, ticketId) {
+    return this.database.query(`SELECT ${column} AS value FROM ${table} WHERE ticket_id = ? ORDER BY ${column}`).all(ticketId).map(({ value }) => value);
+  }
+  replaceValues(table, column, ticketId, values) {
+    this.database.query(`DELETE FROM ${table} WHERE ticket_id = ?`).run(ticketId);
+    const insert = this.database.query(`INSERT INTO ${table} (ticket_id, ${column}) VALUES (?, ?)`);
+    for (const value of values)
+      insert.run(ticketId, value);
+  }
+}
+// packages/tickets/src/persistence/sqlite-ticket-sync-store.ts
+import { Database as Database3 } from "bun:sqlite";
+function isRecord4(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function parseStringArray(value) {
+  return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined;
+}
+function parseBinding(value) {
+  if (!isRecord4(value) || typeof value.kind !== "string")
+    return;
+  if (value.kind === "local")
+    return { kind: "local" };
+  if (value.kind !== "github" && value.kind !== "forgejo" || typeof value.owner !== "string" || typeof value.repository !== "string" || typeof value.issueNumber !== "number" || typeof value.externalUrl !== "string") {
+    return;
+  }
+  const revision = typeof value.lastSyncedRevision === "string" ? { lastSyncedRevision: value.lastSyncedRevision } : {};
+  return value.kind === "github" ? {
+    kind: value.kind,
+    owner: value.owner,
+    repository: value.repository,
+    issueNumber: value.issueNumber,
+    externalUrl: value.externalUrl,
+    ...revision
+  } : typeof value.instanceUrl === "string" ? {
+    kind: value.kind,
+    instanceUrl: value.instanceUrl,
+    owner: value.owner,
+    repository: value.repository,
+    issueNumber: value.issueNumber,
+    externalUrl: value.externalUrl,
+    ...revision
+  } : undefined;
+}
+function parseProviderTicket(value) {
+  if (!isRecord4(value))
+    return;
+  const binding = parseBinding(value.binding);
+  const labels = parseStringArray(value.labels);
+  const assignees = parseStringArray(value.assignees);
+  if (!binding || binding.kind === "local" || typeof value.title !== "string" || typeof value.description !== "string" || value.status !== "backlog" && value.status !== "done" || !labels || !assignees || typeof value.revision !== "string" || typeof value.updatedAt !== "string") {
+    return;
+  }
+  return {
+    binding,
+    title: value.title,
+    description: value.description,
+    ...typeof value.marker === "string" ? { marker: value.marker } : {},
+    status: value.status,
+    labels,
+    assignees,
+    ...typeof value.milestone === "string" ? { milestone: value.milestone } : {},
+    revision: value.revision,
+    updatedAt: value.updatedAt
+  };
+}
+function isTicketStatus(value) {
+  return value === "backlog" || value === "ready" || value === "blocked" || value === "done" || value === "cancelled";
+}
+function parseMigration(value) {
+  const parsed = JSON.parse(value);
+  if (!isRecord4(parsed) || !isRecord4(parsed.snapshot)) {
+    throw new Error("Stored ticket migration is malformed");
+  }
+  const labels = parseStringArray(parsed.snapshot.labels);
+  const assignees = parseStringArray(parsed.snapshot.assignees);
+  const remoteTicket = parsed.remoteTicket === undefined ? undefined : parseProviderTicket(parsed.remoteTicket);
+  if (typeof parsed.ticketId !== "string" || parsed.targetProvider !== "github" && parsed.targetProvider !== "forgejo" || typeof parsed.projectId !== "string" || typeof parsed.marker !== "string" || parsed.stage !== "prepared" && parsed.stage !== "remote_created" && parsed.stage !== "verified" && parsed.stage !== "completed" || typeof parsed.snapshot.revision !== "number" || typeof parsed.snapshot.title !== "string" || typeof parsed.snapshot.description !== "string" || !isTicketStatus(parsed.snapshot.status) || !labels || !assignees || parsed.remoteTicket !== undefined && !remoteTicket || parsed.lastError !== undefined && typeof parsed.lastError !== "string" || typeof parsed.createdAt !== "string" || typeof parsed.updatedAt !== "string") {
+    throw new Error("Stored ticket migration is malformed");
+  }
+  return {
+    ticketId: parsed.ticketId,
+    targetProvider: parsed.targetProvider,
+    projectId: parsed.projectId,
+    marker: parsed.marker,
+    stage: parsed.stage,
+    snapshot: {
+      revision: parsed.snapshot.revision,
+      title: parsed.snapshot.title,
+      description: parsed.snapshot.description,
+      status: parsed.snapshot.status,
+      labels,
+      assignees
+    },
+    ...remoteTicket === undefined ? {} : { remoteTicket },
+    ...typeof parsed.lastError === "string" ? { lastError: parsed.lastError } : {},
+    createdAt: parsed.createdAt,
+    updatedAt: parsed.updatedAt
+  };
+}
+function parseCapabilities(value) {
+  const parsed = JSON.parse(value);
+  if (!isRecord4(parsed) || typeof parsed.issues !== "boolean" || typeof parsed.comments !== "boolean" || typeof parsed.labels !== "boolean" || typeof parsed.assignees !== "boolean" || typeof parsed.milestones !== "boolean" || typeof parsed.webhooks !== "boolean" || typeof parsed.projects !== "boolean") {
+    throw new Error("Stored Forgejo capabilities are malformed");
+  }
+  return {
+    issues: parsed.issues,
+    comments: parsed.comments,
+    labels: parsed.labels,
+    assignees: parsed.assignees,
+    milestones: parsed.milestones,
+    webhooks: parsed.webhooks,
+    projects: parsed.projects
+  };
+}
+function databaseError3(operation, error) {
+  return toErr4(7 /* DatabaseFailure */, {
+    operation,
+    message: error instanceof Error ? error.message : "SQLite ticket-sync operation failed"
+  });
+}
+
+class SqliteTicketSyncStore {
+  database;
+  constructor(path) {
+    this.database = new Database3(path, { create: true, strict: true });
+  }
+  initialize() {
+    return safeCall(() => {
+      this.database.exec("PRAGMA foreign_keys = ON");
+      this.database.exec("PRAGMA journal_mode = WAL");
+      this.database.exec(`
+          CREATE TABLE IF NOT EXISTS ticket_sync_state (
+            ticket_id TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            status TEXT NOT NULL,
+            last_synced_at TEXT,
+            last_error TEXT,
+            next_retry_at TEXT,
+            FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+          );
+          CREATE TABLE IF NOT EXISTS ticket_sync_operations (
+            idempotency_key TEXT PRIMARY KEY,
+            ticket_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            operation TEXT NOT NULL,
+            status TEXT NOT NULL,
+            request_json TEXT NOT NULL,
+            response_json TEXT,
+            last_error TEXT,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+          );
+          CREATE TABLE IF NOT EXISTS external_ticket_events (
+            provider TEXT NOT NULL,
+            provider_event_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            status TEXT NOT NULL,
+            last_error TEXT,
+            received_at TEXT NOT NULL,
+            PRIMARY KEY (provider, provider_event_id)
+          );
+          CREATE TABLE IF NOT EXISTS forgejo_instance_metadata (
+            instance_url TEXT PRIMARY KEY,
+            version TEXT NOT NULL,
+            api_version TEXT,
+            capabilities_json TEXT NOT NULL,
+            last_checked_at TEXT NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS ticket_migrations (
+            ticket_id TEXT PRIMARY KEY,
+            target_provider TEXT NOT NULL CHECK (target_provider IN ('github', 'forgejo')),
+            stage TEXT NOT NULL CHECK (
+              stage IN ('prepared', 'remote_created', 'verified', 'completed')
+            ),
+            state_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+          );
+          CREATE TABLE IF NOT EXISTS ticket_migration_history (
+            ticket_id TEXT NOT NULL,
+            stage TEXT NOT NULL CHECK (
+              stage IN ('prepared', 'remote_created', 'verified', 'completed')
+            ),
+            state_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (ticket_id, stage),
+            FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+          );
+        `);
+    }, (error) => databaseError3("initializeTicketSync", error));
+  }
+  dispose() {
+    this.database.close();
+  }
+  recordExternalEvent(event) {
+    return safeCall(() => {
+      const result = this.database.query(`INSERT INTO external_ticket_events (
+              provider, provider_event_id, event_type, payload, status, received_at
+            ) VALUES (?, ?, ?, ?, 'received', ?)
+            ON CONFLICT(provider, provider_event_id) DO NOTHING`).run(event.provider, event.providerEventId, event.eventType, event.payload, event.receivedAt);
+      return result.changes === 1;
+    }, (error) => databaseError3("recordExternalEvent", error));
+  }
+  completeExternalEvent(provider, providerEventId, error) {
+    return safeCall(() => {
+      this.database.query(`UPDATE external_ticket_events
+             SET status = ?, last_error = ?
+             WHERE provider = ? AND provider_event_id = ?`).run(error === undefined ? "completed" : "failed", error ?? null, provider, providerEventId);
+    }, (cause) => databaseError3("completeExternalEvent", cause));
+  }
+  getSyncState(ticketId) {
+    return safeCall(() => {
+      const row = this.database.query(`SELECT ticket_id, provider, status, last_synced_at, last_error, next_retry_at
+             FROM ticket_sync_state WHERE ticket_id = ?`).get(ticketId);
+      const state = row ? {
+        ticketId: row.ticket_id,
+        provider: row.provider,
+        status: row.status,
+        ...row.last_synced_at === null ? {} : { lastSyncedAt: row.last_synced_at },
+        ...row.last_error === null ? {} : { lastError: row.last_error },
+        ...row.next_retry_at === null ? {} : { nextRetryAt: row.next_retry_at }
+      } : {
+        ticketId,
+        provider: "local",
+        status: "idle"
+      };
+      return state;
+    }, (error) => databaseError3("getSyncState", error));
+  }
+  setSyncState(state) {
+    return safeCall(() => {
+      this.database.query(`INSERT INTO ticket_sync_state (
+              ticket_id, provider, status, last_synced_at, last_error, next_retry_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(ticket_id) DO UPDATE SET
+              provider = excluded.provider,
+              status = excluded.status,
+              last_synced_at = excluded.last_synced_at,
+              last_error = excluded.last_error,
+              next_retry_at = excluded.next_retry_at`).run(state.ticketId, state.provider, state.status, state.lastSyncedAt ?? null, state.lastError ?? null, state.nextRetryAt ?? null);
+    }, (error) => databaseError3("setSyncState", error));
+  }
+  saveForgejoMetadata(metadata) {
+    return safeCall(() => {
+      this.database.query(`INSERT INTO forgejo_instance_metadata (
+              instance_url, version, api_version, capabilities_json, last_checked_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(instance_url) DO UPDATE SET
+              version = excluded.version,
+              api_version = excluded.api_version,
+              capabilities_json = excluded.capabilities_json,
+              last_checked_at = excluded.last_checked_at`).run(metadata.instanceUrl, metadata.version, metadata.apiVersion ?? null, JSON.stringify(metadata.capabilities), metadata.lastCheckedAt);
+    }, (error) => databaseError3("saveForgejoMetadata", error));
+  }
+  getForgejoMetadata(instanceUrl) {
+    return safeCall(() => {
+      const row = this.database.query(`SELECT instance_url, version, api_version, capabilities_json, last_checked_at
+             FROM forgejo_instance_metadata WHERE instance_url = ?`).get(instanceUrl);
+      if (!row)
+        return;
+      return {
+        instanceUrl: row.instance_url,
+        version: row.version,
+        ...row.api_version === null ? {} : { apiVersion: row.api_version },
+        capabilities: parseCapabilities(row.capabilities_json),
+        lastCheckedAt: row.last_checked_at
+      };
+    }, (error) => databaseError3("getForgejoMetadata", error));
+  }
+  getMigration(ticketId) {
+    return safeCall(() => {
+      const row = this.database.query("SELECT state_json FROM ticket_migrations WHERE ticket_id = ?").get(ticketId);
+      return row ? parseMigration(row.state_json) : undefined;
+    }, (error) => databaseError3("getTicketMigration", error));
+  }
+  saveMigration(migration) {
+    return safeCall(() => {
+      const serialized = JSON.stringify(migration);
+      this.database.transaction(() => {
+        this.database.query(`INSERT INTO ticket_migrations (
+                ticket_id, target_provider, stage, state_json, updated_at
+              ) VALUES (?, ?, ?, ?, ?)
+              ON CONFLICT(ticket_id) DO UPDATE SET
+                target_provider = excluded.target_provider,
+                stage = excluded.stage,
+                state_json = excluded.state_json,
+                updated_at = excluded.updated_at`).run(migration.ticketId, migration.targetProvider, migration.stage, serialized, migration.updatedAt);
+        this.database.query(`INSERT INTO ticket_migration_history (
+                ticket_id, stage, state_json, updated_at
+              ) VALUES (?, ?, ?, ?)
+              ON CONFLICT(ticket_id, stage) DO UPDATE SET
+                state_json = excluded.state_json,
+                updated_at = excluded.updated_at`).run(migration.ticketId, migration.stage, serialized, migration.updatedAt);
+      })();
+    }, (error) => databaseError3("saveTicketMigration", error));
+  }
+  listSyncOperations(ticketId) {
+    return safeCall(() => this.database.query(`SELECT idempotency_key, ticket_id, provider, operation, status,
+                    last_error, updated_at
+             FROM ticket_sync_operations
+             WHERE ticket_id = ?
+             ORDER BY updated_at, idempotency_key`).all(ticketId).map((row) => ({
+      idempotencyKey: row.idempotency_key,
+      ticketId: row.ticket_id,
+      provider: row.provider,
+      operation: row.operation,
+      status: row.status,
+      ...row.last_error === null ? {} : { error: row.last_error },
+      updatedAt: row.updated_at
+    })), (error) => databaseError3("listTicketSyncOperations", error));
+  }
+  listMigrationHistory(ticketId) {
+    return safeCall(() => this.database.query(`SELECT state_json
+             FROM ticket_migration_history
+             WHERE ticket_id = ?
+             ORDER BY
+               CASE stage
+                 WHEN 'prepared' THEN 1
+                 WHEN 'remote_created' THEN 2
+                 WHEN 'verified' THEN 3
+                 WHEN 'completed' THEN 4
+               END`).all(ticketId).map((row) => parseMigration(row.state_json)), (error) => databaseError3("listTicketMigrationHistory", error));
+  }
+  recordSyncOperation(input) {
+    return safeCall(() => {
+      const existing = this.database.query(`SELECT request_json, status FROM ticket_sync_operations
+             WHERE idempotency_key = ?`).get(input.idempotencyKey);
+      if (existing) {
+        if (existing.request_json !== input.request) {
+          return false;
+        }
+        if (existing.status === "succeeded")
+          return false;
+        this.database.query(`UPDATE ticket_sync_operations
+               SET status = ?, response_json = ?, last_error = ?, updated_at = ?
+               WHERE idempotency_key = ?`).run(input.status, input.response ?? null, input.error ?? null, input.updatedAt, input.idempotencyKey);
+        return true;
+      }
+      this.database.query(`INSERT INTO ticket_sync_operations (
+              idempotency_key, ticket_id, provider, operation, status,
+              request_json, response_json, last_error, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(input.idempotencyKey, input.ticketId, input.provider, input.operation, input.status, input.request, input.response ?? null, input.error ?? null, input.updatedAt);
+      return true;
+    }, (error) => databaseError3("recordSyncOperation", error));
+  }
+}
+// packages/api/src/ticket-use-cases.ts
+function fromTicketError(error) {
+  switch (error.kind) {
+    case 1 /* InvalidInput */:
+      return apiErr(1 /* InvalidInput */, "invalid_ticket_input", error.reason);
+    case 2 /* NotFound */:
+      return apiErr(0 /* NotFound */, "ticket_not_found", `Ticket ${error.ticketId} was not found`);
+    case 3 /* AlreadyExists */:
+    case 4 /* RevisionConflict */:
+    case 5 /* InvalidStatusTransition */:
+    case 6 /* RelationshipConflict */:
+      return apiErr(2 /* Conflict */, "ticket_conflict", "Ticket state conflicts");
+    case 7 /* DatabaseFailure */:
+    case 8 /* CorruptData */:
+      return apiErr(3 /* Persistence */, "ticket_store_failure", "Ticket state could not be read");
+  }
+  throw new Error("Unsupported ticket error kind");
+}
+function runViews(services, links) {
+  const views = [];
+  for (const link of links) {
+    const queried = services.runQuery.get(link.runId);
+    if (queried.isErr())
+      return fromTicketError(queried.error);
+    const execution = queried.value;
+    views.push({ ...link, ...execution ? { execution } : {} });
+  }
+  return ok(views);
+}
+function activeRun(runs) {
+  return runs.toReversed().find(({ execution }) => execution?.active)?.execution;
+}
+function listTickets(services, projectId) {
+  const loaded = services.repository.list(projectId);
+  if (loaded.isErr())
+    return fromTicketError(loaded.error);
+  const items = [];
+  for (const ticket of loaded.value) {
+    const links = services.runs.listRunLinks(ticket.id);
+    if (links.isErr())
+      return fromTicketError(links.error);
+    const runs = runViews(services, links.value);
+    if (runs.isErr())
+      return runs;
+    const active = activeRun(runs.value);
+    items.push({
+      ticket,
+      column: deriveTicketBoardColumn(ticket, active),
+      ...active ? { activeRun: active } : {}
+    });
+  }
+  return ok(items);
+}
+function listTicketProjects(services) {
+  const loaded = services.repository.listProjects();
+  return loaded.isErr() ? fromTicketError(loaded.error) : ok(loaded.value);
+}
+function getTicket(services, ticketId) {
+  const loaded = services.repository.get(ticketId);
+  if (loaded.isErr())
+    return fromTicketError(loaded.error);
+  const comments = services.repository.listComments(ticketId);
+  if (comments.isErr())
+    return fromTicketError(comments.error);
+  const relationships = services.repository.listRelationships(ticketId);
+  if (relationships.isErr())
+    return fromTicketError(relationships.error);
+  const links = services.runs.listRunLinks(ticketId);
+  if (links.isErr())
+    return fromTicketError(links.error);
+  const runs = runViews(services, links.value);
+  if (runs.isErr())
+    return runs;
+  const snapshots = services.runs.listSnapshots(ticketId);
+  if (snapshots.isErr())
+    return fromTicketError(snapshots.error);
+  const syncState = services.sync.getSyncState(ticketId);
+  if (syncState.isErr())
+    return fromTicketError(syncState.error);
+  const syncOperations = services.sync.listSyncOperations(ticketId);
+  if (syncOperations.isErr())
+    return fromTicketError(syncOperations.error);
+  const migrations = services.sync.listMigrationHistory(ticketId);
+  if (migrations.isErr())
+    return fromTicketError(migrations.error);
+  const ticket = loaded.value;
+  const active = activeRun(runs.value);
+  return ok({
+    ticket,
+    column: deriveTicketBoardColumn(ticket, active),
+    ...active ? { activeRun: active } : {},
+    comments: comments.value,
+    relationships: relationships.value,
+    runs: runs.value,
+    snapshots: snapshots.value,
+    syncState: syncState.value,
+    syncOperations: syncOperations.value,
+    migrations: migrations.value
+  });
+}
+var defaultProviderConfigurations = [
+  {
+    id: "local",
+    displayName: "Local SQLite",
+    configured: true,
+    credentialSource: "none",
+    message: "Available without a remote account or repository."
+  },
+  {
+    id: "github",
+    displayName: "GitHub Issues",
+    configured: false,
+    credentialSource: "server_environment",
+    message: "Configure the GitHub adapter and token in the server composition."
+  },
+  {
+    id: "forgejo",
+    displayName: "Forgejo Issues",
+    configured: false,
+    credentialSource: "server_environment",
+    message: "Configure an instance and token in the server composition."
+  }
+];
+function listTicketProviderConfigurations(query) {
+  return query?.list() ?? defaultProviderConfigurations;
+}
 
 // packages/api/src/app.ts
 function statusFor(error) {
@@ -22775,11 +23841,35 @@ function createKairoApp(services) {
   }).get("/repositories", () => listRepositories(services)).get("/repositories/:repositoryId", async ({ params, set }) => {
     const result = await getRepository(services, params.repositoryId);
     return result.isErr() ? failure(result.error, set) : result.value;
+  }).get("/tickets", ({ query, set }) => {
+    if (!services.tickets)
+      return [];
+    const result = listTickets(services.tickets, query.projectId ?? "");
+    return result.isErr() ? failure(result.error, set) : result.value;
+  }).get("/ticket-projects", ({ set }) => {
+    if (!services.tickets)
+      return [];
+    const result = listTicketProjects(services.tickets);
+    return result.isErr() ? failure(result.error, set) : result.value;
+  }).get("/tickets/:ticketId", ({ params, set }) => {
+    if (!services.tickets) {
+      set.status = 404;
+      return {
+        error: {
+          code: "ticket_services_unavailable",
+          message: "Ticket services are not configured"
+        }
+      };
+    }
+    const result = getTicket(services.tickets, params.ticketId);
+    return result.isErr() ? failure(result.error, set) : result.value;
+  }).get("/ticket-providers", () => {
+    return listTicketProviderConfigurations(services.ticketProviders);
   });
 }
 // packages/persistence-sqlite/src/sqlite-event-store.ts
-import { Database } from "bun:sqlite";
-function isRecord4(value) {
+import { Database as Database4 } from "bun:sqlite";
+function isRecord5(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function toJsonValue3(value) {
@@ -22789,7 +23879,7 @@ function toJsonValue3(value) {
   if (Array.isArray(value)) {
     return value.map(toJsonValue3);
   }
-  if (isRecord4(value)) {
+  if (isRecord5(value)) {
     return Object.fromEntries(Object.entries(value).filter(([, child]) => child !== undefined).map(([key, child]) => [key, toJsonValue3(child)]));
   }
   if (typeof value === "bigint")
@@ -22803,35 +23893,35 @@ function toJsonValue3(value) {
 function canonicalValue(value) {
   return canonicalJson(toJsonValue3(value));
 }
-function messageFor(error) {
+function messageFor2(error) {
   return error instanceof Error ? error.message : "SQLite operation failed";
 }
-function databaseError(operation, error) {
+function databaseError4(operation, error) {
   return {
     kind: 0 /* DatabaseFailure */,
     operation,
-    message: messageFor(error)
+    message: messageFor2(error)
   };
 }
 function isNodeDefinition(value) {
-  if (!isRecord4(value))
+  if (!isRecord5(value))
     return false;
   return typeof value.id === "string" && ["agent", "approval", "command", "complete"].includes(String(value.type)) && typeof value.ordinal === "number" && typeof value.priority === "number";
 }
 function isCompiledWorkflowBundle(value) {
-  if (!isRecord4(value))
+  if (!isRecord5(value))
     return false;
   const manifest = value.manifest;
   const semanticVersions = value.semanticVersions;
-  return isRecord4(manifest) && typeof manifest.id === "string" && typeof manifest.version === "string" && isRecord4(semanticVersions) && typeof semanticVersions.compiler === "string" && typeof semanticVersions.ir === "string" && typeof semanticVersions.expressions === "string" && typeof value.entryNodeId === "string" && Array.isArray(value.nodes) && value.nodes.every(isNodeDefinition) && Array.isArray(value.transitions) && isRecord4(value.counterLimits);
+  return isRecord5(manifest) && typeof manifest.id === "string" && typeof manifest.version === "string" && isRecord5(semanticVersions) && typeof semanticVersions.compiler === "string" && typeof semanticVersions.ir === "string" && typeof semanticVersions.expressions === "string" && typeof value.entryNodeId === "string" && Array.isArray(value.nodes) && value.nodes.every(isNodeDefinition) && Array.isArray(value.transitions) && isRecord5(value.counterLimits);
 }
 function isApprovalBinding(value) {
-  if (!isRecord4(value))
+  if (!isRecord5(value))
     return false;
   return typeof value.workflowChecksum === "string" && typeof value.invocationSequence === "number" && Array.isArray(value.artifactChecksums) && value.artifactChecksums.every((checksum2) => typeof checksum2 === "string") && typeof value.resolvedAction === "string" && typeof value.repositoryHead === "string";
 }
 function isSkipBinding(value) {
-  if (!isRecord4(value))
+  if (!isRecord5(value))
     return false;
   return typeof value.workflowChecksum === "string" && typeof value.invocationSequence === "number" && Array.isArray(value.artifactChecksums) && value.artifactChecksums.every((checksum2) => typeof checksum2 === "string") && typeof value.selectedOutcome === "string" && typeof value.repositoryHead === "string";
 }
@@ -22839,17 +23929,17 @@ function hasNumber(record, key) {
   return typeof record[key] === "number";
 }
 function isArtifactReference(value) {
-  if (!isRecord4(value))
+  if (!isRecord5(value))
     return false;
   return typeof value.id === "string" && ["agent_output", "harness_transcript", "command_output", "git_diff", "git_status"].includes(String(value.kind)) && typeof value.mediaType === "string" && typeof value.checksum === "string" && /^sha256:[0-9a-f]{64}$/.test(value.checksum) && typeof value.size === "number" && Number.isSafeInteger(value.size) && value.size >= 0;
 }
 function isRunEvent(value) {
-  if (!isRecord4(value) || !hasNumber(value, "sequence") || typeof value.type !== "string") {
+  if (!isRecord5(value) || !hasNumber(value, "sequence") || typeof value.type !== "string") {
     return false;
   }
   switch (value.type) {
     case "run.created":
-      return typeof value.workflowChecksum === "string" && typeof value.startingCommit === "string" && isRecord4(value.configuration) && (value.startedAt === undefined || typeof value.startedAt === "string");
+      return typeof value.workflowChecksum === "string" && typeof value.startingCommit === "string" && isRecord5(value.configuration) && (value.startedAt === undefined || typeof value.startedAt === "string");
     case "run.time_observed":
       return typeof value.observedAt === "string";
     case "run.paused":
@@ -22870,7 +23960,7 @@ function isRunEvent(value) {
     case "run.artifact_published":
       return isArtifactReference(value.artifact);
     case "attempt.failed":
-      return hasNumber(value, "invocationSequence") && hasNumber(value, "attemptNumber") && isRecord4(value.failure) && typeof value.failure.kind === "string" && typeof value.failure.message === "string" && (value.retry === "fallback" || value.retry === "none");
+      return hasNumber(value, "invocationSequence") && hasNumber(value, "attemptNumber") && isRecord5(value.failure) && typeof value.failure.kind === "string" && typeof value.failure.message === "string" && (value.retry === "fallback" || value.retry === "none");
     case "attempt.interrupted":
       return hasNumber(value, "invocationSequence") && hasNumber(value, "attemptNumber");
     case "attempt.interrupt_requested":
@@ -22933,7 +24023,7 @@ function stateError(runId, error) {
 class SqliteEventStore {
   database;
   constructor(path) {
-    this.database = new Database(path, {
+    this.database = new Database4(path, {
       create: true,
       strict: true
     });
@@ -23043,7 +24133,7 @@ class SqliteEventStore {
       if (!attemptColumns.has("failure_json")) {
         this.database.exec("ALTER TABLE attempt_projections ADD COLUMN failure_json TEXT");
       }
-    }, (error) => databaseError("initialize", error));
+    }, (error) => databaseError4("initialize", error));
   }
   dispose() {
     this.database.close();
@@ -23105,11 +24195,11 @@ class SqliteEventStore {
     });
   }
   loadRun(runId) {
-    const loaded = safeCall(() => this.loadRunUnsafe(runId), (error) => databaseError("loadRun", error));
+    const loaded = safeCall(() => this.loadRunUnsafe(runId), (error) => databaseError4("loadRun", error));
     return loaded.isErr() ? loaded : loaded.unwrap();
   }
   listRuns() {
-    const listed = safeCall(() => this.database.query("SELECT run_id FROM runs ORDER BY run_id").all().map(({ run_id }) => this.loadRunUnsafe(run_id)), (error) => databaseError("listRuns", error));
+    const listed = safeCall(() => this.database.query("SELECT run_id FROM runs ORDER BY run_id").all().map(({ run_id }) => this.loadRunUnsafe(run_id)), (error) => databaseError4("listRuns", error));
     if (listed.isErr())
       return listed;
     const aggregates = [];
@@ -23166,7 +24256,7 @@ class SqliteEventStore {
   }
   executeTransaction(operation, callback) {
     const transaction = this.database.transaction(callback);
-    const executed = safeCall(() => transaction(), (error) => databaseError(operation, error));
+    const executed = safeCall(() => transaction(), (error) => databaseError4(operation, error));
     return executed.isErr() ? executed : executed.unwrap();
   }
   readRunRow(runId) {
@@ -23330,15 +24420,50 @@ class LocalArtifactContentReader {
     }
   }
 }
-// packages/tickets/src/domain/validation.ts
-var ticketStatuses = [
-  "backlog",
-  "ready",
-  "blocked",
-  "done",
-  "cancelled"
-];
-var ticketStatusValues = new Set(ticketStatuses);
+
+// packages/api/src/ticket-run-query.ts
+function runningColumn(state, definitions) {
+  const invocation = state.invocations.toReversed().find(({ state: value }) => ["active", "waiting_for_approval"].includes(value));
+  const definition = definitions.find(({ id }) => id === invocation?.nodeId);
+  const identity = `${definition?.id ?? ""} ${definition?.title ?? ""}`.toLowerCase();
+  if (state.status === "waiting_for_approval") {
+    return identity.includes("delivery") ? "waiting_for_delivery_approval" : "waiting_for_plan_approval";
+  }
+  if (identity.includes("review"))
+    return "reviewing";
+  if (identity.includes("repair"))
+    return "repairing";
+  if (identity.includes("validat") || identity.includes("test"))
+    return "validating";
+  if (identity.includes("plan"))
+    return "planning";
+  return "implementing";
+}
+
+class KairoTicketRunQuery {
+  runs;
+  constructor(runs) {
+    this.runs = runs;
+  }
+  get(runId) {
+    const loaded = this.runs.loadRun(runId);
+    if (loaded.isErr()) {
+      if ("runId" in loaded.error && loaded.error.runId === runId)
+        return ok(undefined);
+      return toTicketError(7 /* DatabaseFailure */, {
+        operation: "getTicketRun",
+        message: "Kairo run state could not be read"
+      });
+    }
+    const aggregate = loaded.unwrap();
+    const status2 = aggregate.state.status;
+    return ok({
+      runId,
+      active: !["succeeded", "failed", "cancelled"].includes(status2),
+      column: status2 === "succeeded" ? "done" : status2 === "failed" ? "failed" : status2 === "cancelled" ? "cancelled" : status2 === "paused" ? "blocked" : runningColumn(aggregate.state, aggregate.artifact.bundle.nodes)
+    });
+  }
+}
 // packages/cli/src/create-adw.ts
 import { mkdir, mkdtemp, readFile as readFile3, readdir, rename, rm, stat as stat2, writeFile } from "fs/promises";
 import { basename, dirname, resolve as resolve3 } from "path";
@@ -23464,7 +24589,7 @@ class BunProcessRunner {
 }
 
 // packages/harnesses/src/claude-code-harness.ts
-function isRecord5(value) {
+function isRecord6(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function parseJsonOrText(value) {
@@ -23484,7 +24609,7 @@ function parseClaudeResult(output, fallbackToken) {
   if (parsed.isErr())
     return parsed;
   const value = parsed.unwrap();
-  if (!isRecord5(value)) {
+  if (!isRecord6(value)) {
     return err(invalidResponse("Claude Code returned a non-object result", output));
   }
   if (value.is_error === true) {
@@ -23561,7 +24686,7 @@ ${request.prompt}`;
 function sandboxFor(capabilities) {
   return capabilities.some((capability) => capability.includes("write")) ? "workspace-write" : "read-only";
 }
-function isRecord6(value) {
+function isRecord7(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function parseJsonOrText2(value) {
@@ -23577,13 +24702,13 @@ function parseEvents(output) {
     if (parsed.isErr())
       return parsed;
     const event = parsed.unwrap();
-    if (!isRecord6(event)) {
+    if (!isRecord7(event)) {
       return err(invalidResponse("Codex returned a non-object JSONL event", output));
     }
     if (event.type === "thread.started" && typeof event.thread_id === "string") {
       token = event.thread_id;
     }
-    if (event.type === "item.completed" && isRecord6(event.item)) {
+    if (event.type === "item.completed" && isRecord7(event.item)) {
       if (event.item.type === "agent_message" && typeof event.item.text === "string") {
         finalText = event.item.text;
       }
@@ -23708,7 +24833,7 @@ class LocalArtifactWriter {
   }
 }
 // packages/harnesses/src/opencode-harness.ts
-function isRecord7(value) {
+function isRecord8(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function parseJsonOrText3(value) {
@@ -23736,7 +24861,7 @@ function parseEvents2(output) {
     if (parsed.isErr())
       return parsed;
     const event = parsed.unwrap();
-    if (!isRecord7(event)) {
+    if (!isRecord8(event)) {
       return err(invalidResponse("OpenCode returned a non-object JSONL event", output));
     }
     if (typeof event.sessionID === "string")
@@ -23744,7 +24869,7 @@ function parseEvents2(output) {
     if (event.type === "error") {
       return err(processFailure2("OpenCode reported an execution error"));
     }
-    if (event.type === "text" && isRecord7(event.part) && typeof event.part.text === "string") {
+    if (event.type === "text" && isRecord8(event.part) && typeof event.part.text === "string") {
       finalText = event.part.text;
     }
   }
@@ -23803,7 +24928,7 @@ class OpenCodeHarness {
 }
 // packages/harnesses/src/pi-harness.ts
 import { randomUUID as randomUUID3 } from "crypto";
-function isRecord8(value) {
+function isRecord9(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function parseJsonOrText4(value) {
@@ -23832,7 +24957,7 @@ function toolsFor2(capabilities) {
 function textFromAssistantMessage(value) {
   if (value.role !== "assistant" || !Array.isArray(value.content))
     return;
-  const text = value.content.filter(isRecord8).filter((content) => content.type === "text" && typeof content.text === "string").map((content) => content.text).join("");
+  const text = value.content.filter(isRecord9).filter((content) => content.type === "text" && typeof content.text === "string").map((content) => content.text).join("");
   return text || undefined;
 }
 function parseEvents3(output) {
@@ -23844,12 +24969,12 @@ function parseEvents3(output) {
     if (parsed.isErr())
       return parsed;
     const event = parsed.unwrap();
-    if (!isRecord8(event)) {
+    if (!isRecord9(event)) {
       return err(invalidResponse("Pi returned a non-object JSONL event", output));
     }
     if (event.type === "session" && typeof event.id === "string")
       token = event.id;
-    if (event.type !== "message_end" || !isRecord8(event.message))
+    if (event.type !== "message_end" || !isRecord9(event.message))
       continue;
     if (event.message.role === "assistant" && (event.message.stopReason === "error" || event.message.stopReason === "aborted")) {
       return err(processFailure2(typeof event.message.errorMessage === "string" ? event.message.errorMessage : `Pi request ${event.message.stopReason}`));
@@ -23929,7 +25054,7 @@ function toErr5(kind, details) {
   return { kind, ...details };
 }
 // packages/sandbox-worktree/src/git-command-runner.ts
-function messageFor2(error) {
+function messageFor3(error) {
   return error instanceof Error ? error.message : "Git process failed";
 }
 
@@ -23955,7 +25080,7 @@ class GitCommandRunner {
     }, (error) => toErr5(2 /* GitFailure */, {
       operation,
       exitCode: -1,
-      message: messageFor2(error)
+      message: messageFor3(error)
     }));
     if (executed.isErr())
       return executed;
@@ -23978,19 +25103,19 @@ import { createHash as createHash4, randomUUID as randomUUID4 } from "crypto";
 import { mkdir as mkdir3, open, readFile as readFile5, realpath, rename as rename2, stat as stat3, unlink as unlink2, writeFile as writeFile4 } from "fs/promises";
 import { dirname as dirname2, resolve as resolve5 } from "path";
 var identifierPattern = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
-function isRecord9(value) {
+function isRecord10(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function errorCode(error) {
-  return isRecord9(error) && typeof error.code === "string" ? error.code : undefined;
+  return isRecord10(error) && typeof error.code === "string" ? error.code : undefined;
 }
-function messageFor3(error) {
+function messageFor4(error) {
   return error instanceof Error ? error.message : "Filesystem operation failed";
 }
 function filesystemError(operation, error) {
   return toErr5(3 /* FilesystemFailure */, {
     operation,
-    message: messageFor3(error),
+    message: messageFor4(error),
     ...errorCode(error) ? { code: errorCode(error) } : {}
   });
 }
@@ -24001,16 +25126,16 @@ function validateIdentifier(field, value) {
   return identifierPattern.test(value) ? ok(undefined) : err(toErr5(1 /* InvalidIdentifier */, { field, value }));
 }
 function isRegisteredRepository(value) {
-  return isRecord9(value) && typeof value.repositoryId === "string" && typeof value.repositoryPath === "string" && typeof value.commonGitDirectory === "string";
+  return isRecord10(value) && typeof value.repositoryId === "string" && typeof value.repositoryPath === "string" && typeof value.commonGitDirectory === "string";
 }
 function isRunWorktree(value) {
-  return isRecord9(value) && typeof value.repositoryId === "string" && typeof value.runId === "string" && typeof value.repositoryPath === "string" && typeof value.path === "string" && typeof value.commonGitDirectory === "string" && typeof value.startingCommit === "string";
+  return isRecord10(value) && typeof value.repositoryId === "string" && typeof value.runId === "string" && typeof value.repositoryPath === "string" && typeof value.path === "string" && typeof value.commonGitDirectory === "string" && typeof value.startingCommit === "string";
 }
 function sameWorktree(left, right) {
   return left.repositoryId === right.repositoryId && left.runId === right.runId && left.repositoryPath === right.repositoryPath && left.path === right.path && left.commonGitDirectory === right.commonGitDirectory && left.startingCommit === right.startingCommit;
 }
 function isLockRecord(value) {
-  return isRecord9(value) && Number.isSafeInteger(value.processId) && typeof value.token === "string";
+  return isRecord10(value) && Number.isSafeInteger(value.processId) && typeof value.token === "string";
 }
 function sha2563(value) {
   return createHash4("sha256").update(value).digest("hex");
@@ -24869,7 +25994,7 @@ function repositoryId(path) {
 function runId() {
   return `run-${Date.now().toString(36)}-${randomUUID5().slice(0, 8)}`;
 }
-function isRecord10(value) {
+function isRecord11(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function harnessRouteError(nodeIds, routes) {
@@ -24892,7 +26017,7 @@ function createLocalRequestHandler(app2, webRoot) {
       url.pathname = url.pathname.slice(4) || "/";
       return app2.fetch(new Request(url, request));
     }
-    if (url.pathname === "/health" || url.pathname.startsWith("/runs") || url.pathname.startsWith("/workflows") || url.pathname.startsWith("/repositories")) {
+    if (url.pathname === "/health" || url.pathname.startsWith("/runs") || url.pathname.startsWith("/workflows") || url.pathname.startsWith("/repositories") || url.pathname.startsWith("/tickets") || url.pathname.startsWith("/ticket-projects") || url.pathname.startsWith("/ticket-providers")) {
       return app2.fetch(request);
     }
     const relative2 = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
@@ -24908,6 +26033,9 @@ class LocalKairoHost {
   store;
   sandbox;
   worker;
+  tickets;
+  ticketRuns;
+  ticketSync;
   registry;
   ticketProviders;
   artifactWriter;
@@ -24921,6 +26049,9 @@ class LocalKairoHost {
     this.paths = paths;
     mkdirSync(paths.dataDirectory, { recursive: true });
     this.store = new SqliteEventStore(paths.databasePath);
+    this.tickets = new SqliteTicketRepository(paths.databasePath);
+    this.ticketRuns = new SqliteTicketRunStore(paths.databasePath);
+    this.ticketSync = new SqliteTicketSyncStore(paths.databasePath);
     this.sandbox = new WorktreeSandboxProvider(paths.worktreeDirectory);
     this.artifactWriter = new LocalArtifactWriter(paths.artifactDirectory);
     this.registry = new HarnessRegistry(harnesses);
@@ -24940,6 +26071,12 @@ class LocalKairoHost {
       const store = this.store.initialize();
       if (store.isErr()) {
         return cliErr(1 /* Initialization */, "sqlite_initialization_failed", "The SQLite store could not be initialized");
+      }
+      for (const ticketStore of [this.tickets, this.ticketRuns, this.ticketSync]) {
+        const initialized = ticketStore.initialize();
+        if (initialized.isErr()) {
+          return cliErr(1 /* Initialization */, "sqlite_ticket_initialization_failed", "The SQLite ticket stores could not be initialized");
+        }
       }
       const sandbox = await this.sandbox.initialize();
       if (sandbox.isErr()) {
@@ -25035,7 +26172,13 @@ class LocalKairoHost {
       coordinator: this.coordinator(),
       artifacts: new LocalArtifactContentReader(this.paths.artifactDirectory),
       repositories: this,
-      runCreator: this
+      runCreator: this,
+      tickets: {
+        repository: this.tickets,
+        runs: this.ticketRuns,
+        runQuery: new KairoTicketRunQuery(this.store),
+        sync: this.ticketSync
+      }
     });
   }
   async list() {
@@ -25045,7 +26188,7 @@ class LocalKairoHost {
       const repositories = [];
       for (const file2 of files) {
         const parsed = JSON.parse(await readFile6(resolve7(directory, file2), "utf8"));
-        if (isRecord10(parsed) && typeof parsed.repositoryId === "string" && typeof parsed.repositoryPath === "string") {
+        if (isRecord11(parsed) && typeof parsed.repositoryId === "string" && typeof parsed.repositoryPath === "string") {
           repositories.push({ id: parsed.repositoryId, path: parsed.repositoryPath });
         }
       }
@@ -25085,6 +26228,9 @@ class LocalKairoHost {
   }
   dispose() {
     this.worker.dispose();
+    this.ticketSync.dispose();
+    this.ticketRuns.dispose();
+    this.tickets.dispose();
     this.store.dispose();
     this.initialized = false;
   }
@@ -25108,7 +26254,7 @@ class LocalKairoHost {
     };
     const metadataPath = resolve7(this.paths.worktreeDirectory, "runs", configuration.repositoryId, `${aggregate.runId}.json`);
     const recorded = JSON.parse(await readFile6(metadataPath, "utf8"));
-    if (!isRecord10(recorded) || typeof recorded.commonGitDirectory !== "string") {
+    if (!isRecord11(recorded) || typeof recorded.commonGitDirectory !== "string") {
       throw new Error("Run worktree metadata is corrupt");
     }
     const durableWorktree = { ...worktree, commonGitDirectory: recorded.commonGitDirectory };

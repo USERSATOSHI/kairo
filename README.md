@@ -21,11 +21,12 @@ finishes successfully.
 Kairo runs locally. Repository worktrees, run history, logs, and artifacts stay
 on your machine.
 
-Kairo also contains the accepted T1–T5 ticket foundation: local greenfield
+Kairo also contains the accepted T1–T6 ticket system: local greenfield
 planning, immutable run snapshots, GitHub Issues synchronization, and
 capability-aware Forgejo Issues synchronization, including resumable migration
-from local authority to either remote provider. Ticket API and UI surfaces are
-planned for T6.
+from local authority to either remote provider. The local dashboard provides a
+unified planning and execution Kanban with ticket histories and redacted
+provider configuration status.
 
 ## Install
 

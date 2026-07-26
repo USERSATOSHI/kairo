@@ -39,6 +39,11 @@ interface BindingRow {
   readonly last_synced_revision: string | null;
 }
 
+interface ProjectRow {
+  readonly project_id: string;
+  readonly ticket_count: number;
+}
+
 interface ValueRow {
   readonly value: string;
 }
@@ -313,6 +318,25 @@ export class SqliteTicketRepository implements TicketBindingWriter, TicketReposi
       tickets.push(result.unwrap());
     }
     return ok(tickets);
+  }
+
+  listProjects(): Result<
+    readonly { readonly id: string; readonly ticketCount: number }[],
+    TicketError
+  > {
+    return safeCall(
+      () =>
+        this.database
+          .query<ProjectRow, []>(
+            `SELECT project_id, COUNT(*) AS ticket_count
+             FROM tickets
+             GROUP BY project_id
+             ORDER BY project_id`,
+          )
+          .all()
+          .map((row) => ({ id: row.project_id, ticketCount: row.ticket_count })),
+      (error) => databaseError('listTicketProjects', error),
+    );
   }
 
   findByBinding(binding: TicketBinding): Result<Ticket | undefined, TicketError> {

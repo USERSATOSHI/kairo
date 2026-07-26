@@ -363,10 +363,12 @@ Status: **Complete** (accepted 2026-07-26)
 
 ### T6 — Ticket UI
 
-- [ ] Ticket list and details
-- [ ] Unified planning and derived execution Kanban
-- [ ] Run, snapshot, sync, and migration history
-- [ ] Provider configuration
+Status: **Complete** (accepted 2026-07-26)
+
+- [x] Ticket list and details
+- [x] Unified planning and derived execution Kanban
+- [x] Run, snapshot, sync, and migration history
+- [x] Provider configuration
 
 ---
 

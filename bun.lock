@@ -54,6 +54,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@kairo/domain": "0.1.0",
+        "@kairo/tickets": "0.1.0",
       },
     },
     "packages/cli": {

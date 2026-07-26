@@ -5,6 +5,18 @@ import type {
   RunEvent,
   RunState,
 } from '@kairo/domain';
+import type {
+  Ticket,
+  TicketBoardCard,
+  TicketComment,
+  TicketMigration,
+  TicketRelationship,
+  TicketRunLink,
+  TicketRunView,
+  TicketSnapshot,
+  TicketSyncOperation,
+  TicketSyncState,
+} from '@kairo/tickets';
 
 export interface ApiErrorResponse {
   readonly error: {
@@ -128,4 +140,40 @@ export interface EventStreamMessage {
 export interface ArtifactContent {
   readonly mediaType: string;
   readonly content: string;
+}
+
+export interface TicketListItem {
+  readonly ticket: Ticket;
+  readonly column: TicketBoardCard['column'];
+  readonly activeRun?: TicketRunView;
+}
+
+export interface TicketProjectView {
+  readonly id: string;
+  readonly ticketCount: number;
+}
+
+export interface TicketRunHistoryView extends TicketRunLink {
+  readonly execution?: TicketRunView;
+}
+
+export interface TicketDetails extends TicketListItem {
+  readonly comments: readonly TicketComment[];
+  readonly relationships: readonly TicketRelationship[];
+  readonly runs: readonly TicketRunHistoryView[];
+  readonly snapshots: readonly TicketSnapshot[];
+  readonly syncState: TicketSyncState;
+  readonly syncOperations: readonly TicketSyncOperation[];
+  readonly migrations: readonly TicketMigration[];
+}
+
+export interface TicketProviderConfigurationView {
+  readonly id: 'local' | 'github' | 'forgejo';
+  readonly displayName: string;
+  readonly configured: boolean;
+  readonly credentialSource: 'none' | 'server_environment';
+  readonly endpoint?: string;
+  readonly owner?: string;
+  readonly repository?: string;
+  readonly message: string;
 }

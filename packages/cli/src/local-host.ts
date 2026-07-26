@@ -4,7 +4,12 @@ import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import { compileAdwPackage } from '@kairo/adw';
-import { createKairoApp, LocalArtifactContentReader, type KairoApp } from '@kairo/api';
+import {
+  createKairoApp,
+  KairoTicketRunQuery,
+  LocalArtifactContentReader,
+  type KairoApp,
+} from '@kairo/api';
 import type { CreateRunRequest, CreateRunResponse, RepositorySummary } from '@kairo/api-contracts';
 import {
   AgentExecutor,
@@ -24,6 +29,11 @@ import {
 } from '@kairo/harnesses';
 import { SqliteEventStore } from '@kairo/persistence-sqlite';
 import { WorktreeSandboxProvider, type RunWorktree } from '@kairo/sandbox-worktree';
+import {
+  SqliteTicketRepository,
+  SqliteTicketRunStore,
+  SqliteTicketSyncStore,
+} from '@kairo/tickets';
 import { ok, type Result } from '@usersatoshi/results';
 
 import { CliErrorKind, cliErr, type CliError } from './errors.ts';
@@ -106,7 +116,10 @@ export function createLocalRequestHandler(
       url.pathname === '/health' ||
       url.pathname.startsWith('/runs') ||
       url.pathname.startsWith('/workflows') ||
-      url.pathname.startsWith('/repositories')
+      url.pathname.startsWith('/repositories') ||
+      url.pathname.startsWith('/tickets') ||
+      url.pathname.startsWith('/ticket-projects') ||
+      url.pathname.startsWith('/ticket-providers')
     ) {
       return app.fetch(request);
     }
@@ -121,6 +134,9 @@ export class LocalKairoHost {
   readonly store: SqliteEventStore;
   readonly sandbox: WorktreeSandboxProvider;
   readonly worker: LocalWorker;
+  private readonly tickets: SqliteTicketRepository;
+  private readonly ticketRuns: SqliteTicketRunStore;
+  private readonly ticketSync: SqliteTicketSyncStore;
   private readonly registry: HarnessRegistry;
   private readonly ticketProviders: ReadonlyMap<string, TicketProvider>;
   private readonly artifactWriter: LocalArtifactWriter;
@@ -138,6 +154,9 @@ export class LocalKairoHost {
   ) {
     mkdirSync(paths.dataDirectory, { recursive: true });
     this.store = new SqliteEventStore(paths.databasePath);
+    this.tickets = new SqliteTicketRepository(paths.databasePath);
+    this.ticketRuns = new SqliteTicketRunStore(paths.databasePath);
+    this.ticketSync = new SqliteTicketSyncStore(paths.databasePath);
     this.sandbox = new WorktreeSandboxProvider(paths.worktreeDirectory);
     this.artifactWriter = new LocalArtifactWriter(paths.artifactDirectory);
     this.registry = new HarnessRegistry(harnesses);
@@ -162,6 +181,16 @@ export class LocalKairoHost {
           'sqlite_initialization_failed',
           'The SQLite store could not be initialized',
         );
+      }
+      for (const ticketStore of [this.tickets, this.ticketRuns, this.ticketSync]) {
+        const initialized = ticketStore.initialize();
+        if (initialized.isErr()) {
+          return cliErr(
+            CliErrorKind.Initialization,
+            'sqlite_ticket_initialization_failed',
+            'The SQLite ticket stores could not be initialized',
+          );
+        }
       }
       const sandbox = await this.sandbox.initialize();
       if (sandbox.isErr()) {
@@ -307,6 +336,12 @@ export class LocalKairoHost {
       artifacts: new LocalArtifactContentReader(this.paths.artifactDirectory),
       repositories: this,
       runCreator: this,
+      tickets: {
+        repository: this.tickets,
+        runs: this.ticketRuns,
+        runQuery: new KairoTicketRunQuery(this.store),
+        sync: this.ticketSync,
+      },
     });
   }
 
@@ -368,6 +403,9 @@ export class LocalKairoHost {
 
   dispose(): void {
     this.worker.dispose();
+    this.ticketSync.dispose();
+    this.ticketRuns.dispose();
+    this.tickets.dispose();
     this.store.dispose();
     this.initialized = false;
   }

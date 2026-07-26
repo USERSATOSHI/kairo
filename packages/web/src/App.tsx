@@ -5,6 +5,10 @@ import type {
   ArtifactView,
   RunDetails,
   RunSummary,
+  TicketDetails,
+  TicketListItem,
+  TicketProjectView,
+  TicketProviderConfigurationView,
   WorkflowNodeView,
 } from '@kairo/api-contracts';
 import {
@@ -24,6 +28,10 @@ import {
   fetchArtifacts,
   fetchRun,
   fetchRuns,
+  fetchTicket,
+  fetchTicketProjects,
+  fetchTicketProviderConfigurations,
+  fetchTickets,
   reconnectEvents,
   type ReplayedEvent,
 } from './api.ts';
@@ -299,7 +307,7 @@ function ApprovalControl({
   );
 }
 
-export function App() {
+function ExecutionConsole() {
   const [runs, setRuns] = useState<readonly RunSummary[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const [run, setRun] = useState<RunDetails>();
@@ -387,7 +395,7 @@ export function App() {
   }
 
   return (
-    <main>
+    <div className="execution-layout">
       <RunList runs={runs} selected={selectedRunId} onSelect={setSelectedRunId} />
       <section className="workspace">
         {error ? <div className="error-banner">{error}</div> : null}
@@ -469,6 +477,306 @@ export function App() {
           <div className="loading">Waiting for durable run state…</div>
         )}
       </section>
+    </div>
+  );
+}
+
+const boardColumns = [
+  'backlog',
+  'ready',
+  'planning',
+  'waiting_for_plan_approval',
+  'implementing',
+  'validating',
+  'repairing',
+  'reviewing',
+  'waiting_for_delivery_approval',
+  'blocked',
+  'failed',
+  'done',
+  'cancelled',
+] as const;
+
+function TicketHistory({ details }: { readonly details: TicketDetails }) {
+  return (
+    <div className="ticket-history">
+      <section>
+        <h4>Runs</h4>
+        {details.runs.length === 0 ? <p className="empty">No linked runs.</p> : null}
+        {details.runs.map((run) => (
+          <article key={run.runId}>
+            <strong>{run.runId}</strong>
+            <span>{run.kind}</span>
+            <span className={stateClass(run.execution?.column ?? 'unavailable')}>
+              {run.execution?.column ?? 'unavailable'}
+            </span>
+            <time>{run.createdAt}</time>
+          </article>
+        ))}
+      </section>
+      <section>
+        <h4>Snapshots</h4>
+        {details.snapshots.length === 0 ? <p className="empty">No captured snapshots.</p> : null}
+        {details.snapshots.map((snapshot) => (
+          <article key={snapshot.id}>
+            <strong>Revision {snapshot.providerRevision}</strong>
+            <span>{snapshot.provider}</span>
+            <span>{snapshot.runId}</span>
+            <time>{snapshot.capturedAt}</time>
+          </article>
+        ))}
+      </section>
+      <section>
+        <h4>Synchronization</h4>
+        <article>
+          <strong>{details.syncState.provider}</strong>
+          <span className={stateClass(details.syncState.status)}>{details.syncState.status}</span>
+          <span>{details.syncState.lastError ?? 'No synchronization error'}</span>
+          <time>{details.syncState.lastSyncedAt ?? 'Never synchronized'}</time>
+        </article>
+        {details.syncOperations.map((operation) => (
+          <article key={operation.idempotencyKey}>
+            <strong>{operation.operation}</strong>
+            <span>{operation.provider}</span>
+            <span className={stateClass(operation.status)}>{operation.status}</span>
+            <time>{operation.updatedAt}</time>
+          </article>
+        ))}
+      </section>
+      <section>
+        <h4>Migration</h4>
+        {details.migrations.length === 0 ? <p className="empty">No migration history.</p> : null}
+        {details.migrations.map((migration) => (
+          <article key={`${migration.ticketId}:${migration.stage}`}>
+            <strong>{migration.stage.replaceAll('_', ' ')}</strong>
+            <span>{migration.targetProvider}</span>
+            <span>{migration.lastError ?? 'Checkpoint durable'}</span>
+            <time>{migration.updatedAt}</time>
+          </article>
+        ))}
+      </section>
+    </div>
+  );
+}
+
+function TicketInspector({ details }: { readonly details: TicketDetails }) {
+  const { ticket } = details;
+  return (
+    <aside className="ticket-inspector">
+      <header>
+        <div>
+          <p className="eyebrow">
+            {ticket.binding.kind} · revision {ticket.revision}
+          </p>
+          <h2>{ticket.title}</h2>
+        </div>
+        <span className={stateClass(details.column)}>{details.column.replaceAll('_', ' ')}</span>
+      </header>
+      <p className="ticket-description">{ticket.description || 'No description provided.'}</p>
+      <dl className="ticket-metadata">
+        <dt>Priority</dt>
+        <dd>{ticket.priority ?? 'none'}</dd>
+        <dt>Labels</dt>
+        <dd>{ticket.labels.join(', ') || 'none'}</dd>
+        <dt>Assignees</dt>
+        <dd>{ticket.assignees.join(', ') || 'none'}</dd>
+        <dt>Updated</dt>
+        <dd>{ticket.updatedAt}</dd>
+      </dl>
+      <TicketHistory details={details} />
+    </aside>
+  );
+}
+
+function ProviderConfigurations({
+  configurations,
+}: {
+  readonly configurations: readonly TicketProviderConfigurationView[];
+}) {
+  return (
+    <section className="provider-configurations">
+      <div>
+        <p className="eyebrow">Provider configuration</p>
+        <h3>Ticket authorities</h3>
+      </div>
+      <p className="provider-note">
+        Credentials stay in server composition and are never returned to the browser.
+      </p>
+      {configurations.map((configuration) => (
+        <article key={configuration.id}>
+          <div>
+            <strong>{configuration.displayName}</strong>
+            <span className={stateClass(configuration.configured ? 'succeeded' : 'pending')}>
+              {configuration.configured ? 'configured' : 'not configured'}
+            </span>
+          </div>
+          <p>{configuration.message}</p>
+          {configuration.endpoint ? <small>{configuration.endpoint}</small> : null}
+          {configuration.owner && configuration.repository ? (
+            <small>
+              {configuration.owner}/{configuration.repository}
+            </small>
+          ) : null}
+          <small>
+            Credentials: {configuration.credentialSource.replaceAll('_', ' ')}
+          </small>
+        </article>
+      ))}
+    </section>
+  );
+}
+
+function TicketBoard({
+  tickets,
+  selectedTicketId,
+  onSelect,
+}: {
+  readonly tickets: readonly TicketListItem[];
+  readonly selectedTicketId?: string;
+  readonly onSelect: (ticketId: string) => void;
+}) {
+  return (
+    <div className="ticket-board">
+      {boardColumns.map((column) => {
+        const cards = tickets.filter((ticket) => ticket.column === column);
+        return (
+          <section className="ticket-column" key={column}>
+            <header>
+              <strong>{column.replaceAll('_', ' ')}</strong>
+              <span className="count">{cards.length}</span>
+            </header>
+            {cards.map(({ ticket, activeRun }) => (
+              <button
+                className={ticket.id === selectedTicketId ? 'ticket-card selected' : 'ticket-card'}
+                key={ticket.id}
+                onClick={() => onSelect(ticket.id)}
+                type="button"
+              >
+                <small>{ticket.id}</small>
+                <strong>{ticket.title}</strong>
+                <span>{ticket.priority ?? 'no priority'}</span>
+                {activeRun ? <span>{activeRun.runId}</span> : null}
+              </button>
+            ))}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function TicketConsole() {
+  const [projects, setProjects] = useState<readonly TicketProjectView[]>([]);
+  const [projectId, setProjectId] = useState<string>();
+  const [tickets, setTickets] = useState<readonly TicketListItem[]>([]);
+  const [selectedTicketId, setSelectedTicketId] = useState<string>();
+  const [details, setDetails] = useState<TicketDetails>();
+  const [providers, setProviders] = useState<readonly TicketProviderConfigurationView[]>([]);
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    Promise.all([fetchTicketProjects(), fetchTicketProviderConfigurations()])
+      .then(([nextProjects, nextProviders]) => {
+        setProjects(nextProjects);
+        setProviders(nextProviders);
+        setProjectId((current) => current ?? nextProjects[0]?.id);
+      })
+      .catch((cause: unknown) =>
+        setError(cause instanceof Error ? cause.message : 'Ticket configuration load failed'),
+      );
+  }, []);
+
+  useEffect(() => {
+    if (!projectId) {
+      setTickets([]);
+      setSelectedTicketId(undefined);
+      return;
+    }
+    fetchTickets(projectId)
+      .then((nextTickets) => {
+        setTickets(nextTickets);
+        setSelectedTicketId((current) =>
+          nextTickets.some(({ ticket }) => ticket.id === current)
+            ? current
+            : nextTickets[0]?.ticket.id,
+        );
+      })
+      .catch((cause: unknown) =>
+        setError(cause instanceof Error ? cause.message : 'Ticket load failed'),
+      );
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!selectedTicketId) {
+      setDetails(undefined);
+      return;
+    }
+    fetchTicket(selectedTicketId)
+      .then(setDetails)
+      .catch((cause: unknown) =>
+        setError(cause instanceof Error ? cause.message : 'Ticket detail load failed'),
+      );
+  }, [selectedTicketId]);
+
+  return (
+    <div className="ticket-console">
+      {error ? <div className="error-banner">{error}</div> : null}
+      <header className="ticket-console-header">
+        <div>
+          <p className="eyebrow">Planning and execution</p>
+          <h1>Ticket board</h1>
+        </div>
+        <label>
+          Project
+          <select value={projectId ?? ''} onChange={(event) => setProjectId(event.target.value)}>
+            {projects.length === 0 ? <option value="">No ticket projects</option> : null}
+            {projects.map((project) => (
+              <option key={project.id} value={project.id}>
+                {project.id} · {project.ticketCount}
+              </option>
+            ))}
+          </select>
+        </label>
+      </header>
+      <TicketBoard
+        tickets={tickets}
+        selectedTicketId={selectedTicketId}
+        onSelect={setSelectedTicketId}
+      />
+      <div className="ticket-lower">
+        {details ? (
+          <TicketInspector details={details} />
+        ) : (
+          <div className="ticket-empty">Select a ticket to inspect its durable history.</div>
+        )}
+        <ProviderConfigurations configurations={providers} />
+      </div>
+    </div>
+  );
+}
+
+export function App() {
+  const [surface, setSurface] = useState<'tickets' | 'runs'>('tickets');
+  return (
+    <main className="app-shell">
+      <nav className="surface-nav">
+        <strong>Kairo</strong>
+        <button
+          className={surface === 'tickets' ? 'active' : ''}
+          onClick={() => setSurface('tickets')}
+          type="button"
+        >
+          Tickets
+        </button>
+        <button
+          className={surface === 'runs' ? 'active' : ''}
+          onClick={() => setSurface('runs')}
+          type="button"
+        >
+          Runs
+        </button>
+      </nav>
+      {surface === 'tickets' ? <TicketConsole /> : <ExecutionConsole />}
     </main>
   );
 }

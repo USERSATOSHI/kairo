@@ -19,6 +19,12 @@ import {
   listWorkflows,
   type ApiServices,
 } from './use-cases.ts';
+import {
+  getTicket,
+  listTicketProviderConfigurations,
+  listTicketProjects,
+  listTickets,
+} from './ticket-use-cases.ts';
 
 function statusFor(error: ApiError): 400 | 404 | 409 | 500 {
   switch (error.kind) {
@@ -184,6 +190,32 @@ export function createKairoApp(services: ApiServices) {
     .get('/repositories/:repositoryId', async ({ params, set }) => {
       const result = await getRepository(services, params.repositoryId);
       return result.isErr() ? failure(result.error, set) : result.value;
+    })
+    .get('/tickets', ({ query, set }) => {
+      if (!services.tickets) return [];
+      const result = listTickets(services.tickets, query.projectId ?? '');
+      return result.isErr() ? failure(result.error, set) : result.value;
+    })
+    .get('/ticket-projects', ({ set }) => {
+      if (!services.tickets) return [];
+      const result = listTicketProjects(services.tickets);
+      return result.isErr() ? failure(result.error, set) : result.value;
+    })
+    .get('/tickets/:ticketId', ({ params, set }) => {
+      if (!services.tickets) {
+        set.status = 404;
+        return {
+          error: {
+            code: 'ticket_services_unavailable',
+            message: 'Ticket services are not configured',
+          },
+        };
+      }
+      const result = getTicket(services.tickets, params.ticketId);
+      return result.isErr() ? failure(result.error, set) : result.value;
+    })
+    .get('/ticket-providers', () => {
+      return listTicketProviderConfigurations(services.ticketProviders);
     });
 }
 

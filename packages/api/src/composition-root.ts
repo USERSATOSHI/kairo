@@ -1,10 +1,16 @@
 import { treaty } from '@elysiajs/eden';
 import { BunCommandRunner, RunCoordinator } from '@kairo/executors';
 import { SqliteEventStore } from '@kairo/persistence-sqlite';
+import {
+  SqliteTicketRepository,
+  SqliteTicketRunStore,
+  SqliteTicketSyncStore,
+} from '@kairo/tickets';
 import { err, ok, type Result } from '@usersatoshi/results';
 
 import { createKairoApp, type KairoApp } from './app.ts';
 import { LocalArtifactContentReader } from './local-artifact-content-reader.ts';
+import { KairoTicketRunQuery } from './ticket-run-query.ts';
 
 export interface ComposedKairoApp {
   readonly app: KairoApp;
@@ -28,13 +34,38 @@ export function composeKairoApp(
     return err({ kind: 0, message: 'The SQLite run store could not be initialized' });
   }
   const coordinator = new RunCoordinator(store, new BunCommandRunner(process.cwd()));
+  const tickets = new SqliteTicketRepository(databasePath);
+  const ticketRuns = new SqliteTicketRunStore(databasePath);
+  const ticketSync = new SqliteTicketSyncStore(databasePath);
+  for (const initializedTickets of [
+    tickets.initialize(),
+    ticketRuns.initialize(),
+    ticketSync.initialize(),
+  ]) {
+    if (initializedTickets.isErr()) {
+      ticketSync.dispose();
+      ticketRuns.dispose();
+      tickets.dispose();
+      store.dispose();
+      return err({ kind: 0, message: 'The SQLite ticket stores could not be initialized' });
+    }
+  }
   return ok({
     app: createKairoApp({
       runs: store,
       coordinator,
       ...(artifactRoot ? { artifacts: new LocalArtifactContentReader(artifactRoot) } : {}),
+      tickets: {
+        repository: tickets,
+        runs: ticketRuns,
+        runQuery: new KairoTicketRunQuery(store),
+        sync: ticketSync,
+      },
     }),
     dispose(): void {
+      ticketSync.dispose();
+      ticketRuns.dispose();
+      tickets.dispose();
       store.dispose();
     },
   });

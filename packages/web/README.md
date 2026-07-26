@@ -1,12 +1,18 @@
-# `@kairo/web` — Execution Console Dashboard
+# `@kairo/web` — Ticket and Execution Dashboard
 
-Read-only Kairo execution console built with **React 19**, **Vite**, and **React Flow** (`@xyflow/react`). Displays runs, workflow state graphs, node invocations/attempts, reconnectable durable events, logs, artifacts, diffs, and artifact-bound approval controls.
+Kairo's local ticket and execution dashboard, built with **React 19**, **Vite**,
+and **React Flow** (`@xyflow/react`). It displays a unified planning/execution
+Kanban, ticket histories and redacted provider configuration alongside runs,
+workflow graphs, durable events, artifacts, diffs, and artifact-bound approval
+controls.
 
 ## Design Constraints
 
 - **Read-only execution console** — The graph is not editable (`nodesConnectable={false}`, `nodesDraggable={false}`)
 - **The browser cannot supply an approval binding** — Approvals are submitted by a human operator ("web-user") but cryptographic/state bindings happen server-side
 - **Live event replay** — Events are delivered via Server-Sent Events (SSE) with `lastEventId` tracking for resilient reconnection
+- **Derived ticket columns** — The API supplies planning and runtime-owned execution projections; React never persists board state
+- **Server-resolved provider secrets** — Provider configuration responses contain status and non-secret scope only
 
 ## Quick Start
 

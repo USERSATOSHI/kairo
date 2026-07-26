@@ -4,4 +4,5 @@ export * from './errors.ts';
 export * from './local-artifact-content-reader.ts';
 export * from './ticket-run-query.ts';
 export * from './ports.ts';
+export * from './ticket-use-cases.ts';
 export * from './use-cases.ts';

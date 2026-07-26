@@ -1,6 +1,6 @@
 # `@kairo/api` — HTTP API and Application Use Cases
 
-The application layer of Kairo, implementing a hexagonal/ports-and-adapters architecture. Provides an Elysia HTTP server with 17 routes, application use cases, declared port interfaces, a single-process composition root, and checksum-verifying local artifact reader.
+The application layer of Kairo, implementing a hexagonal/ports-and-adapters architecture. Provides an Elysia HTTP server with 19 routes, application use cases, declared port interfaces, a single-process composition root, and checksum-verifying local artifact reader.
 
 ## Architecture
 
@@ -22,7 +22,7 @@ Infrastructure (implemented by other packages)
 
 ## HTTP API (Elysia Routes)
 
-The `createKairoApp(services)` factory produces an Elysia instance with **17 routes**:
+The `createKairoApp(services)` factory produces an Elysia instance with **19 routes**:
 
 ### Health
 
@@ -58,6 +58,15 @@ The `createKairoApp(services)` factory produces an Elysia instance with **17 rou
 |--------|------|-------------|
 | `GET` | `/repositories` | List registered git repositories |
 | `GET` | `/repositories/:repositoryId` | Get repository details |
+
+### Tickets
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/ticket-projects` | List projects containing tickets |
+| `GET` | `/tickets?projectId=` | List unified planning/execution board cards |
+| `GET` | `/tickets/:ticketId` | Get ticket details and durable histories |
+| `GET` | `/ticket-providers` | List redacted provider configuration |
 
 ## Use Cases
 

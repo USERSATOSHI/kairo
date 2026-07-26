@@ -87,6 +87,16 @@ export interface TicketSyncState {
   readonly nextRetryAt?: string;
 }
 
+export interface TicketSyncOperation {
+  readonly idempotencyKey: string;
+  readonly ticketId: TicketId;
+  readonly provider: TicketBinding['kind'];
+  readonly operation: string;
+  readonly status: 'pending' | 'succeeded' | 'failed';
+  readonly error?: string;
+  readonly updatedAt: string;
+}
+
 export interface ExternalTicketEvent {
   readonly provider: 'github' | 'forgejo';
   readonly providerEventId: string;

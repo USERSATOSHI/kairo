@@ -6,6 +6,7 @@ import type { TicketError } from '../errors.ts';
 import { TicketErrorKind, toErr } from '../errors.ts';
 import type {
   ForgejoMetadataStore,
+  TicketHistoryStore,
   TicketMigrationStore,
   TicketSyncStore,
 } from '../integration/ports.ts';
@@ -13,6 +14,7 @@ import type {
   ExternalTicketEvent,
   ForgejoInstanceMetadata,
   TicketMigration,
+  TicketSyncOperation,
   TicketSyncState,
 } from '../integration/types.ts';
 import type { TicketBinding, TicketStatus } from '../domain/types.ts';
@@ -37,6 +39,16 @@ interface ForgejoMetadataRow {
 
 interface MigrationRow {
   readonly state_json: string;
+}
+
+interface SyncOperationRow {
+  readonly idempotency_key: string;
+  readonly ticket_id: string;
+  readonly provider: TicketSyncOperation['provider'];
+  readonly operation: string;
+  readonly status: TicketSyncOperation['status'];
+  readonly last_error: string | null;
+  readonly updated_at: string;
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -214,7 +226,7 @@ function databaseError(operation: string, error: unknown): TicketError {
 }
 
 export class SqliteTicketSyncStore
-  implements ForgejoMetadataStore, TicketMigrationStore, TicketSyncStore
+  implements ForgejoMetadataStore, TicketHistoryStore, TicketMigrationStore, TicketSyncStore
 {
   private readonly database: Database;
 
@@ -274,6 +286,16 @@ export class SqliteTicketSyncStore
             ),
             state_json TEXT NOT NULL,
             updated_at TEXT NOT NULL,
+            FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
+          );
+          CREATE TABLE IF NOT EXISTS ticket_migration_history (
+            ticket_id TEXT NOT NULL,
+            stage TEXT NOT NULL CHECK (
+              stage IN ('prepared', 'remote_created', 'verified', 'completed')
+            ),
+            state_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (ticket_id, stage),
             FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
           );
         `);
@@ -457,26 +479,86 @@ export class SqliteTicketSyncStore
   saveMigration(migration: TicketMigration): Result<void, TicketError> {
     return safeCall(
       () => {
-        this.database
-          .query(
-            `INSERT INTO ticket_migrations (
-              ticket_id, target_provider, stage, state_json, updated_at
-            ) VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(ticket_id) DO UPDATE SET
-              target_provider = excluded.target_provider,
-              stage = excluded.stage,
-              state_json = excluded.state_json,
-              updated_at = excluded.updated_at`,
-          )
-          .run(
-            migration.ticketId,
-            migration.targetProvider,
-            migration.stage,
-            JSON.stringify(migration),
-            migration.updatedAt,
-          );
+        const serialized = JSON.stringify(migration);
+        this.database.transaction(() => {
+          this.database
+            .query(
+              `INSERT INTO ticket_migrations (
+                ticket_id, target_provider, stage, state_json, updated_at
+              ) VALUES (?, ?, ?, ?, ?)
+              ON CONFLICT(ticket_id) DO UPDATE SET
+                target_provider = excluded.target_provider,
+                stage = excluded.stage,
+                state_json = excluded.state_json,
+                updated_at = excluded.updated_at`,
+            )
+            .run(
+              migration.ticketId,
+              migration.targetProvider,
+              migration.stage,
+              serialized,
+              migration.updatedAt,
+            );
+          this.database
+            .query(
+              `INSERT INTO ticket_migration_history (
+                ticket_id, stage, state_json, updated_at
+              ) VALUES (?, ?, ?, ?)
+              ON CONFLICT(ticket_id, stage) DO UPDATE SET
+                state_json = excluded.state_json,
+                updated_at = excluded.updated_at`,
+            )
+            .run(migration.ticketId, migration.stage, serialized, migration.updatedAt);
+        })();
       },
       (error) => databaseError('saveTicketMigration', error),
+    );
+  }
+
+  listSyncOperations(ticketId: string): Result<readonly TicketSyncOperation[], TicketError> {
+    return safeCall(
+      () =>
+        this.database
+          .query<SyncOperationRow, [string]>(
+            `SELECT idempotency_key, ticket_id, provider, operation, status,
+                    last_error, updated_at
+             FROM ticket_sync_operations
+             WHERE ticket_id = ?
+             ORDER BY updated_at, idempotency_key`,
+          )
+          .all(ticketId)
+          .map((row) => ({
+            idempotencyKey: row.idempotency_key,
+            ticketId: row.ticket_id,
+            provider: row.provider,
+            operation: row.operation,
+            status: row.status,
+            ...(row.last_error === null ? {} : { error: row.last_error }),
+            updatedAt: row.updated_at,
+          })),
+      (error) => databaseError('listTicketSyncOperations', error),
+    );
+  }
+
+  listMigrationHistory(ticketId: string): Result<readonly TicketMigration[], TicketError> {
+    return safeCall(
+      () =>
+        this.database
+          .query<MigrationRow, [string]>(
+            `SELECT state_json
+             FROM ticket_migration_history
+             WHERE ticket_id = ?
+             ORDER BY
+               CASE stage
+                 WHEN 'prepared' THEN 1
+                 WHEN 'remote_created' THEN 2
+                 WHEN 'verified' THEN 3
+                 WHEN 'completed' THEN 4
+               END`,
+          )
+          .all(ticketId)
+          .map((row) => parseMigration(row.state_json)),
+      (error) => databaseError('listTicketMigrationHistory', error),
     );
   }
 

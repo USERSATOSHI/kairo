@@ -9,6 +9,7 @@ import type {
   TicketRunView,
   TicketMigration,
   TicketSnapshot,
+  TicketSyncOperation,
   TicketSyncState,
 } from './types.ts';
 
@@ -48,6 +49,11 @@ export interface ForgejoMetadataStore {
 export interface TicketMigrationStore {
   getMigration(ticketId: TicketId): Result<TicketMigration | undefined, TicketError>;
   saveMigration(migration: TicketMigration): Result<void, TicketError>;
+}
+
+export interface TicketHistoryStore {
+  listSyncOperations(ticketId: TicketId): Result<readonly TicketSyncOperation[], TicketError>;
+  listMigrationHistory(ticketId: TicketId): Result<readonly TicketMigration[], TicketError>;
 }
 
 export interface TicketRunQuery {

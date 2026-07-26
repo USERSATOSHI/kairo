@@ -15,3 +15,7 @@ provider through persisted `prepared`, `remote_created`, `verified`, and
 `completed` stages. A stable marker prevents duplicate creation after an
 interruption. The ticket binding changes only after a remote read-back matches
 the captured local revision.
+
+The T6 read model exposes ordered synchronization operations and durable
+migration-stage history. `ticket_migration_history` is additive and bounded to
+one row per migration stage and ticket.
