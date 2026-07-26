@@ -128,6 +128,7 @@ const result = await executor.execute({
   invocationSequence: 1,
   attemptNumber: 1,
   harnessId: 'codex',
+  model: 'gpt-5.2-codex',
   workingDirectory: '/path/to/worktree',
   role: 'Software Engineer',
   prompt: 'Implement the plan...',
@@ -155,6 +156,9 @@ ordered harness list to a compiled agent node ID; otherwise the coordinator
 uses the default `agentHarnesses` list. Attempt number selects within that list,
 so node-specific routing and fallback use the same durable attempt semantics.
 A compiled agent `harness` pin takes precedence and selects a one-item policy.
+After choosing the harness, the coordinator resolves the model from the
+compiled node's `models` map. It records that selection on `attempt.started`,
+passes it to the harness, and reuses the recorded model when resuming.
 
 ## BunCommandRunner
 

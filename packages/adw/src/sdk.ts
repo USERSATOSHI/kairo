@@ -12,6 +12,7 @@ export interface AgentNodeAuthoring {
   readonly prompt: string;
   readonly outputSchema?: string;
   readonly harness?: string;
+  readonly models?: Readonly<Record<string, string>>;
   readonly clearContext?: boolean;
   readonly capabilities?: readonly string[];
   readonly priority?: number;

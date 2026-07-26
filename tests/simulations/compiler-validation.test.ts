@@ -160,6 +160,61 @@ describe('M1 compiler validation', () => {
     }
   });
 
+  test('rejects invalid workflow model selections', () => {
+    for (const nodes of [
+      [
+        {
+          id: 'command',
+          type: 'command' as const,
+          command: 'bun test',
+          models: { codex: 'gpt-5' },
+          recoveryPolicy: 'replay_safe' as const,
+        },
+        { id: 'complete', type: 'complete' as const },
+      ],
+      [
+        {
+          id: 'agent',
+          type: 'agent' as const,
+          role: 'reviewer',
+          prompt: 'Review.',
+          models: {},
+          recoveryPolicy: 'resume_supported' as const,
+        },
+        { id: 'complete', type: 'complete' as const },
+      ],
+      [
+        {
+          id: 'agent',
+          type: 'agent' as const,
+          role: 'reviewer',
+          prompt: 'Review.',
+          models: { codex: ' ' },
+          recoveryPolicy: 'resume_supported' as const,
+        },
+        { id: 'complete', type: 'complete' as const },
+      ],
+    ]) {
+      const result = compileWorkflow(
+        workflowSource({
+          entryNodeId: nodes[0]?.id ?? '',
+          nodes,
+          transitions: [
+            {
+              id: 'entry.success.complete',
+              from: { nodeId: nodes[0]?.id ?? '', outcome: 'success' },
+              toNodeId: 'complete',
+            },
+          ],
+        }),
+      );
+      expect(result.isErr()).toBe(true);
+      if (result.isErr()) {
+        expect(result.error.kind).toBe(CompilerErrorKind.InvalidNodeConfiguration);
+      }
+    }
+  });
+
   test('rejects an unsupported recovery policy', () => {
     const result = compileWorkflow(
       workflowSource({

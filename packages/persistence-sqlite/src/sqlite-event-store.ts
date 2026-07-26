@@ -193,6 +193,7 @@ function isRunEvent(value: unknown): value is RunEvent {
         hasNumber(value, 'invocationSequence') &&
         hasNumber(value, 'attemptNumber') &&
         (value.harnessId === undefined || typeof value.harnessId === 'string') &&
+        (value.model === undefined || typeof value.model === 'string') &&
         (value.resumeToken === undefined || typeof value.resumeToken === 'string')
       );
     case 'attempt.resumed':
@@ -373,6 +374,7 @@ export class SqliteEventStore implements RunStore {
             attempt_number INTEGER NOT NULL,
             state TEXT NOT NULL,
             harness_id TEXT,
+            model TEXT,
             resume_token TEXT,
             failure_json TEXT,
             PRIMARY KEY (run_id, invocation_sequence, attempt_number),
@@ -423,6 +425,9 @@ export class SqliteEventStore implements RunStore {
         );
         if (!attemptColumns.has('harness_id')) {
           this.database.exec('ALTER TABLE attempt_projections ADD COLUMN harness_id TEXT');
+        }
+        if (!attemptColumns.has('model')) {
+          this.database.exec('ALTER TABLE attempt_projections ADD COLUMN model TEXT');
         }
         if (!attemptColumns.has('failure_json')) {
           this.database.exec('ALTER TABLE attempt_projections ADD COLUMN failure_json TEXT');
@@ -751,8 +756,8 @@ export class SqliteEventStore implements RunStore {
       .query(
         `INSERT INTO attempt_projections (
           run_id, invocation_sequence, attempt_number, state,
-          harness_id, resume_token, failure_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          harness_id, model, resume_token, failure_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         runId,
@@ -760,6 +765,7 @@ export class SqliteEventStore implements RunStore {
         attempt.number,
         attempt.state,
         attempt.harnessId ?? null,
+        attempt.model ?? null,
         attempt.resumeToken ?? null,
         attempt.failure ? canonicalValue(attempt.failure) : null,
       );

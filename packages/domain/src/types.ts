@@ -63,6 +63,7 @@ export interface SourceNodeDefinition {
   readonly prompt?: string;
   readonly outputSchema?: string;
   readonly harness?: string;
+  readonly models?: Readonly<Record<string, string>>;
   readonly clearContext?: boolean;
   readonly result?: 'succeeded' | 'failed';
   readonly skipOutcome?: string;
@@ -177,6 +178,7 @@ export interface NodeAttempt {
   readonly number: number;
   readonly state: AttemptState;
   readonly harnessId?: string;
+  readonly model?: string;
   readonly resumeToken?: string;
   readonly artifacts?: readonly ArtifactReference[];
   readonly failure?: AttemptFailure;
@@ -267,6 +269,7 @@ export type RunEvent =
       readonly invocationSequence: number;
       readonly attemptNumber: number;
       readonly harnessId?: string;
+      readonly model?: string;
       readonly resumeToken?: string;
     }
   | {

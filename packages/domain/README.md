@@ -69,6 +69,9 @@ Agent source nodes may set `clearContext: true` to opt out of reusing their
 latest successful harness session across graph invocations.
 They may also set a non-empty `harness` ID to pin that node to one compiled
 harness choice; omitted pins are resolved from durable run configuration.
+An optional non-empty `models` map selects a model by resolved harness ID. The
+resolved value is recorded on the attempt, and a missing entry preserves the
+harness's configured default.
 
 ## State Machine Types
 

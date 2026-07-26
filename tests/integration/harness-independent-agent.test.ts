@@ -58,7 +58,9 @@ class ScriptedProcessRunner implements ProcessRunner {
   }
 }
 
-function artifact(): CompiledWorkflowArtifact {
+function artifact(
+  additionalModels: Readonly<Record<string, string>> = {},
+): CompiledWorkflowArtifact {
   const schemaPath = './schemas/plan.json';
   const source: WorkflowSourceBundle = {
     manifest: { id: 'm4-agent', version: '1.0.0' },
@@ -72,6 +74,13 @@ function artifact(): CompiledWorkflowArtifact {
         prompt: './prompts/plan.md',
         outputSchema: schemaPath,
         capabilities: ['repository.read'],
+        models: {
+          'claude-code': 'claude-model',
+          codex: 'codex-model',
+          opencode: 'provider/opencode-model',
+          pi: 'provider/pi-model',
+          ...additionalModels,
+        },
         recoveryPolicy: 'resume_supported',
       },
       { id: 'complete', type: 'complete' },
@@ -158,6 +167,7 @@ function routedAgentArtifact(): CompiledWorkflowArtifact {
         role: 'planner',
         prompt: 'Plan the change.',
         harness: 'claude-code',
+        models: { 'claude-code': 'claude-model' },
         recoveryPolicy: 'resume_supported',
       },
       {
@@ -165,6 +175,7 @@ function routedAgentArtifact(): CompiledWorkflowArtifact {
         type: 'agent',
         role: 'implementer',
         prompt: 'Implement the plan.',
+        models: { opencode: 'provider/opencode-model' },
         recoveryPolicy: 'resume_supported',
       },
       { id: 'complete', type: 'complete' },
@@ -355,6 +366,7 @@ describe('M4 harness-independent agent execution', () => {
         .map(({ name }) => name);
       inspected.close();
       expect(columns).toContain('harness_id');
+      expect(columns).toContain('model');
       expect(columns).toContain('failure_json');
     } finally {
       store.dispose();
@@ -435,10 +447,14 @@ describe('M4 harness-independent agent execution', () => {
       expect(result.unwrap().state.invocations[0]?.attempts[0]?.artifacts).toHaveLength(2);
     }
     expect(claudeRunner.calls[0]?.args).toContain('--json-schema');
+    expect(claudeRunner.calls[0]?.args).toContain('claude-model');
     expect(codexRunner.calls[0]?.args).toContain('--output-schema');
+    expect(codexRunner.calls[0]?.args).toContain('codex-model');
     expect(openCodeRunner.calls[0]?.args).toContain('plan');
+    expect(openCodeRunner.calls[0]?.args).toContain('provider/opencode-model');
     expect(openCodeRunner.calls[0]?.args.at(-1)).toContain('Return only JSON matching this schema');
     expect(piRunner.calls[0]?.args).toContain('read,grep,find,ls');
+    expect(piRunner.calls[0]?.args).toContain('provider/pi-model');
     expect(piRunner.calls[0]?.args.at(-1)).toContain('Return only JSON matching this schema');
   });
 
@@ -480,6 +496,7 @@ describe('M4 harness-independent agent execution', () => {
       role: 'implementer',
       prompt: 'Continue.',
       capabilities: ['repository.read', 'repository.write', 'terminal.execute'],
+      model: 'provider/resume-model',
     };
 
     expect(
@@ -498,6 +515,8 @@ describe('M4 harness-independent agent execution', () => {
       'opencode-session',
       '--agent',
       'build',
+      '--model',
+      'provider/resume-model',
       expect.any(String),
     ]);
     expect(piRunner.calls[0]?.args).toEqual([
@@ -512,8 +531,66 @@ describe('M4 harness-independent agent execution', () => {
       '--no-themes',
       '--tools',
       'read,grep,find,ls,edit,write,bash',
+      '--model',
+      'provider/resume-model',
       expect.any(String),
     ]);
+  });
+
+  test('Claude Code and Codex preserve explicit models when resuming', async () => {
+    const output = { summary: 'Resumed', steps: ['Finish'] };
+    const claudeRunner = new ScriptedProcessRunner([
+      {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          is_error: false,
+          structured_output: output,
+          session_id: 'claude-session',
+        }),
+        stderr: '',
+      },
+    ]);
+    const codexRunner = new ScriptedProcessRunner([
+      {
+        exitCode: 0,
+        stdout: [
+          JSON.stringify({ type: 'thread.started', thread_id: 'codex-session' }),
+          JSON.stringify({
+            type: 'item.completed',
+            item: { type: 'agent_message', text: JSON.stringify(output) },
+          }),
+        ].join('\n'),
+        stderr: '',
+      },
+    ]);
+    const request = {
+      runId: 'resume-model-adapters',
+      invocationSequence: 1,
+      attemptNumber: 1,
+      workingDirectory: '/tmp',
+      role: 'implementer',
+      prompt: 'Continue.',
+      capabilities: ['repository.read'],
+    };
+
+    expect(
+      (
+        await new ClaudeCodeHarness(claudeRunner).resume(
+          { ...request, model: 'claude-resume-model' },
+          'claude-session',
+        )
+      ).unwrap().output,
+    ).toEqual(output);
+    expect(
+      (
+        await new CodexHarness(codexRunner).resume(
+          { ...request, model: 'codex-resume-model' },
+          'codex-session',
+        )
+      ).unwrap().output,
+    ).toEqual(output);
+    expect(claudeRunner.calls[0]?.args).toContain('claude-resume-model');
+    expect(codexRunner.calls[0]?.args).toContain('codex-resume-model');
   });
 
   test('workflow pins override run routing and unpinned agents use node routes', async () => {
@@ -561,13 +638,69 @@ describe('M4 harness-independent agent execution', () => {
       expect(
         completed.state.invocations
           .filter(({ nodeId }) => nodeId === 'plan' || nodeId === 'implement')
-          .map(({ nodeId, attempts }) => ({ nodeId, harnessId: attempts[0]?.harnessId })),
+          .map(({ nodeId, attempts }) => ({
+            nodeId,
+            harnessId: attempts[0]?.harnessId,
+            model: attempts[0]?.model,
+          })),
       ).toEqual([
-        { nodeId: 'plan', harnessId: 'claude-code' },
-        { nodeId: 'implement', harnessId: 'opencode' },
+        { nodeId: 'plan', harnessId: 'claude-code', model: 'claude-model' },
+        {
+          nodeId: 'implement',
+          harnessId: 'opencode',
+          model: 'provider/opencode-model',
+        },
       ]);
+      expect(planner.calls[0]?.request.model).toBe('claude-model');
+      expect(implementer.calls[0]?.request.model).toBe('provider/opencode-model');
       expect(planner.calls).toHaveLength(1);
       expect(implementer.calls).toHaveLength(1);
+    } finally {
+      store.dispose();
+      rmSync(paths.directory, { recursive: true, force: true });
+    }
+  });
+
+  test('replay rejects a model that differs from the compiled harness selection', () => {
+    const paths = location('kairo-agent-model-replay-');
+    const store = storeAt(paths.database);
+    try {
+      const coordinator = new RunCoordinator(store, new UnusedCommandRunner());
+      let current = coordinator
+        .createRun({
+          runId: 'model-replay-run',
+          artifact: artifact({ fake: 'expected-model' }),
+          startingCommit: 'abc123',
+          configuration: { agentHarnesses: ['fake'] },
+          idempotencyKey: 'create',
+        })
+        .unwrap();
+      current = store
+        .appendEvent({
+          runId: 'model-replay-run',
+          expectedSequence: current.nextEventSequence,
+          idempotencyKey: 'activate',
+          event: {
+            type: 'invocation.activated',
+            invocationSequence: 1,
+            nodeId: 'plan',
+          },
+        })
+        .unwrap();
+      const mismatched = store.appendEvent({
+        runId: 'model-replay-run',
+        expectedSequence: current.nextEventSequence,
+        idempotencyKey: 'wrong-model',
+        event: {
+          type: 'attempt.started',
+          invocationSequence: 1,
+          attemptNumber: 1,
+          harnessId: 'fake',
+          model: 'different-model',
+        },
+      });
+
+      expect(mismatched.isErr()).toBe(true);
     } finally {
       store.dispose();
       rmSync(paths.directory, { recursive: true, force: true });
@@ -639,7 +772,10 @@ describe('M4 harness-independent agent execution', () => {
       coordinator
         .createRun({
           runId: 'fallback-run',
-          artifact: artifact(),
+          artifact: artifact({
+            primary: 'primary-model',
+            fallback: 'fallback-model',
+          }),
           startingCommit: 'abc123',
           configuration: {
             agentHarnesses: ['primary'],
@@ -655,15 +791,23 @@ describe('M4 harness-independent agent execution', () => {
       const invocation = store.loadRun('fallback-run').unwrap().state.invocations[0];
       expect(invocation?.sequence).toBe(1);
       expect(
-        invocation?.attempts.map(({ number, harnessId, state }) => ({
+        invocation?.attempts.map(({ number, harnessId, model, state }) => ({
           number,
           harnessId,
+          model,
           state,
         })),
       ).toEqual([
-        { number: 1, harnessId: 'primary', state: 'failed' },
-        { number: 2, harnessId: 'fallback', state: 'succeeded' },
+        { number: 1, harnessId: 'primary', model: 'primary-model', state: 'failed' },
+        {
+          number: 2,
+          harnessId: 'fallback',
+          model: 'fallback-model',
+          state: 'succeeded',
+        },
       ]);
+      expect(primary.calls[0]?.request.model).toBe('primary-model');
+      expect(fallback.calls[0]?.request.model).toBe('fallback-model');
     } finally {
       store.dispose();
       rmSync(paths.directory, { recursive: true, force: true });

@@ -725,6 +725,7 @@ export class RunCoordinator {
       });
     }
     const resumeToken = reusableAgentSession(aggregate, definition, harnessId);
+    const model = definition.models?.[harnessId];
 
     const started = fromStore(
       this.store.appendEvent({
@@ -736,6 +737,7 @@ export class RunCoordinator {
           invocationSequence: intent.invocationSequence,
           attemptNumber: intent.attemptNumber,
           harnessId,
+          ...(model ? { model } : {}),
           ...(resumeToken ? { resumeToken } : {}),
         },
       }),
@@ -748,6 +750,7 @@ export class RunCoordinator {
       intent.invocationSequence,
       intent.attemptNumber,
       harnessId,
+      model,
       harnesses.length > intent.attemptNumber,
       resumeToken,
     );
@@ -795,6 +798,7 @@ export class RunCoordinator {
       invocation.sequence,
       attempt.number,
       attempt.harnessId,
+      attempt.model,
       false,
       intent.token,
     );
@@ -806,6 +810,7 @@ export class RunCoordinator {
     invocationSequence: number,
     attemptNumber: number,
     harnessId: string,
+    model: string | undefined,
     hasFallback: boolean,
     resumeToken?: string,
   ): Promise<Result<RunAggregate, ExecutorError>> {
@@ -826,6 +831,7 @@ export class RunCoordinator {
       role: definition.role,
       prompt,
       capabilities: definition.capabilities ?? [],
+      ...(model ? { model } : {}),
       ...(outputSchema === undefined ? {} : { outputSchema }),
       ...(resumeToken ? { resumeToken } : {}),
     });

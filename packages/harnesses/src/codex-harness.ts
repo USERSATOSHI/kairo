@@ -104,6 +104,7 @@ export class CodexHarness implements AgentHarness {
       '--json',
       '-s',
       sandboxFor(request.capabilities),
+      ...(request.model ? ['--model', request.model] : []),
       promptFor(request),
     ]);
   }
@@ -112,7 +113,14 @@ export class CodexHarness implements AgentHarness {
     request: HarnessExecutionRequest,
     token: string,
   ): Promise<Result<HarnessExecution, HarnessError>> {
-    return this.run(request, ['exec', 'resume', '--json', token, promptFor(request)]);
+    return this.run(request, [
+      'exec',
+      'resume',
+      '--json',
+      ...(request.model ? ['--model', request.model] : []),
+      token,
+      promptFor(request),
+    ]);
   }
 
   private async run(

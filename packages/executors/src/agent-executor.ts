@@ -82,6 +82,7 @@ export class AgentExecutor {
       role: input.role,
       prompt: input.prompt,
       capabilities: input.capabilities,
+      ...(input.model === undefined ? {} : { model: input.model }),
       ...(input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema }),
     };
     const execution = input.resumeToken

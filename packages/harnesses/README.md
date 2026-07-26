@@ -199,6 +199,17 @@ AgentExecutor.execute()  (from @kairo/executors)
         └── Atomic filesystem write → ArtifactReference
 ```
 
+When `HarnessExecutionRequest.model` is set, each adapter passes an explicit
+model option to its CLI:
+
+- Claude Code: `--model <model>`
+- Codex: `--model <model>`
+- OpenCode: `--model <provider/model>`
+- Pi: `--model <provider/model>`
+
+The same option is used for fresh and resumed execution. When `model` is
+omitted, the adapter leaves model selection to the CLI.
+
 ## Exported API
 
 | Export | Kind | Source |

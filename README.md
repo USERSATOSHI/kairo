@@ -169,6 +169,30 @@ If no `--harness` option is supplied, Kairo tries its default supported
 harness order. Supplying an explicit harness is recommended so a missing CLI
 does not surprise you.
 
+## Select models in a workflow
+
+Model identifiers belong to the workflow because each harness uses its own
+model namespace. Add a `models` map to an agent node:
+
+```typescript
+const implement = workflow.agent('implement', {
+  role: 'implementer',
+  prompt: './prompts/implement.md',
+  models: {
+    codex: 'gpt-5.2-codex',
+    opencode: 'openai/gpt-5.2',
+  },
+  capabilities: ['repository.read', 'repository.write'],
+  recoveryPolicy: 'resume_supported',
+});
+```
+
+Kairo selects the entry for the harness used by that attempt. This supports a
+different model for each fallback harness. The selected model is included in
+the compiled workflow checksum and durable attempt history, and resumed
+sessions keep the same selection. If the selected harness has no entry, Kairo
+leaves the model unset and that CLI uses its configured default.
+
 ## Create your own workflow
 
 Create an editable ADW package in the current repository:

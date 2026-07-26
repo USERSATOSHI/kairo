@@ -87,6 +87,26 @@ function nodeConfigurationError(node: SourceNodeDefinition): string | undefined 
   if (node.harness !== undefined && (typeof node.harness !== 'string' || !node.harness.trim())) {
     return 'harness must be a non-empty harness ID';
   }
+  if (node.models !== undefined && node.type !== 'agent') {
+    return 'models is supported only on agent nodes';
+  }
+  if (node.models !== undefined) {
+    if (
+      typeof node.models !== 'object' ||
+      node.models === null ||
+      Array.isArray(node.models) ||
+      Object.keys(node.models).length === 0
+    ) {
+      return 'models must be a non-empty harness-to-model object';
+    }
+    if (
+      Object.entries(node.models).some(
+        ([harnessId, model]) => !harnessId.trim() || typeof model !== 'string' || !model.trim(),
+      )
+    ) {
+      return 'models must contain non-empty harness IDs and model identifiers';
+    }
+  }
 
   switch (node.type) {
     case 'agent':

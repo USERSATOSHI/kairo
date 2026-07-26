@@ -85,6 +85,7 @@ export class OpenCodeHarness implements AgentHarness {
       '--pure',
       '--agent',
       agentFor(request.capabilities),
+      ...(request.model ? ['--model', request.model] : []),
       promptFor(request),
     ]);
   }
@@ -102,6 +103,7 @@ export class OpenCodeHarness implements AgentHarness {
       token,
       '--agent',
       agentFor(request.capabilities),
+      ...(request.model ? ['--model', request.model] : []),
       promptFor(request),
     ]);
   }

@@ -130,6 +130,7 @@ export class PiHarness implements AgentHarness {
         '--no-themes',
         '--tools',
         toolsFor(request.capabilities),
+        ...(request.model ? ['--model', request.model] : []),
         promptFor(request),
       ],
       request.workingDirectory,

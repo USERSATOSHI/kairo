@@ -369,24 +369,30 @@ function reduceEvent(
           definition.id,
           definition.harness,
         )?.[event.attemptNumber - 1];
-        if (!expectedHarness || event.harnessId !== expectedHarness) {
+        const expectedModel = expectedHarness ? definition.models?.[expectedHarness] : undefined;
+        if (
+          !expectedHarness ||
+          event.harnessId !== expectedHarness ||
+          event.model !== expectedModel
+        ) {
           return toRuntimeError(RuntimeErrorKind.IllegalStateTransition, {
             entity: `attempt:${event.attemptNumber}`,
             from: invocation.state,
-            event: 'attempt.started:harness_mismatch',
+            event: 'attempt.started:execution_selection_mismatch',
           });
         }
-      } else if (event.harnessId !== undefined) {
+      } else if (event.harnessId !== undefined || event.model !== undefined) {
         return toRuntimeError(RuntimeErrorKind.IllegalStateTransition, {
           entity: `attempt:${event.attemptNumber}`,
           from: invocation.state,
-          event: 'attempt.started:unexpected_harness',
+          event: 'attempt.started:unexpected_agent_selection',
         });
       }
       const attempt: NodeAttempt = {
         number: event.attemptNumber,
         state: 'running',
         ...(event.harnessId ? { harnessId: event.harnessId } : {}),
+        ...(event.model ? { model: event.model } : {}),
         ...(event.resumeToken ? { resumeToken: event.resumeToken } : {}),
       };
       return ok({

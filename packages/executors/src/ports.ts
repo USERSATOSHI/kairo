@@ -142,6 +142,7 @@ export interface HarnessExecutionRequest {
   readonly role: string;
   readonly prompt: string;
   readonly capabilities: readonly string[];
+  readonly model?: string;
   readonly outputSchema?: JsonValue;
 }
 

@@ -135,7 +135,8 @@ function NodeDetails({
           <p>Outcome: {invocation.outcome ?? 'pending'}</p>
           {invocation.attempts.map((attempt) => (
             <p key={attempt.number}>
-              Attempt {attempt.number} · {attempt.harnessId ?? 'native'} · {attempt.state}
+              Attempt {attempt.number} · {attempt.harnessId ?? 'native'}
+              {attempt.model ? ` · ${attempt.model}` : ''} · {attempt.state}
             </p>
           ))}
         </article>

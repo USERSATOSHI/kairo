@@ -23,6 +23,25 @@ bun run kairo run feature-development \
   --harness codex
 ```
 
+Agent nodes can pin a model for each harness they may use:
+
+```typescript
+workflow.agent('implement', {
+  role: 'implementer',
+  prompt: './prompts/implement.md',
+  models: {
+    codex: 'gpt-5.2-codex',
+    opencode: 'openai/gpt-5.2',
+  },
+  capabilities: ['repository.read', 'repository.write'],
+  recoveryPolicy: 'resume_supported',
+});
+```
+
+The compiler includes this map in the workflow checksum. At execution time the
+coordinator resolves the model after selecting the harness, records it on the
+durable attempt, and reuses it when resuming that attempt.
+
 Build and link the distributable root CLI:
 
 ```bash

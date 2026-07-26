@@ -19984,6 +19984,7 @@ class AgentExecutor {
       role: input.role,
       prompt: input.prompt,
       capabilities: input.capabilities,
+      ...input.model === undefined ? {} : { model: input.model },
       ...input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema }
     };
     const execution = input.resumeToken ? await harness.resume(request, input.resumeToken) : await harness.execute(request);
@@ -20421,24 +20422,26 @@ function reduceEvent(artifact, state, event) {
       }
       if (definition.type === "agent") {
         const expectedHarness = agentHarnessesForNode(state.configuration, definition.id, definition.harness)?.[event.attemptNumber - 1];
-        if (!expectedHarness || event.harnessId !== expectedHarness) {
+        const expectedModel = expectedHarness ? definition.models?.[expectedHarness] : undefined;
+        if (!expectedHarness || event.harnessId !== expectedHarness || event.model !== expectedModel) {
           return toRuntimeError(6 /* IllegalStateTransition */, {
             entity: `attempt:${event.attemptNumber}`,
             from: invocation.state,
-            event: "attempt.started:harness_mismatch"
+            event: "attempt.started:execution_selection_mismatch"
           });
         }
-      } else if (event.harnessId !== undefined) {
+      } else if (event.harnessId !== undefined || event.model !== undefined) {
         return toRuntimeError(6 /* IllegalStateTransition */, {
           entity: `attempt:${event.attemptNumber}`,
           from: invocation.state,
-          event: "attempt.started:unexpected_harness"
+          event: "attempt.started:unexpected_agent_selection"
         });
       }
       const attempt = {
         number: event.attemptNumber,
         state: "running",
         ...event.harnessId ? { harnessId: event.harnessId } : {},
+        ...event.model ? { model: event.model } : {},
         ...event.resumeToken ? { resumeToken: event.resumeToken } : {}
       };
       return ok({
@@ -20946,6 +20949,17 @@ function nodeConfigurationError(node) {
   }
   if (node.harness !== undefined && (typeof node.harness !== "string" || !node.harness.trim())) {
     return "harness must be a non-empty harness ID";
+  }
+  if (node.models !== undefined && node.type !== "agent") {
+    return "models is supported only on agent nodes";
+  }
+  if (node.models !== undefined) {
+    if (typeof node.models !== "object" || node.models === null || Array.isArray(node.models) || Object.keys(node.models).length === 0) {
+      return "models must be a non-empty harness-to-model object";
+    }
+    if (Object.entries(node.models).some(([harnessId, model]) => !harnessId.trim() || typeof model !== "string" || !model.trim())) {
+      return "models must contain non-empty harness IDs and model identifiers";
+    }
   }
   switch (node.type) {
     case "agent":
@@ -22319,6 +22333,7 @@ class RunCoordinator {
       });
     }
     const resumeToken = reusableAgentSession(aggregate, definition, harnessId);
+    const model = definition.models?.[harnessId];
     const started = fromStore(this.store.appendEvent({
       runId: aggregate.runId,
       expectedSequence: aggregate.nextEventSequence,
@@ -22328,12 +22343,13 @@ class RunCoordinator {
         invocationSequence: intent.invocationSequence,
         attemptNumber: intent.attemptNumber,
         harnessId,
+        ...model ? { model } : {},
         ...resumeToken ? { resumeToken } : {}
       }
     }));
     if (started.isErr())
       return started;
-    return this.completeAgentAttempt(started.unwrap(), definition, intent.invocationSequence, intent.attemptNumber, harnessId, harnesses.length > intent.attemptNumber, resumeToken);
+    return this.completeAgentAttempt(started.unwrap(), definition, intent.invocationSequence, intent.attemptNumber, harnessId, model, harnesses.length > intent.attemptNumber, resumeToken);
   }
   async resumeAgent(aggregate, intent) {
     const target = definitionFor2(aggregate, intent.invocationSequence);
@@ -22361,9 +22377,9 @@ class RunCoordinator {
     }));
     if (resumed.isErr())
       return resumed;
-    return this.completeAgentAttempt(resumed.unwrap(), definition, invocation.sequence, attempt.number, attempt.harnessId, false, intent.token);
+    return this.completeAgentAttempt(resumed.unwrap(), definition, invocation.sequence, attempt.number, attempt.harnessId, attempt.model, false, intent.token);
   }
-  async completeAgentAttempt(aggregate, definition, invocationSequence, attemptNumber, harnessId, hasFallback, resumeToken) {
+  async completeAgentAttempt(aggregate, definition, invocationSequence, attemptNumber, harnessId, model, hasFallback, resumeToken) {
     if (!this.agentExecutor || !definition.role || !definition.prompt) {
       throw new Error("Agent execution dependencies were validated before completion");
     }
@@ -22379,6 +22395,7 @@ class RunCoordinator {
       role: definition.role,
       prompt,
       capabilities: definition.capabilities ?? [],
+      ...model ? { model } : {},
       ...outputSchema === undefined ? {} : { outputSchema },
       ...resumeToken ? { resumeToken } : {}
     });
@@ -22828,7 +22845,7 @@ function isRunEvent(value) {
     case "invocation.activated":
       return hasNumber(value, "invocationSequence") && typeof value.nodeId === "string";
     case "attempt.started":
-      return hasNumber(value, "invocationSequence") && hasNumber(value, "attemptNumber") && (value.harnessId === undefined || typeof value.harnessId === "string") && (value.resumeToken === undefined || typeof value.resumeToken === "string");
+      return hasNumber(value, "invocationSequence") && hasNumber(value, "attemptNumber") && (value.harnessId === undefined || typeof value.harnessId === "string") && (value.model === undefined || typeof value.model === "string") && (value.resumeToken === undefined || typeof value.resumeToken === "string");
     case "attempt.resumed":
       return hasNumber(value, "invocationSequence") && hasNumber(value, "attemptNumber") && typeof value.harnessId === "string" && typeof value.resumeToken === "string";
     case "attempt.resume_token_recorded":
@@ -22958,6 +22975,7 @@ class SqliteEventStore {
             attempt_number INTEGER NOT NULL,
             state TEXT NOT NULL,
             harness_id TEXT,
+            model TEXT,
             resume_token TEXT,
             failure_json TEXT,
             PRIMARY KEY (run_id, invocation_sequence, attempt_number),
@@ -23003,6 +23021,9 @@ class SqliteEventStore {
       const attemptColumns = new Set(this.database.query('SELECT name FROM pragma_table_info("attempt_projections")').all().map(({ name }) => name));
       if (!attemptColumns.has("harness_id")) {
         this.database.exec("ALTER TABLE attempt_projections ADD COLUMN harness_id TEXT");
+      }
+      if (!attemptColumns.has("model")) {
+        this.database.exec("ALTER TABLE attempt_projections ADD COLUMN model TEXT");
       }
       if (!attemptColumns.has("failure_json")) {
         this.database.exec("ALTER TABLE attempt_projections ADD COLUMN failure_json TEXT");
@@ -23228,8 +23249,8 @@ class SqliteEventStore {
   insertAttemptProjection(runId, invocationSequence, attempt) {
     this.database.query(`INSERT INTO attempt_projections (
           run_id, invocation_sequence, attempt_number, state,
-          harness_id, resume_token, failure_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(runId, invocationSequence, attempt.number, attempt.state, attempt.harnessId ?? null, attempt.resumeToken ?? null, attempt.failure ? canonicalValue(attempt.failure) : null);
+          harness_id, model, resume_token, failure_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(runId, invocationSequence, attempt.number, attempt.state, attempt.harnessId ?? null, attempt.model ?? null, attempt.resumeToken ?? null, attempt.failure ? canonicalValue(attempt.failure) : null);
   }
   insertApprovalProjection(runId, invocation) {
     if (!invocation.approval)
@@ -23474,7 +23495,8 @@ class ClaudeCodeHarness {
       "--permission-mode",
       "dontAsk",
       "--tools",
-      toolsFor(request.capabilities)
+      toolsFor(request.capabilities),
+      ...request.model ? ["--model", request.model] : []
     ]);
   }
   resume(request, token) {
@@ -23487,7 +23509,8 @@ class ClaudeCodeHarness {
       "--permission-mode",
       "dontAsk",
       "--tools",
-      toolsFor(request.capabilities)
+      toolsFor(request.capabilities),
+      ...request.model ? ["--model", request.model] : []
     ]);
   }
   async run(request, token, baseArgs) {
@@ -23577,11 +23600,19 @@ class CodexHarness {
       "--json",
       "-s",
       sandboxFor(request.capabilities),
+      ...request.model ? ["--model", request.model] : [],
       promptFor2(request)
     ]);
   }
   resume(request, token) {
-    return this.run(request, ["exec", "resume", "--json", token, promptFor2(request)]);
+    return this.run(request, [
+      "exec",
+      "resume",
+      "--json",
+      ...request.model ? ["--model", request.model] : [],
+      token,
+      promptFor2(request)
+    ]);
   }
   async run(request, args) {
     const result = await fromAsync(() => runWithSchema(this.runner, request, args), (cause) => processFailure2(cause instanceof Error ? cause.message : "Codex schema setup failed"));
@@ -23717,6 +23748,7 @@ class OpenCodeHarness {
       "--pure",
       "--agent",
       agentFor(request.capabilities),
+      ...request.model ? ["--model", request.model] : [],
       promptFor3(request)
     ]);
   }
@@ -23730,6 +23762,7 @@ class OpenCodeHarness {
       token,
       "--agent",
       agentFor(request.capabilities),
+      ...request.model ? ["--model", request.model] : [],
       promptFor3(request)
     ]);
   }
@@ -23834,6 +23867,7 @@ class PiHarness {
       "--no-themes",
       "--tools",
       toolsFor2(request.capabilities),
+      ...request.model ? ["--model", request.model] : [],
       promptFor4(request)
     ], request.workingDirectory);
     if (result.isErr())

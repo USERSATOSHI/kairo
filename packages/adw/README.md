@@ -33,7 +33,6 @@ workflow.permissions(
   'repository.write',
   'terminal.execute',
 );
-workflow.defaults({ modelProfile: 'coding-strong' });
 workflow.runLimits({
   maxDurationMs: 8 * 60 * 60 * 1000,
   maxNodeInvocations: 30,
@@ -70,6 +69,9 @@ const review = workflow.agent('review', {
   role: 'reviewer',
   prompt: './prompts/review.md',
   harness: 'codex',
+  models: {
+    codex: 'gpt-5.2-codex',
+  },
   capabilities: ['repository.read'],
   recoveryPolicy: 'resume_supported',
 });
@@ -115,6 +117,12 @@ Set `harness: 'codex'` when a workflow intentionally pins an agent node to one
 harness. If `harness` is omitted, Kairo uses the node-specific CLI route and
 then the CLI's default `--harness` policy. A workflow pin is included in the
 compiled checksum and does not inherit CLI fallbacks.
+
+Use `models` to select a model for each harness that may execute the node.
+Kairo resolves the entry after selecting the harness, so fallback harnesses can
+use different provider-specific model identifiers. The map is included in the
+compiled checksum. If the selected harness has no entry, the harness uses its
+configured default.
 
 `startAt(handle)` assigns the single entry node. `build()` returns the existing
 `WorkflowAuthoringDefinition`; it does not compile the workflow.

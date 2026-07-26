@@ -40,6 +40,7 @@ describe('class-based ADW authoring SDK', () => {
       role: 'repairer',
       prompt: './repair.md',
       harness: 'pi',
+      models: { pi: 'anthropic/claude-sonnet' },
       clearContext: true,
       recoveryPolicy: 'resume_supported',
     });
@@ -68,6 +69,7 @@ describe('class-based ADW authoring SDK', () => {
           role: 'repairer',
           prompt: './repair.md',
           harness: 'pi',
+          models: { pi: 'anthropic/claude-sonnet' },
           clearContext: true,
           recoveryPolicy: 'resume_supported',
         },

@@ -84,6 +84,7 @@ export class ClaudeCodeHarness implements AgentHarness {
       'dontAsk',
       '--tools',
       toolsFor(request.capabilities),
+      ...(request.model ? ['--model', request.model] : []),
     ]);
   }
 
@@ -101,6 +102,7 @@ export class ClaudeCodeHarness implements AgentHarness {
       'dontAsk',
       '--tools',
       toolsFor(request.capabilities),
+      ...(request.model ? ['--model', request.model] : []),
     ]);
   }
 

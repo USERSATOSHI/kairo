@@ -103,7 +103,7 @@ All projection tables use `ON DELETE CASCADE` foreign keys to their parent, so d
 |-------|-------------|---------|
 | `run_projections` | `run_id` | `status`, `next_invocation_sequence`, `state_json` |
 | `invocation_projections` | `run_id`, `sequence` | `node_id`, `state`, `outcome` |
-| `attempt_projections` | `run_id`, `invocation_seq`, `number` | `state`, `harness_id`, `resume_token`, `failure_json` |
+| `attempt_projections` | `run_id`, `invocation_seq`, `number` | `state`, `harness_id`, `model`, `resume_token`, `failure_json` |
 | `approval_projections` | `run_id`, `invocation_seq` | `state`, `binding_json` |
 | `artifact_projections` | `run_id`, `invocation_seq`, `attempt_number`, `artifact_id` | `kind`, `media_type`, `checksum`, `size` |
 | `run_artifact_projections` | `run_id`, `artifact_id` | `kind`, `media_type`, `checksum`, `size` |
