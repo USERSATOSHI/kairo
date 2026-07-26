@@ -234,8 +234,6 @@ Rules:
   boundaries.
 - Unexpected programming defects may throw.
 - Do not use one global `KairoError` union.
-- Do not call `unwrap()` in server routes, coordinator loops, worker loops,
-  persistence adapters, or executors.
 - Persist only serializable errors.
 - Numeric error kinds that cross a process, API, plugin, or persistence
   boundary must have explicit stable values.
