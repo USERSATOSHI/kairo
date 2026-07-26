@@ -102,6 +102,22 @@ Kairo resolves the ticket before creating a worktree, stores an immutable
 snapshot in the run, and gives the same objective and acceptance criteria to
 every agent. Use `--task-file request.md` for longer standalone requests.
 
+Kairo-owned planning tickets are usable through the CLI:
+
+```bash
+kairo ticket create --project personal \
+  --title "Add CSV export" \
+  --description "Export filtered results as CSV."
+kairo ticket list --project personal
+kairo run feature-development --repo /path/to/repository \
+  --ticket kairo:<ticket-id> --harness codex
+```
+
+GitHub and Forgejo imports, synchronization, and local-to-remote migration are
+composed from environment-only credentials. See
+[`packages/cli/README.md`](packages/cli/README.md#kairo-ticket-) for setup and
+command examples.
+
 Kairo returns the new run ID and its current status:
 
 ```json

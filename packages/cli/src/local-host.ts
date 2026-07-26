@@ -11,6 +11,7 @@ import {
   type KairoApp,
 } from '@kairo/api';
 import type { CreateRunRequest, CreateRunResponse, RepositorySummary } from '@kairo/api-contracts';
+import type { TicketProviderConfigurationView } from '@kairo/api-contracts';
 import {
   AgentExecutor,
   type AgentHarness,
@@ -33,12 +34,35 @@ import {
   SqliteTicketRepository,
   SqliteTicketRunStore,
   SqliteTicketSyncStore,
+  TicketMigrationService,
+  type TicketMigrationError,
+  type TicketPriority,
+  type TicketProvider as RemoteTicketProvider,
+  TicketErrorKind,
+  TicketRunService,
+  TicketService,
+  TicketSyncErrorKind,
+  TicketSyncService,
+  type TicketSyncError,
+  type Ticket,
+  type TicketComment,
+  type TicketError,
+  type TicketStatus,
+  type UpdateTicketInput,
+  toTicketError,
+  toTicketSyncError,
 } from '@kairo/tickets';
 import { ok, type Result } from '@usersatoshi/results';
 
 import { CliErrorKind, cliErr, type CliError } from './errors.ts';
 import { resolveLocalPaths, type LocalPaths } from './paths.ts';
-import { createInlineWorkItem, resolveTicketWorkItem, workItemConfiguration } from './work-item.ts';
+import { composeTicketProviders, type TicketProviderComposition } from './ticket-composition.ts';
+import {
+  createInlineWorkItem,
+  createStoredTicketWorkItem,
+  resolveTicketWorkItem,
+  workItemConfiguration,
+} from './work-item.ts';
 import { LocalWorker } from './worker.ts';
 
 interface RunConfiguration {
@@ -137,6 +161,11 @@ export class LocalKairoHost {
   private readonly tickets: SqliteTicketRepository;
   private readonly ticketRuns: SqliteTicketRunStore;
   private readonly ticketSync: SqliteTicketSyncStore;
+  private readonly ticketService: TicketService;
+  private readonly ticketSyncService: TicketSyncService;
+  private readonly ticketMigrationService: TicketMigrationService;
+  private readonly remoteTicketProviders: ReadonlyMap<'github' | 'forgejo', RemoteTicketProvider>;
+  private readonly ticketProviderViews: readonly TicketProviderConfigurationView[];
   private readonly registry: HarnessRegistry;
   private readonly ticketProviders: ReadonlyMap<string, TicketProvider>;
   private readonly artifactWriter: LocalArtifactWriter;
@@ -157,6 +186,27 @@ export class LocalKairoHost {
     this.tickets = new SqliteTicketRepository(paths.databasePath);
     this.ticketRuns = new SqliteTicketRunStore(paths.databasePath);
     this.ticketSync = new SqliteTicketSyncStore(paths.databasePath);
+    const clock = { now: (): string => new Date().toISOString() };
+    const ids = {
+      ticketId: (): string => `ticket-${randomUUID()}`,
+      commentId: (): string => `comment-${randomUUID()}`,
+    };
+    this.ticketService = new TicketService(this.tickets, clock, ids);
+    this.ticketSyncService = new TicketSyncService(
+      this.tickets,
+      this.ticketSync,
+      clock,
+      ids,
+      this.ticketRuns,
+      new KairoTicketRunQuery(this.store),
+    );
+    this.ticketMigrationService = new TicketMigrationService(this.tickets, this.ticketSync, clock);
+    const ticketComposition: TicketProviderComposition = composeTicketProviders(
+      process.env,
+      this.ticketSync,
+    );
+    this.remoteTicketProviders = ticketComposition.providers;
+    this.ticketProviderViews = ticketComposition.configurations;
     this.sandbox = new WorktreeSandboxProvider(paths.worktreeDirectory);
     this.artifactWriter = new LocalArtifactWriter(paths.artifactDirectory);
     this.registry = new HarnessRegistry(harnesses);
@@ -209,6 +259,17 @@ export class LocalKairoHost {
   }
 
   async create(request: CreateRunRequest): Promise<Result<CreateRunResponse, CliError>> {
+    const ticket = request.ticket?.trim();
+    if (ticket?.startsWith('kairo:')) {
+      return this.createTicketRun(request, ticket.slice('kairo:'.length).trim());
+    }
+    return this.createRun(request);
+  }
+
+  private async createRun(
+    request: CreateRunRequest,
+    suppliedWorkItem?: import('@kairo/domain').WorkItemSnapshot,
+  ): Promise<Result<CreateRunResponse, CliError>> {
     if (!this.initialized) {
       return cliErr(
         CliErrorKind.Initialization,
@@ -254,18 +315,20 @@ export class LocalKairoHost {
         'Use exactly one of task or ticket',
       );
     }
-    if (request.adw === 'feature-development' && !task && !ticket) {
+    if (request.adw === 'feature-development' && !task && !ticket && !suppliedWorkItem) {
       return cliErr(
         CliErrorKind.InvalidArguments,
         'work_item_required',
         'feature-development requires --ticket, --task, or --task-file',
       );
     }
-    const workItem = task
-      ? createInlineWorkItem(task)
-      : ticket
-        ? await resolveTicketWorkItem(ticket, this.ticketProviders)
-        : undefined;
+    const workItem = suppliedWorkItem
+      ? ok(suppliedWorkItem)
+      : task
+        ? createInlineWorkItem(task)
+        : ticket
+          ? await resolveTicketWorkItem(ticket, this.ticketProviders)
+          : undefined;
     if (workItem?.isErr()) {
       return cliErr(CliErrorKind.InvalidArguments, workItem.error.code, workItem.error.message);
     }
@@ -315,6 +378,82 @@ export class LocalKairoHost {
     return ok({ runId: id, status: stable.state.status });
   }
 
+  private async createTicketRun(
+    request: CreateRunRequest,
+    ticketId: string,
+  ): Promise<Result<CreateRunResponse, CliError>> {
+    if (!ticketId) {
+      return cliErr(
+        CliErrorKind.InvalidArguments,
+        'invalid_ticket_reference',
+        'Kairo ticket references must use kairo:<ticket-id>',
+      );
+    }
+    if (request.task !== undefined) {
+      return cliErr(
+        CliErrorKind.InvalidArguments,
+        'multiple_work_items',
+        'Use exactly one of task or ticket',
+      );
+    }
+    let response: CreateRunResponse | undefined;
+    const service = new TicketRunService(
+      this.tickets,
+      this.ticketRuns,
+      new KairoTicketRunQuery(this.store),
+      {
+        start: async ({ ticket, snapshot }) => {
+          const workItem = createStoredTicketWorkItem(ticket, snapshot);
+          if (workItem.isErr()) {
+            return toTicketError(TicketErrorKind.InvalidInput, {
+              field: 'ticketId',
+              reason: workItem.error.message,
+            });
+          }
+          const created = await this.createRun(
+            { ...request, ticket: undefined },
+            workItem.unwrap(),
+          );
+          if (created.isErr()) {
+            return toTicketError(TicketErrorKind.InvalidInput, {
+              field: 'ticketId',
+              reason: created.error.message,
+            });
+          }
+          response = created.unwrap();
+          return ok({ runId: response.runId });
+        },
+      },
+      { now: (): string => new Date().toISOString() },
+      {
+        ticketId: (): string => `ticket-${randomUUID()}`,
+        commentId: (): string => `comment-${randomUUID()}`,
+        snapshotId: (): string => `snapshot-${randomUUID()}`,
+      },
+    );
+    const started = await service.start({
+      ticketId,
+      kind: 'implementation',
+      workflow: request.adw,
+      repositoryPath: request.repositoryPath,
+      actor: request.actor,
+    });
+    if (started.isErr()) {
+      return cliErr(
+        CliErrorKind.InvalidArguments,
+        'ticket_run_failed',
+        JSON.stringify(started.error),
+      );
+    }
+    return response
+      ? ok(response)
+      : cliErr(
+          CliErrorKind.Persistence,
+          'ticket_run_missing',
+          'Ticket run started without a run response',
+        );
+  }
+
   coordinatorFor(aggregate: RunAggregate): RunCoordinator {
     const configuration = runConfiguration(aggregate);
     return this.coordinator(configuration?.worktreePath ?? process.cwd());
@@ -342,7 +481,107 @@ export class LocalKairoHost {
         runQuery: new KairoTicketRunQuery(this.store),
         sync: this.ticketSync,
       },
+      ticketProviders: { list: () => this.ticketProviderViews },
     });
+  }
+
+  createTicket(input: {
+    readonly projectId: string;
+    readonly title: string;
+    readonly description: string;
+    readonly priority?: TicketPriority;
+    readonly labels?: readonly string[];
+    readonly assignees?: readonly string[];
+  }): Result<Ticket, TicketError> {
+    return this.ticketService.create(input);
+  }
+
+  listTickets(projectId: string): Result<readonly Ticket[], TicketError> {
+    return this.ticketService.list(projectId);
+  }
+
+  getTicket(ticketId: string): Result<Ticket, TicketError> {
+    return this.ticketService.get(ticketId);
+  }
+
+  updateTicket(ticketId: string, input: UpdateTicketInput): Result<Ticket, TicketError> {
+    return this.ticketService.update(ticketId, input);
+  }
+
+  moveTicket(
+    ticketId: string,
+    expectedRevision: number,
+    status: TicketStatus,
+  ): Result<Ticket, TicketError> {
+    return this.ticketService.move(ticketId, expectedRevision, status);
+  }
+
+  closeTicket(ticketId: string, expectedRevision: number): Result<Ticket, TicketError> {
+    return this.ticketService.close(ticketId, expectedRevision);
+  }
+
+  cancelTicket(ticketId: string, expectedRevision: number): Result<Ticket, TicketError> {
+    return this.ticketService.cancel(ticketId, expectedRevision);
+  }
+
+  reopenTicket(ticketId: string, expectedRevision: number): Result<Ticket, TicketError> {
+    return this.ticketService.reopen(ticketId, expectedRevision);
+  }
+
+  addTicketComment(
+    ticketId: string,
+    author: string,
+    body: string,
+  ): Result<TicketComment, TicketError> {
+    return this.ticketService.addComment(ticketId, { author, body });
+  }
+
+  async importTickets(
+    providerId: 'github' | 'forgejo',
+    projectId: string,
+  ): Promise<Result<readonly Ticket[], TicketSyncError> | undefined> {
+    const provider = this.remoteTicketProviders.get(providerId);
+    return provider ? this.ticketSyncService.importProject(projectId, provider) : undefined;
+  }
+
+  async pullTicket(ticketId: string): Promise<Result<Ticket, TicketSyncError> | undefined> {
+    const ticket = this.ticketService.get(ticketId);
+    if (ticket.isErr()) {
+      return toTicketSyncError(TicketSyncErrorKind.Ticket, { error: ticket.error });
+    }
+    if (ticket.value.binding.kind === 'local') return undefined;
+    const provider = this.remoteTicketProviders.get(ticket.value.binding.kind);
+    return provider ? this.ticketSyncService.reconcile(ticketId, provider) : undefined;
+  }
+
+  async pushTicket(
+    ticketId: string,
+    idempotencyKey: string,
+  ): Promise<Result<Ticket, TicketSyncError> | undefined> {
+    const ticket = this.ticketService.get(ticketId);
+    if (ticket.isErr()) {
+      return toTicketSyncError(TicketSyncErrorKind.Ticket, { error: ticket.error });
+    }
+    if (ticket.value.binding.kind === 'local') return undefined;
+    const provider = this.remoteTicketProviders.get(ticket.value.binding.kind);
+    return provider
+      ? this.ticketSyncService.syncTicket(ticketId, provider, idempotencyKey)
+      : undefined;
+  }
+
+  async migrateTicket(
+    ticketId: string,
+    projectId: string,
+    providerId: 'github' | 'forgejo',
+  ): Promise<Result<Ticket, TicketMigrationError> | undefined> {
+    const provider = this.remoteTicketProviders.get(providerId);
+    return provider
+      ? this.ticketMigrationService.migrate(ticketId, projectId, provider)
+      : undefined;
+  }
+
+  ticketProviderConfigurations(): readonly TicketProviderConfigurationView[] {
+    return this.ticketProviderViews;
   }
 
   async list(): Promise<readonly RepositorySummary[]> {

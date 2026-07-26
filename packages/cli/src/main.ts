@@ -8,6 +8,7 @@ import { listRuns, getRun } from '@kairo/api';
 
 import { ADW_TEMPLATES, createAdw, isAdwTemplate } from './create-adw.ts';
 import { LocalKairoHost } from './local-host.ts';
+import { executeTicketCommand } from './ticket-command.ts';
 
 const VERSION = '0.1.0';
 const HELP = `Kairo ${VERSION}
@@ -15,6 +16,17 @@ const HELP = `Kairo ${VERSION}
 Usage:
   kairo create adw <name> [--template <template>] [--output <directory>]
   kairo run <adw> --repo <path> (--ticket <provider:reference> | --task <text> | --task-file <path>) [--harness <id|node=id>]...
+  kairo ticket create --project <id> --title <text> (--description <text> | --description-file <path>) [--priority <value>] [--label <value>]...
+  kairo ticket list --project <id>
+  kairo ticket show <ticket-id>
+  kairo ticket update <ticket-id> --revision <number> [--title <text>] [--description <text>] [--priority <value>] [--label <value>]...
+  kairo ticket move <ticket-id> --revision <number> --status <status>
+  kairo ticket close|cancel|reopen <ticket-id> --revision <number>
+  kairo ticket comment <ticket-id> --body <text> [--author <name>]
+  kairo ticket providers
+  kairo ticket import <github|forgejo> --project <id>
+  kairo ticket pull|push <ticket-id>
+  kairo ticket migrate <ticket-id> --to <github|forgejo> --project <id>
   kairo runs
   kairo status <run-id>
   kairo approve <run-id> <invocation> --reason <text>
@@ -100,6 +112,10 @@ async function main(): Promise<number> {
     throw new Error(`${initialized.error.code}: ${initialized.error.message}`);
   const actor = process.env.USER?.trim() || 'local-operator';
   try {
+    if (command === 'ticket') {
+      print(await executeTicketCommand(host, args.slice(1), actor));
+      return 0;
+    }
     if (command === 'run') {
       const { harnesses, harnessesByNode } = harnessOptions(args);
       const taskFile = option(args, '--task-file');

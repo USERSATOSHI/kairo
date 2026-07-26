@@ -25,6 +25,17 @@ bun run kairo create adw my-feature --template feature-development
 bun run kairo run feature-development --repo /path/to/repository \
   --task "Implement the requested change" --harness codex
 
+# Create and run a durable local ticket
+ticket_id=$(bun run kairo ticket create \
+  --project personal \
+  --title "Add CSV export" \
+  --description "Export filtered results as CSV." \
+  --priority high \
+  --label feature | jq -r .id)
+bun run kairo ticket move "$ticket_id" --revision 1 --status ready
+bun run kairo run feature-development --repo /path/to/repository \
+  --ticket "kairo:$ticket_id" --harness codex
+
 # List all runs
 bun run kairo runs
 
@@ -70,6 +81,9 @@ LocalKairoHost (local-host.ts)
   │   ├── OpenCodeHarness
   │   └── PiHarness
   ├── LocalArtifactWriter (harnesses)
+  ├── TicketService + SQLite ticket stores
+  ├── GitHubTicketProvider (when KAIRO_GITHUB_* is configured)
+  ├── ForgejoTicketProvider (when KAIRO_FORGEJO_* is configured)
   ├── LocalWorker (worker.ts) — polling loop
   │   └── RunCoordinator (executors)
   └── createKairoApp (api)
@@ -145,6 +159,103 @@ Starts the Kairo HTTP API server:
 - Static web assets from `../../web/dist`
 - SPA fallback to `index.html`
 - Default port: `4317`
+
+### `kairo ticket ...`
+
+Local tickets need no Git repository or remote account:
+
+```bash
+# Create
+bun run kairo ticket create \
+  --project personal \
+  --title "Add CSV export" \
+  --description "Export filtered results as CSV." \
+  --priority high \
+  --label feature \
+  --assignee usersatoshi
+
+# Inspect (use the id and revision returned by create)
+bun run kairo ticket list --project personal
+bun run kairo ticket show <ticket-id>
+
+# Optimistic writes require the current revision
+bun run kairo ticket update <ticket-id> --revision 1 \
+  --title "Add filtered CSV export"
+bun run kairo ticket move <ticket-id> --revision 2 --status ready
+bun run kairo ticket comment <ticket-id> --body "Ready for implementation"
+bun run kairo ticket close <ticket-id> --revision <current-revision>
+bun run kairo ticket reopen <ticket-id> --revision <current-revision>
+
+# Launch a linked workflow from the durable ticket
+bun run kairo run feature-development --repo /path/to/repository \
+  --ticket kairo:<ticket-id> --harness codex
+```
+
+The run command captures an immutable ticket snapshot before repository
+execution, records a ticket-to-run link, and rejects a second active
+implementation run for the same ticket. Later ticket edits cannot change the
+active run input.
+
+Available planning statuses are `backlog`, `ready`, `blocked`, `done`, and
+`cancelled`. Use `move` for normal board movements and
+`close`/`cancel`/`reopen` for terminal lifecycle actions. The command returns
+JSON so scripts can read the resulting ticket ID and revision.
+
+#### GitHub setup
+
+Configure one GitHub repository connection in the process environment:
+
+```bash
+export KAIRO_GITHUB_OWNER=usersatoshi
+export KAIRO_GITHUB_REPOSITORY=my-repository
+export KAIRO_GITHUB_PROJECT=my-repository
+export KAIRO_GITHUB_TOKEN=github_pat_...
+
+# Optional for GitHub Enterprise
+export KAIRO_GITHUB_API_URL=https://github.example.com/api/v3
+
+bun run kairo ticket providers
+bun run kairo ticket import github --project my-repository
+```
+
+The token must be able to read issues for import/pull and write issues,
+comments, labels, and assignees for push/migration. Kairo passes it directly to
+the adapter and never persists or returns it.
+
+#### Forgejo setup
+
+```bash
+export KAIRO_FORGEJO_URL=https://git.example.com
+export KAIRO_FORGEJO_OWNER=usersatoshi
+export KAIRO_FORGEJO_REPOSITORY=my-repository
+export KAIRO_FORGEJO_PROJECT=my-repository
+export KAIRO_FORGEJO_TOKEN=...
+
+bun run kairo ticket providers
+bun run kairo ticket import forgejo --project my-repository
+```
+
+The Forgejo token likewise needs issue read/write access. Non-secret detected
+instance metadata may be stored in Kairo SQLite; the token is not.
+
+Remote operations use the stable Kairo ticket ID returned by import:
+
+```bash
+# Refresh Kairo from the authoritative remote issue
+bun run kairo ticket pull <ticket-id>
+
+# Push a Kairo edit to the bound remote issue
+bun run kairo ticket push <ticket-id>
+
+# Move a local ticket to a remote provider without changing its Kairo ID
+bun run kairo ticket migrate <ticket-id> \
+  --to github \
+  --project my-repository
+```
+
+Migration is resumable and switches authority only after the created remote
+issue is read back and verified. Run `kairo ticket providers` first when a
+remote command reports that its provider is not configured.
 
 ### `kairo diagnostics`
 

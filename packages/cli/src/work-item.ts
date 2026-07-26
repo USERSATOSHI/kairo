@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type { JsonValue, WorkItemSnapshot } from '@kairo/domain';
 import type { ResolvedTicket, TicketProvider } from '@kairo/executors';
+import type { Ticket, TicketSnapshot } from '@kairo/tickets';
 import { err, ok, type Result } from '@usersatoshi/results';
 
 export const enum WorkItemResolutionErrorKind {
@@ -78,6 +79,23 @@ export function createInlineWorkItem(
     description,
     acceptanceCriteria: [],
     labels: [],
+  });
+}
+
+export function createStoredTicketWorkItem(
+  ticket: Ticket,
+  stored: TicketSnapshot,
+): Result<WorkItemSnapshot, WorkItemResolutionError> {
+  return snapshot({
+    kind: 'ticket',
+    provider: 'kairo',
+    reference: ticket.id,
+    revision: stored.providerRevision,
+    ...(ticket.binding.kind === 'local' ? {} : { url: ticket.binding.externalUrl }),
+    title: stored.title,
+    description: stored.description,
+    acceptanceCriteria: [],
+    labels: stored.labels,
   });
 }
 

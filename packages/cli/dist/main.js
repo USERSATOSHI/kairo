@@ -5234,8 +5234,8 @@ var require_dist = __commonJS((exports) => {
 
 // packages/cli/src/main.ts
 import { randomUUID as randomUUID6 } from "crypto";
-import { readFile as readFile7 } from "fs/promises";
-import { resolve as resolve8 } from "path";
+import { readFile as readFile8 } from "fs/promises";
+import { resolve as resolve9 } from "path";
 
 // node_modules/.bun/memoirist@0.4.0/node_modules/memoirist/dist/bun/index.js
 var Y = (v, b) => {
@@ -22665,15 +22665,145 @@ function toTicketError(kind, details) {
 }
 
 // packages/tickets/src/kanban/planning-board.ts
+var allowedMoves = {
+  backlog: ["ready", "blocked"],
+  ready: ["backlog", "blocked"],
+  blocked: ["ready"],
+  done: ["ready"],
+  cancelled: []
+};
 function derivePlanningColumn(ticket) {
   return ticket.status;
 }
+function canMovePlanningTicket(from, to) {
+  return allowedMoves[from].includes(to);
+}
 
 // packages/tickets/src/integration/policy.ts
+var defaultPolicies = {
+  title: "pause_for_review",
+  description: "pause_for_review",
+  acceptance_criteria: "pause_for_review",
+  labels: "notify_only",
+  assignees: "notify_only",
+  comment: "notify_only",
+  external_close: "pause_for_review"
+};
+var policyCommands = {
+  ignore_until_next_run: "none",
+  notify_only: "notify",
+  pause_for_review: "pause",
+  cancel_and_replan: "cancel"
+};
+function decideActiveRunTicketChange(change, override) {
+  const policy = override ?? defaultPolicies[change];
+  return { policy, command: policyCommands[policy] };
+}
 function deriveTicketBoardColumn(ticket, activeRun) {
   if (activeRun?.active)
     return activeRun.column;
   return derivePlanningColumn(ticket);
+}
+
+// packages/tickets/src/application/ticket-run-service.ts
+class TicketRunService {
+  tickets;
+  integrations;
+  runs;
+  launcher;
+  clock;
+  ids;
+  constructor(tickets, integrations, runs, launcher, clock, ids) {
+    this.tickets = tickets;
+    this.integrations = integrations;
+    this.runs = runs;
+    this.launcher = launcher;
+    this.clock = clock;
+    this.ids = ids;
+  }
+  async start(input) {
+    const ticket = this.tickets.get(input.ticketId);
+    if (ticket.isErr())
+      return ticket;
+    if (input.kind === "implementation" && !input.allowParallelVariants) {
+      const links = this.integrations.listRunLinks(input.ticketId);
+      if (links.isErr())
+        return links;
+      for (const link2 of links.unwrap().filter(({ kind }) => kind === "implementation")) {
+        const run = this.runs.get(link2.runId);
+        if (run.isErr())
+          return run;
+        if (run.value?.active) {
+          return toTicketError(1 /* InvalidInput */, {
+            field: "ticketId",
+            reason: "ticket already has an active implementation run"
+          });
+        }
+      }
+    }
+    const value = ticket.unwrap();
+    const capturedAt = this.clock.now();
+    const snapshot = {
+      id: this.ids.snapshotId(),
+      runId: "",
+      ticketId: value.id,
+      projectId: value.projectId,
+      title: value.title,
+      description: value.description,
+      ...value.priority === undefined ? {} : { priority: value.priority },
+      labels: value.labels,
+      assignees: value.assignees,
+      provider: value.binding.kind,
+      providerRevision: value.binding.kind === "local" ? String(value.revision) : value.binding.lastSyncedRevision ?? String(value.revision),
+      capturedAt
+    };
+    const started = await this.launcher.start({
+      ticket: value,
+      snapshot,
+      workflow: input.workflow,
+      repositoryPath: input.repositoryPath,
+      actor: input.actor
+    });
+    if (started.isErr())
+      return started;
+    const runId = started.unwrap().runId;
+    const linkedSnapshot = { ...snapshot, runId };
+    const link = {
+      ticketId: value.id,
+      runId,
+      kind: input.kind,
+      createdAt: capturedAt
+    };
+    const recorded = this.integrations.recordRunStart(linkedSnapshot, link);
+    return recorded.isErr() ? recorded : ok(link);
+  }
+  board(projectId) {
+    const tickets = this.tickets.list(projectId);
+    if (tickets.isErr())
+      return tickets;
+    const cards = [];
+    for (const ticket of tickets.unwrap()) {
+      const links = this.integrations.listRunLinks(ticket.id);
+      if (links.isErr())
+        return links;
+      let activeRun;
+      for (const link of links.unwrap().toReversed()) {
+        const run = this.runs.get(link.runId);
+        if (run.isErr())
+          return run;
+        if (run.value?.active) {
+          activeRun = run.value;
+          break;
+        }
+      }
+      cards.push({
+        ticket,
+        column: deriveTicketBoardColumn(ticket, activeRun),
+        ...activeRun === undefined ? {} : { activeRun }
+      });
+    }
+    return ok(cards);
+  }
 }
 // packages/tickets/src/domain/validation.ts
 var ticketStatuses = [
@@ -22684,6 +22814,467 @@ var ticketStatuses = [
   "cancelled"
 ];
 var ticketStatusValues = new Set(ticketStatuses);
+var ticketPriorities = ["low", "medium", "high", "critical"];
+function validateRequiredText(field, value) {
+  const normalized = value.trim();
+  return normalized.length === 0 ? toTicketError(1 /* InvalidInput */, {
+    field,
+    reason: "must not be empty"
+  }) : ok(normalized);
+}
+function normalizeStringSet(values) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))].toSorted();
+}
+function validateCreateTicketInput(input) {
+  const projectId = validateRequiredText("projectId", input.projectId);
+  if (projectId.isErr())
+    return projectId;
+  const title = validateRequiredText("title", input.title);
+  if (title.isErr())
+    return title;
+  if (input.priority !== undefined && !ticketPriorities.includes(input.priority)) {
+    return toTicketError(1 /* InvalidInput */, {
+      field: "priority",
+      reason: "is not a supported ticket priority"
+    });
+  }
+  return ok({
+    ...input,
+    projectId: projectId.unwrap(),
+    title: title.unwrap(),
+    description: input.description.trim(),
+    labels: normalizeStringSet(input.labels ?? []),
+    assignees: normalizeStringSet(input.assignees ?? [])
+  });
+}
+function validateUpdateTicketInput(input) {
+  if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) {
+    return toTicketError(1 /* InvalidInput */, {
+      field: "expectedRevision",
+      reason: "must be a positive integer"
+    });
+  }
+  if (input.title !== undefined) {
+    const title = validateRequiredText("title", input.title);
+    if (title.isErr())
+      return title;
+  }
+  if (input.priority !== undefined && input.priority !== null && !ticketPriorities.includes(input.priority)) {
+    return toTicketError(1 /* InvalidInput */, {
+      field: "priority",
+      reason: "is not a supported ticket priority"
+    });
+  }
+  return ok({
+    ...input,
+    ...input.title === undefined ? {} : { title: input.title.trim() },
+    ...input.description === undefined ? {} : { description: input.description.trim() },
+    ...input.labels === undefined ? {} : { labels: normalizeStringSet(input.labels) },
+    ...input.assignees === undefined ? {} : { assignees: normalizeStringSet(input.assignees) }
+  });
+}
+function validateRelationship(relationship) {
+  if (relationship.sourceTicketId === relationship.targetTicketId) {
+    return toTicketError(6 /* RelationshipConflict */, {
+      sourceTicketId: relationship.sourceTicketId,
+      targetTicketId: relationship.targetTicketId,
+      reason: "a ticket cannot relate to itself"
+    });
+  }
+  return ok(undefined);
+}
+
+// packages/tickets/src/application/ticket-service.ts
+class TicketService {
+  repository;
+  clock;
+  ids;
+  constructor(repository, clock, ids) {
+    this.repository = repository;
+    this.clock = clock;
+    this.ids = ids;
+  }
+  create(input) {
+    const validated = validateCreateTicketInput(input);
+    if (validated.isErr())
+      return validated;
+    const normalized = validated.unwrap();
+    const now = this.clock.now();
+    return this.repository.create({
+      id: this.ids.ticketId(),
+      projectId: normalized.projectId,
+      title: normalized.title,
+      description: normalized.description,
+      status: "backlog",
+      ...normalized.priority === undefined ? {} : { priority: normalized.priority },
+      labels: normalizeStringSet(normalized.labels ?? []),
+      assignees: normalizeStringSet(normalized.assignees ?? []),
+      binding: { kind: "local" },
+      revision: 1,
+      createdAt: now,
+      updatedAt: now
+    });
+  }
+  get(ticketId) {
+    return this.repository.get(ticketId);
+  }
+  list(projectId) {
+    return projectId.trim().length === 0 ? toTicketError(1 /* InvalidInput */, {
+      field: "projectId",
+      reason: "must not be empty"
+    }) : this.repository.list(projectId.trim());
+  }
+  update(ticketId, input) {
+    const validated = validateUpdateTicketInput(input);
+    return validated.isErr() ? validated : this.repository.update(ticketId, validated.unwrap(), this.clock.now());
+  }
+  move(ticketId, expectedRevision, status2) {
+    const current = this.repository.get(ticketId);
+    if (current.isErr())
+      return current;
+    const ticket = current.unwrap();
+    if (ticket.revision !== expectedRevision) {
+      return toTicketError(4 /* RevisionConflict */, {
+        ticketId,
+        expected: expectedRevision,
+        actual: ticket.revision
+      });
+    }
+    if (!canMovePlanningTicket(ticket.status, status2)) {
+      return toTicketError(5 /* InvalidStatusTransition */, {
+        ticketId,
+        from: ticket.status,
+        to: status2
+      });
+    }
+    return this.repository.setStatus(ticketId, expectedRevision, status2, this.clock.now());
+  }
+  close(ticketId, expectedRevision) {
+    return this.repository.setStatus(ticketId, expectedRevision, "done", this.clock.now());
+  }
+  cancel(ticketId, expectedRevision) {
+    return this.repository.setStatus(ticketId, expectedRevision, "cancelled", this.clock.now());
+  }
+  reopen(ticketId, expectedRevision) {
+    const current = this.repository.get(ticketId);
+    if (current.isErr())
+      return current;
+    const ticket = current.unwrap();
+    if (ticket.status !== "done" && ticket.status !== "cancelled") {
+      return toTicketError(5 /* InvalidStatusTransition */, {
+        ticketId,
+        from: ticket.status,
+        to: "ready"
+      });
+    }
+    return this.repository.setStatus(ticketId, expectedRevision, "ready", this.clock.now());
+  }
+  addComment(ticketId, input) {
+    const author = input.author.trim();
+    const body = input.body.trim();
+    if (author.length === 0 || body.length === 0) {
+      return toTicketError(1 /* InvalidInput */, {
+        field: author.length === 0 ? "author" : "body",
+        reason: "must not be empty"
+      });
+    }
+    const now = this.clock.now();
+    return this.repository.addComment({
+      id: this.ids.commentId(),
+      ticketId,
+      author,
+      body,
+      binding: { kind: "local" },
+      createdAt: now
+    }, now);
+  }
+  listComments(ticketId) {
+    return this.repository.listComments(ticketId);
+  }
+  addRelationship(relationship) {
+    const validated = validateRelationship(relationship);
+    return validated.isErr() ? validated : this.repository.addRelationship(relationship);
+  }
+  listRelationships(ticketId) {
+    return this.repository.listRelationships(ticketId);
+  }
+}
+// packages/tickets/src/migration/errors.ts
+function toTicketMigrationError(kind, details) {
+  return err({ kind, ...details });
+}
+// packages/tickets/src/migration/ticket-migration-service.ts
+function isRemoteProvider(provider) {
+  return provider.kind === "github" || provider.kind === "forgejo";
+}
+function ticketFailure(result) {
+  return result.isErr() ? toTicketMigrationError(1 /* Ticket */, { error: result.error }) : result;
+}
+function providerFailure(result) {
+  return result.isErr() ? toTicketMigrationError(2 /* Provider */, { error: result.error }) : result;
+}
+function snapshotOf(ticket) {
+  return {
+    revision: ticket.revision,
+    title: ticket.title,
+    description: ticket.description,
+    status: ticket.status,
+    labels: ticket.labels,
+    assignees: ticket.assignees
+  };
+}
+function sameStrings(left, right) {
+  return JSON.stringify(left.toSorted()) === JSON.stringify(right.toSorted());
+}
+function sameRemoteBinding(left, right) {
+  if (left.kind === "local" || right.kind === "local" || left.kind !== right.kind)
+    return false;
+  if (left.owner !== right.owner || left.repository !== right.repository || left.issueNumber !== right.issueNumber) {
+    return false;
+  }
+  return left.kind === "github" || right.kind === "github" ? left.kind === right.kind : left.instanceUrl === right.instanceUrl;
+}
+function verifyRemoteTicket(migration, remote) {
+  const snapshot = migration.snapshot;
+  const expectedStatus = snapshot.status === "done" || snapshot.status === "cancelled" ? "done" : "backlog";
+  const failures = [];
+  if (remote.binding.kind !== migration.targetProvider)
+    failures.push("provider binding");
+  if (remote.title !== snapshot.title)
+    failures.push("title");
+  if (remote.description !== snapshot.description)
+    failures.push("description");
+  if (remote.marker !== migration.marker)
+    failures.push("migration marker");
+  if (remote.status !== expectedStatus)
+    failures.push("status");
+  if (!sameStrings(remote.labels, snapshot.labels))
+    failures.push("labels");
+  if (!sameStrings(remote.assignees, snapshot.assignees))
+    failures.push("assignees");
+  return failures.length === 0 ? ok(undefined) : toTicketMigrationError(5 /* VerificationFailed */, {
+    ticketId: migration.ticketId,
+    reason: `remote read-back differs in: ${failures.join(", ")}`
+  });
+}
+
+class TicketMigrationService {
+  tickets;
+  migrations;
+  clock;
+  constructor(tickets, migrations, clock) {
+    this.tickets = tickets;
+    this.migrations = migrations;
+    this.clock = clock;
+  }
+  async migrate(ticketId, projectId, provider) {
+    if (!isRemoteProvider(provider)) {
+      return toTicketMigrationError(3 /* InvalidSource */, {
+        ticketId,
+        reason: "migration target must be GitHub or Forgejo"
+      });
+    }
+    const loaded = ticketFailure(this.tickets.get(ticketId));
+    if (loaded.isErr())
+      return loaded;
+    const migration = await this.prepare(loaded.unwrap(), projectId.trim(), provider);
+    if (migration.isErr())
+      return migration;
+    return this.resume(migration.unwrap(), provider);
+  }
+  async prepare(ticket, projectId, provider) {
+    const existing = ticketFailure(this.migrations.getMigration(ticket.id));
+    if (existing.isErr())
+      return existing;
+    if (existing.value) {
+      if (existing.value.targetProvider !== provider.kind || existing.value.projectId !== projectId) {
+        return toTicketMigrationError(4 /* Conflict */, {
+          ticketId: ticket.id,
+          reason: "ticket already has a migration to a different target"
+        });
+      }
+      return ok(existing.value);
+    }
+    if (ticket.binding.kind !== "local") {
+      return toTicketMigrationError(3 /* InvalidSource */, {
+        ticketId: ticket.id,
+        reason: "only locally authoritative tickets can be migrated"
+      });
+    }
+    if (projectId.length === 0) {
+      return toTicketMigrationError(4 /* Conflict */, {
+        ticketId: ticket.id,
+        reason: "target project must not be empty"
+      });
+    }
+    const now = this.clock.now();
+    const prepared = {
+      ticketId: ticket.id,
+      targetProvider: provider.kind,
+      projectId,
+      marker: `kairo-ticket:${ticket.id}`,
+      stage: "prepared",
+      snapshot: snapshotOf(ticket),
+      createdAt: now,
+      updatedAt: now
+    };
+    const saved = ticketFailure(this.migrations.saveMigration(prepared));
+    return saved.isErr() ? saved : ok(prepared);
+  }
+  async resume(initial, provider) {
+    let migration = initial;
+    if (migration.stage === "completed")
+      return ticketFailure(this.tickets.get(migration.ticketId));
+    const source = ticketFailure(this.tickets.get(migration.ticketId));
+    if (source.isErr())
+      return source;
+    const sourceTicket = source.unwrap();
+    const sourceValid = this.validateSource(sourceTicket, migration);
+    if (sourceValid.isErr())
+      return sourceValid;
+    if (migration.stage === "prepared") {
+      const created = await this.findOrCreate(migration, provider);
+      if (created.isErr())
+        return created;
+      const advanced = this.saveStage(migration, "remote_created", created.unwrap());
+      if (advanced.isErr())
+        return advanced;
+      migration = advanced.unwrap();
+    }
+    if (migration.stage === "remote_created") {
+      const verified = await this.verify(migration, provider);
+      if (verified.isErr())
+        return verified;
+      migration = verified.unwrap();
+    }
+    if (migration.stage === "verified")
+      return this.complete(migration);
+    return ticketFailure(this.tickets.get(migration.ticketId));
+  }
+  async verify(migration, provider) {
+    const remote = migration.remoteTicket;
+    if (!remote) {
+      return toTicketMigrationError(5 /* VerificationFailed */, {
+        ticketId: migration.ticketId,
+        reason: "remote-created migration has no remote ticket"
+      });
+    }
+    if (migration.snapshot.status === "done" || migration.snapshot.status === "cancelled") {
+      const closed = providerFailure(await provider.close(remote.binding));
+      if (closed.isErr())
+        return this.recordFailure(migration, closed.error);
+    }
+    const fetched = providerFailure(await provider.get(remote.binding));
+    if (fetched.isErr())
+      return this.recordFailure(migration, fetched.error);
+    const verified = verifyRemoteTicket(migration, fetched.unwrap());
+    if (verified.isErr())
+      return this.recordFailure(migration, verified.error);
+    return this.saveStage(migration, "verified", fetched.unwrap());
+  }
+  complete(migration) {
+    const remote = migration.remoteTicket;
+    if (!remote || remote.binding.kind === "local") {
+      return toTicketMigrationError(5 /* VerificationFailed */, {
+        ticketId: migration.ticketId,
+        reason: "verified migration has no remote binding"
+      });
+    }
+    const current = ticketFailure(this.tickets.get(migration.ticketId));
+    if (current.isErr())
+      return current;
+    const currentTicket = current.unwrap();
+    let migrated = currentTicket;
+    if (currentTicket.binding.kind === "local") {
+      const switched = ticketFailure(this.tickets.setBinding(migration.ticketId, migration.snapshot.revision, {
+        ...remote.binding,
+        lastSyncedRevision: remote.revision
+      }, this.clock.now()));
+      if (switched.isErr())
+        return switched;
+      migrated = switched.unwrap();
+    } else if (!sameRemoteBinding(currentTicket.binding, remote.binding)) {
+      return toTicketMigrationError(4 /* Conflict */, {
+        ticketId: migration.ticketId,
+        reason: "ticket authority changed to a different remote issue"
+      });
+    }
+    const completed = this.saveStage(migration, "completed", remote);
+    return completed.isErr() ? completed : ok(migrated);
+  }
+  validateSource(ticket, migration) {
+    if (ticket.binding.kind === "local") {
+      return ticket.revision === migration.snapshot.revision ? ok(undefined) : toTicketMigrationError(4 /* Conflict */, {
+        ticketId: ticket.id,
+        reason: "local ticket changed after migration was prepared"
+      });
+    }
+    if (migration.remoteTicket && sameRemoteBinding(ticket.binding, migration.remoteTicket.binding)) {
+      return ok(undefined);
+    }
+    return toTicketMigrationError(4 /* Conflict */, {
+      ticketId: ticket.id,
+      reason: "ticket authority changed while migration was in progress"
+    });
+  }
+  async findOrCreate(migration, provider) {
+    const listed = providerFailure(await provider.list(migration.projectId));
+    if (listed.isErr())
+      return this.recordFailure(migration, listed.error);
+    const matches = listed.unwrap().filter((ticket) => ticket.marker === migration.marker);
+    if (matches.length > 1) {
+      const failure = toTicketMigrationError(5 /* VerificationFailed */, {
+        ticketId: migration.ticketId,
+        reason: "multiple remote issues contain the migration marker"
+      });
+      return this.recordFailure(migration, failure.error);
+    }
+    const existing = matches[0];
+    if (existing)
+      return ok(existing);
+    const created = providerFailure(await provider.create(migration.projectId, {
+      projectId: migration.projectId,
+      title: migration.snapshot.title,
+      description: migration.snapshot.description,
+      labels: migration.snapshot.labels,
+      assignees: migration.snapshot.assignees,
+      marker: migration.marker
+    }));
+    return created.isErr() ? this.recordFailure(migration, created.error) : created;
+  }
+  saveStage(migration, stage, remoteTicket) {
+    const advanced = {
+      ticketId: migration.ticketId,
+      targetProvider: migration.targetProvider,
+      projectId: migration.projectId,
+      marker: migration.marker,
+      stage,
+      snapshot: migration.snapshot,
+      remoteTicket,
+      createdAt: migration.createdAt,
+      updatedAt: this.clock.now()
+    };
+    const saved = ticketFailure(this.migrations.saveMigration(advanced));
+    return saved.isErr() ? saved : ok(advanced);
+  }
+  recordFailure(migration, error) {
+    const failed = {
+      ...migration,
+      lastError: JSON.stringify(error),
+      updatedAt: this.clock.now()
+    };
+    const saved = ticketFailure(this.migrations.saveMigration(failed));
+    return saved.isErr() ? saved : err(error);
+  }
+}
+// packages/tickets/src/provider/migration-marker.ts
+function normalizeProviderDescription(body) {
+  const match = /\n\n<!-- (kairo-ticket:[^\n]+) -->$/.exec(body);
+  return match?.[1] ? {
+    description: body.slice(0, match.index),
+    marker: match[1]
+  } : { description: body };
+}
 // packages/tickets/src/persistence/sqlite-ticket-run-store.ts
 import { Database } from "bun:sqlite";
 function databaseError(operation, error) {
@@ -23594,6 +24185,317 @@ class SqliteTicketSyncStore {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(input.idempotencyKey, input.ticketId, input.provider, input.operation, input.status, input.request, input.response ?? null, input.error ?? null, input.updatedAt);
       return true;
     }, (error) => databaseError3("recordSyncOperation", error));
+  }
+}
+// packages/tickets/src/sync/errors.ts
+function toTicketSyncError(kind, details) {
+  return err({ kind, ...details });
+}
+// packages/tickets/src/sync/ticket-sync-service.ts
+function ticketFailure2(result) {
+  return result.isErr() ? toTicketSyncError(1 /* Ticket */, { error: result.error }) : result;
+}
+function providerFailure2(result) {
+  return result.isErr() ? toTicketSyncError(2 /* Provider */, { error: result.error }) : result;
+}
+function changedField(before, after) {
+  if (before.title !== after.title)
+    return "title";
+  if (before.description !== after.description)
+    return "description";
+  if (before.status !== "done" && after.status === "done")
+    return "external_close";
+  if (JSON.stringify(before.labels) !== JSON.stringify(after.labels))
+    return "labels";
+  if (JSON.stringify(before.assignees) !== JSON.stringify(after.assignees))
+    return "assignees";
+  return;
+}
+function bindingWithRevision(binding, revision) {
+  if (binding.kind === "local")
+    return binding;
+  return { ...binding, lastSyncedRevision: revision };
+}
+var runEventLabels = {
+  run_started: "kairo:active",
+  approval_needed: "kairo:approval-needed",
+  run_blocked: "kairo:blocked",
+  run_failed: "kairo:blocked",
+  run_succeeded: "kairo:completed",
+  run_cancelled: "kairo:cancelled"
+};
+
+class TicketSyncService {
+  tickets;
+  sync;
+  clock;
+  ids;
+  runStore;
+  runs;
+  commander;
+  constructor(tickets, sync, clock, ids, runStore, runs, commander) {
+    this.tickets = tickets;
+    this.sync = sync;
+    this.clock = clock;
+    this.ids = ids;
+    this.runStore = runStore;
+    this.runs = runs;
+    this.commander = commander;
+  }
+  async importProject(projectId, provider) {
+    const listed = providerFailure2(await provider.list(projectId));
+    if (listed.isErr())
+      return listed;
+    const imported = [];
+    for (const providerTicket of listed.unwrap()) {
+      const existing = ticketFailure2(this.tickets.findByBinding(providerTicket.binding));
+      if (existing.isErr())
+        return existing;
+      const existingTicket = existing.value;
+      if (existingTicket) {
+        const applied = await this.applyProviderTicket(existingTicket, providerTicket);
+        if (applied.isErr())
+          return applied;
+        imported.push(applied.unwrap());
+        continue;
+      }
+      const created = ticketFailure2(this.tickets.create({
+        id: this.ids.ticketId(),
+        projectId,
+        title: providerTicket.title,
+        description: providerTicket.description,
+        status: providerTicket.status,
+        labels: providerTicket.labels,
+        assignees: providerTicket.assignees,
+        binding: providerTicket.binding,
+        revision: 1,
+        createdAt: providerTicket.updatedAt,
+        updatedAt: providerTicket.updatedAt
+      }));
+      if (created.isErr())
+        return created;
+      imported.push(created.unwrap());
+    }
+    return ok(imported);
+  }
+  async reconcile(ticketId, provider) {
+    const ticket = ticketFailure2(this.tickets.get(ticketId));
+    if (ticket.isErr())
+      return ticket;
+    const value = ticket.unwrap();
+    const externalResult = await provider.get(value.binding);
+    if (externalResult.isErr()) {
+      this.recordFailure(value, externalResult.error.message);
+      return toTicketSyncError(2 /* Provider */, {
+        error: externalResult.error
+      });
+    }
+    const external = externalResult.unwrap();
+    if (value.binding.kind !== "local" && value.binding.lastSyncedRevision === external.revision) {
+      this.recordSuccess(value);
+      return ticket;
+    }
+    return this.applyProviderTicket(value, external);
+  }
+  async syncTicket(ticketId, provider, idempotencyKey) {
+    const ticket = ticketFailure2(this.tickets.get(ticketId));
+    if (ticket.isErr())
+      return ticket;
+    const value = ticket.unwrap();
+    const request = JSON.stringify({
+      title: value.title,
+      description: value.description,
+      labels: value.labels,
+      assignees: value.assignees
+    });
+    const operation = ticketFailure2(this.sync.recordSyncOperation({
+      idempotencyKey,
+      ticketId,
+      provider: provider.kind,
+      operation: "update",
+      status: "pending",
+      request,
+      updatedAt: this.clock.now()
+    }));
+    if (operation.isErr())
+      return operation;
+    if (!operation.unwrap())
+      return ticket;
+    const updatedResult = await provider.update(value.binding, {
+      title: value.title,
+      description: value.description,
+      labels: value.labels,
+      assignees: value.assignees,
+      expectedRevision: value.binding.kind === "local" ? undefined : value.binding.lastSyncedRevision
+    });
+    if (updatedResult.isErr()) {
+      this.recordOperationFailure(idempotencyKey, value, provider, request, updatedResult.error.message);
+      return toTicketSyncError(2 /* Provider */, {
+        error: updatedResult.error
+      });
+    }
+    const updated = updatedResult.unwrap();
+    const applied = await this.applyProviderTicket(value, updated);
+    if (applied.isErr())
+      return applied;
+    ticketFailure2(this.sync.recordSyncOperation({
+      idempotencyKey,
+      ticketId,
+      provider: provider.kind,
+      operation: "update",
+      status: "succeeded",
+      request,
+      response: JSON.stringify(updated),
+      updatedAt: this.clock.now()
+    }));
+    return applied;
+  }
+  async applyWebhook(providerEventId, eventType, payload, normalized) {
+    const received = ticketFailure2(this.sync.recordExternalEvent({
+      provider: normalized.binding.kind === "forgejo" ? "forgejo" : "github",
+      providerEventId,
+      eventType,
+      payload,
+      receivedAt: this.clock.now()
+    }));
+    if (received.isErr() || !received.unwrap())
+      return received;
+    const existing = ticketFailure2(this.tickets.findByBinding(normalized.binding));
+    if (existing.isErr())
+      return existing;
+    const existingTicket = existing.value;
+    if (existingTicket) {
+      const applied = await this.applyProviderTicket(existingTicket, normalized);
+      if (applied.isErr()) {
+        ticketFailure2(this.sync.completeExternalEvent(normalized.binding.kind, providerEventId, "webhook reconciliation failed"));
+        return applied;
+      }
+    }
+    const completed = ticketFailure2(this.sync.completeExternalEvent(normalized.binding.kind, providerEventId));
+    return completed.isErr() ? completed : ok(true);
+  }
+  async syncRunEvent(ticketId, provider, event, closeOnSuccess) {
+    const ticket = ticketFailure2(this.tickets.get(ticketId));
+    if (ticket.isErr())
+      return ticket;
+    const value = ticket.unwrap();
+    const message = `${event.type.replaceAll("_", " ")} for Kairo run ${event.runId}${event.artifactUrl ? `
+${event.artifactUrl}` : ""}`;
+    const key = `ticket:${ticketId}:provider-comment:${event.sequence}`;
+    const recorded = ticketFailure2(this.sync.recordSyncOperation({
+      idempotencyKey: key,
+      ticketId,
+      provider: provider.kind,
+      operation: "comment",
+      status: "pending",
+      request: JSON.stringify({ message }),
+      updatedAt: this.clock.now()
+    }));
+    if (recorded.isErr() || !recorded.unwrap()) {
+      return recorded.isErr() ? recorded : ok(undefined);
+    }
+    const commented = providerFailure2(await provider.addComment(value.binding, { author: "kairo", body: message }));
+    if (commented.isErr())
+      return commented;
+    const labels = [
+      ...value.labels.filter((label) => !label.startsWith("kairo:")),
+      runEventLabels[event.type]
+    ].toSorted();
+    const labelled = providerFailure2(await provider.update(value.binding, {
+      labels,
+      expectedRevision: value.binding.kind === "local" ? undefined : value.binding.lastSyncedRevision
+    }));
+    if (labelled.isErr())
+      return labelled;
+    if (event.type === "run_succeeded" && closeOnSuccess) {
+      const closed = providerFailure2(await provider.close(value.binding));
+      if (closed.isErr())
+        return closed;
+    }
+    const completed = ticketFailure2(this.sync.recordSyncOperation({
+      idempotencyKey: key,
+      ticketId,
+      provider: provider.kind,
+      operation: "comment",
+      status: "succeeded",
+      request: JSON.stringify({ message }),
+      response: JSON.stringify(commented.unwrap()),
+      updatedAt: this.clock.now()
+    }));
+    if (completed.isErr())
+      return completed;
+    return ok(undefined);
+  }
+  async applyProviderTicket(before, providerTicket) {
+    const change = changedField(before, providerTicket);
+    const applied = ticketFailure2(this.tickets.applyExternal(before.id, {
+      title: providerTicket.title,
+      description: providerTicket.description,
+      status: providerTicket.status === "done" ? "done" : before.status === "done" ? "ready" : before.status,
+      labels: providerTicket.labels,
+      assignees: providerTicket.assignees,
+      binding: bindingWithRevision(providerTicket.binding, providerTicket.revision)
+    }, providerTicket.updatedAt));
+    if (applied.isErr())
+      return applied;
+    this.recordSuccess(applied.unwrap());
+    if (change) {
+      const commanded = await this.commandActiveRun(before, change);
+      if (commanded.isErr())
+        return commanded;
+    }
+    return applied;
+  }
+  async commandActiveRun(ticket, change) {
+    if (!this.runStore || !this.runs || !this.commander)
+      return ok(undefined);
+    const links = ticketFailure2(this.runStore.listRunLinks(ticket.id));
+    if (links.isErr())
+      return links;
+    for (const link of links.unwrap().toReversed()) {
+      const run = ticketFailure2(this.runs.get(link.runId));
+      if (run.isErr())
+        return run;
+      if (!run.value?.active)
+        continue;
+      const decision = decideActiveRunTicketChange(change);
+      const reason = `Ticket ${ticket.id} changed: ${change}`;
+      const commanded = decision.command === "pause" ? await this.commander.pause(link.runId, reason) : decision.command === "cancel" ? await this.commander.cancel(link.runId, reason) : decision.command === "notify" ? await this.commander.notify(link.runId, reason) : ok(undefined);
+      return commanded.isErr() ? toTicketSyncError(4 /* Command */, {
+        runId: link.runId,
+        error: commanded.error
+      }) : ok(undefined);
+    }
+    return ok(undefined);
+  }
+  recordSuccess(ticket) {
+    this.sync.setSyncState({
+      ticketId: ticket.id,
+      provider: ticket.binding.kind,
+      status: "succeeded",
+      lastSyncedAt: this.clock.now()
+    });
+  }
+  recordFailure(ticket, message) {
+    this.sync.setSyncState({
+      ticketId: ticket.id,
+      provider: ticket.binding.kind,
+      status: "failed",
+      lastError: message
+    });
+  }
+  recordOperationFailure(idempotencyKey, ticket, provider, request, message) {
+    this.sync.recordSyncOperation({
+      idempotencyKey,
+      ticketId: ticket.id,
+      provider: provider.kind,
+      operation: "update",
+      status: "failed",
+      request,
+      error: message,
+      updatedAt: this.clock.now()
+    });
+    this.recordFailure(ticket, message);
   }
 }
 // packages/api/src/ticket-use-cases.ts
@@ -25774,6 +26676,684 @@ function resolveLocalPaths(environment = process.env) {
   };
 }
 
+// packages/ticket-provider-forgejo/src/errors.ts
+function forgejoError(error) {
+  return err(error);
+}
+// packages/ticket-provider-forgejo/src/forgejo-ticket-provider.ts
+var unavailableCapabilities = {
+  issues: true,
+  comments: true,
+  labels: true,
+  assignees: true,
+  milestones: true,
+  webhooks: false,
+  projects: false
+};
+function isRecord11(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function normalizeInstanceUrl(value) {
+  return value.replace(/\/+$/, "");
+}
+function providerError(kind, code, message, retryAfter) {
+  return forgejoError({
+    kind,
+    code,
+    message,
+    ...retryAfter === undefined ? {} : { retryAfter }
+  });
+}
+function responseError(response) {
+  const retryAfter = response.headers.get("retry-after") ?? undefined;
+  if (response.status === 401) {
+    return providerError(2 /* AuthenticationFailed */, "forgejo_authentication_failed", "Forgejo rejected the configured credential");
+  }
+  if (response.status === 404) {
+    return providerError(1 /* NotFound */, "forgejo_resource_not_found", "Forgejo resource was not found");
+  }
+  if (response.status === 429) {
+    return providerError(4 /* RateLimited */, "forgejo_rate_limited", "Forgejo rate limit was exceeded", retryAfter);
+  }
+  if (response.status === 403) {
+    return providerError(3 /* PermissionDenied */, "forgejo_permission_denied", "Forgejo denied the requested issue operation");
+  }
+  if (response.status === 409 || response.status === 412 || response.status === 422) {
+    return providerError(5 /* Conflict */, "forgejo_issue_conflict", "Forgejo rejected a conflicting issue update");
+  }
+  return providerError(8 /* Unavailable */, "forgejo_unavailable", `Forgejo request failed with status ${response.status}`, retryAfter);
+}
+function stringsFromObjects(value, key) {
+  if (!Array.isArray(value))
+    return [];
+  return value.flatMap((item) => isRecord11(item) && typeof item[key] === "string" ? [item[key]] : []);
+}
+function forgejoIssue(value, instanceUrl, owner, repository) {
+  if (!isRecord11(value) || typeof value.number !== "number" || typeof value.title !== "string" || value.body !== null && typeof value.body !== "string" || value.state !== "open" && value.state !== "closed" || typeof value.html_url !== "string" || typeof value.updated_at !== "string") {
+    return providerError(7 /* InvalidResponse */, "forgejo_invalid_issue", "Forgejo returned a malformed issue");
+  }
+  const milestone = isRecord11(value.milestone) && typeof value.milestone.title === "string" ? value.milestone.title : undefined;
+  const normalized = normalizeProviderDescription(value.body ?? "");
+  return ok({
+    binding: {
+      kind: "forgejo",
+      instanceUrl,
+      owner,
+      repository,
+      issueNumber: value.number,
+      externalUrl: value.html_url,
+      lastSyncedRevision: value.updated_at
+    },
+    title: value.title,
+    description: normalized.description,
+    ...normalized.marker === undefined ? {} : { marker: normalized.marker },
+    status: value.state === "closed" ? "done" : "backlog",
+    labels: stringsFromObjects(value.labels, "name"),
+    assignees: stringsFromObjects(value.assignees, "login"),
+    ...milestone === undefined ? {} : { milestone },
+    revision: value.updated_at,
+    updatedAt: value.updated_at
+  });
+}
+function namedResources(value, resource, nameKey) {
+  if (!Array.isArray(value)) {
+    return providerError(7 /* InvalidResponse */, `forgejo_invalid_${resource}_list`, `Forgejo returned a malformed ${resource} list`);
+  }
+  const resources = [];
+  for (const item of value) {
+    if (!isRecord11(item) || typeof item.id !== "number" || typeof item[nameKey] !== "string") {
+      return providerError(7 /* InvalidResponse */, `forgejo_invalid_${resource}`, `Forgejo returned a malformed ${resource}`);
+    }
+    resources.push({ id: item.id, name: item[nameKey] });
+  }
+  return ok(resources);
+}
+function idsForNames(resources, names, resource) {
+  const byName = new Map(resources.map(({ id, name }) => [name, id]));
+  const ids = [];
+  for (const name of names) {
+    const id = byName.get(name);
+    if (id === undefined) {
+      return providerError(5 /* Conflict */, `forgejo_${resource}_not_found`, `Forgejo ${resource} '${name}' does not exist in the configured repository`);
+    }
+    ids.push(id);
+  }
+  return ok(ids);
+}
+function hasPath(paths, expected) {
+  return Object.keys(paths).some((path) => path === expected);
+}
+function capabilitiesFromOpenApi(value) {
+  if (!isRecord11(value) || !isRecord11(value.paths))
+    return;
+  const paths = value.paths;
+  return {
+    issues: hasPath(paths, "/repos/{owner}/{repo}/issues"),
+    comments: hasPath(paths, "/repos/{owner}/{repo}/issues/{index}/comments"),
+    labels: hasPath(paths, "/repos/{owner}/{repo}/labels"),
+    assignees: hasPath(paths, "/repos/{owner}/{repo}/assignees"),
+    milestones: hasPath(paths, "/repos/{owner}/{repo}/milestones"),
+    webhooks: hasPath(paths, "/repos/{owner}/{repo}/hooks"),
+    projects: hasPath(paths, "/repos/{owner}/{repo}/projects")
+  };
+}
+function applyCapabilityOverrides(detected, overrides) {
+  return { ...detected, ...overrides };
+}
+
+class ForgejoTicketProvider {
+  options;
+  kind = "forgejo";
+  instanceUrl;
+  requestFetch;
+  constructor(options) {
+    this.options = options;
+    this.instanceUrl = normalizeInstanceUrl(options.instanceUrl);
+    this.requestFetch = options.fetch ?? ((input, init) => fetch(input, init));
+  }
+  async get(binding) {
+    const checked = this.checkBinding(binding);
+    if (checked.isErr())
+      return checked;
+    const forgejoBinding = checked.unwrap();
+    const response = await this.request(this.issuePath(forgejoBinding.issueNumber));
+    return response.isErr() ? response : forgejoIssue(response.unwrap().body, this.instanceUrl, this.options.owner, this.options.repository);
+  }
+  async list(projectId) {
+    const project = this.checkProject(projectId);
+    if (project.isErr())
+      return project;
+    const tickets = [];
+    let received = 0;
+    for (let page = 1;; page += 1) {
+      const response = await this.request(`${this.repositoryPath()}/issues?state=all&type=issues&limit=50&page=${page}`);
+      if (response.isErr())
+        return response;
+      const body = response.unwrap().body;
+      if (!Array.isArray(body)) {
+        return providerError(7 /* InvalidResponse */, "forgejo_invalid_issue_list", "Forgejo returned a malformed issue list");
+      }
+      received += body.length;
+      for (const issue of body) {
+        if (isRecord11(issue) && "pull_request" in issue)
+          continue;
+        const normalized = forgejoIssue(issue, this.instanceUrl, this.options.owner, this.options.repository);
+        if (normalized.isErr())
+          return normalized;
+        tickets.push(normalized.unwrap());
+      }
+      const totalHeader = response.unwrap().headers.get("x-total-count");
+      const total = totalHeader === null ? undefined : Number(totalHeader);
+      const link2 = response.unwrap().headers.get("link");
+      const hasNextLink = link2?.includes('rel="next"') ?? false;
+      if (!hasNextLink && (total !== undefined && !Number.isNaN(total) && received >= total || (total === undefined || Number.isNaN(total)) && body.length < 50)) {
+        return ok(tickets);
+      }
+    }
+  }
+  async create(projectId, input) {
+    const project = this.checkProject(projectId);
+    if (project.isErr())
+      return project;
+    const labels = await this.resolveLabels(input.labels ?? []);
+    if (labels.isErr())
+      return labels;
+    const milestone = await this.resolveMilestone(input.milestone);
+    if (milestone.isErr())
+      return milestone;
+    const description = input.marker ? `${input.description}
+
+<!-- ${input.marker} -->` : input.description;
+    const response = await this.request(`${this.repositoryPath()}/issues`, {
+      method: "POST",
+      body: JSON.stringify({
+        title: input.title,
+        body: description,
+        labels: labels.unwrap(),
+        assignees: input.assignees ?? [],
+        ...milestone.value === undefined ? {} : { milestone: milestone.value }
+      })
+    });
+    return response.isErr() ? response : forgejoIssue(response.unwrap().body, this.instanceUrl, this.options.owner, this.options.repository);
+  }
+  async update(binding, input) {
+    const checked = this.checkBinding(binding);
+    if (checked.isErr())
+      return checked;
+    const forgejoBinding = checked.unwrap();
+    const revision = await this.checkRevision(forgejoBinding, input.expectedRevision);
+    if (revision.isErr())
+      return revision;
+    const labels = input.labels === undefined ? ok([]) : await this.resolveLabels(input.labels);
+    if (labels.isErr())
+      return labels;
+    const milestone = await this.resolveMilestone(input.milestone);
+    if (milestone.isErr())
+      return milestone;
+    const response = await this.request(this.issuePath(forgejoBinding.issueNumber), {
+      method: "PATCH",
+      body: JSON.stringify({
+        ...input.title === undefined ? {} : { title: input.title },
+        ...input.description === undefined ? {} : { body: input.description },
+        ...input.labels === undefined ? {} : { labels: labels.unwrap() },
+        ...input.assignees === undefined ? {} : { assignees: input.assignees },
+        ...input.milestone === undefined ? {} : { milestone: milestone.value ?? 0 }
+      })
+    });
+    return response.isErr() ? response : forgejoIssue(response.unwrap().body, this.instanceUrl, this.options.owner, this.options.repository);
+  }
+  async addComment(binding, input) {
+    const checked = this.checkBinding(binding);
+    if (checked.isErr())
+      return checked;
+    const forgejoBinding = checked.unwrap();
+    const response = await this.request(`${this.issuePath(forgejoBinding.issueNumber)}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ body: input.body })
+    });
+    if (response.isErr())
+      return response;
+    const value = response.unwrap().body;
+    if (!isRecord11(value) || typeof value.id !== "number" && typeof value.id !== "string" || typeof value.body !== "string" || typeof value.created_at !== "string") {
+      return providerError(7 /* InvalidResponse */, "forgejo_invalid_comment", "Forgejo returned a malformed issue comment");
+    }
+    const author = isRecord11(value.user) && typeof value.user.login === "string" ? value.user.login : input.author;
+    return ok({
+      externalId: String(value.id),
+      author,
+      body: value.body,
+      createdAt: value.created_at,
+      ...typeof value.updated_at === "string" ? { updatedAt: value.updated_at } : {}
+    });
+  }
+  close(binding) {
+    return this.changeState(binding, "closed");
+  }
+  reopen(binding) {
+    return this.changeState(binding, "open");
+  }
+  async detectCapabilities() {
+    const metadata = await this.detectInstance();
+    return metadata.isErr() ? metadata : ok(metadata.unwrap().capabilities);
+  }
+  async detectInstance() {
+    const versionResponse = await this.request("/version");
+    if (versionResponse.isErr())
+      return versionResponse;
+    const versionBody = versionResponse.unwrap().body;
+    if (!isRecord11(versionBody) || typeof versionBody.version !== "string") {
+      return providerError(7 /* InvalidResponse */, "forgejo_invalid_version", "Forgejo returned a malformed version response");
+    }
+    const openApi = await this.requestAbsolute(`${this.instanceUrl}/swagger.v1.json`);
+    const advertised = openApi.isOk() ? capabilitiesFromOpenApi(openApi.unwrap().body) : undefined;
+    const metadata = {
+      instanceUrl: this.instanceUrl,
+      version: versionBody.version,
+      apiVersion: "v1",
+      capabilities: applyCapabilityOverrides(advertised ?? unavailableCapabilities, this.options.capabilityOverrides),
+      lastCheckedAt: this.options.now?.() ?? new Date().toISOString()
+    };
+    const saved = this.options.metadataStore?.saveForgejoMetadata(metadata);
+    if (saved?.isErr()) {
+      return providerError(8 /* Unavailable */, "forgejo_metadata_persistence_failed", "Forgejo instance metadata could not be persisted");
+    }
+    return ok(metadata);
+  }
+  async changeState(binding, state) {
+    const checked = this.checkBinding(binding);
+    if (checked.isErr())
+      return checked;
+    const forgejoBinding = checked.unwrap();
+    const revision = await this.checkRevision(forgejoBinding, forgejoBinding.lastSyncedRevision);
+    if (revision.isErr())
+      return revision;
+    const response = await this.request(this.issuePath(forgejoBinding.issueNumber), {
+      method: "PATCH",
+      body: JSON.stringify({ state })
+    });
+    return response.isErr() ? response : ok(undefined);
+  }
+  checkProject(projectId) {
+    return projectId === this.options.projectId ? ok(undefined) : providerError(5 /* Conflict */, "forgejo_project_mismatch", "Project does not belong to this Forgejo connection");
+  }
+  checkBinding(binding) {
+    if (binding.kind !== "forgejo" || normalizeInstanceUrl(binding.instanceUrl) !== this.instanceUrl || binding.owner !== this.options.owner || binding.repository !== this.options.repository) {
+      return providerError(5 /* Conflict */, "forgejo_binding_mismatch", "Ticket binding does not belong to this Forgejo connection");
+    }
+    return ok(binding);
+  }
+  async checkRevision(binding, expectedRevision) {
+    if (expectedRevision === undefined)
+      return ok(undefined);
+    const current = await this.get(binding);
+    if (current.isErr())
+      return current;
+    return current.unwrap().revision === expectedRevision ? ok(undefined) : providerError(5 /* Conflict */, "forgejo_revision_conflict", "Forgejo issue changed after the expected revision");
+  }
+  async resolveLabels(names) {
+    if (names.length === 0)
+      return ok([]);
+    const response = await this.request(`${this.repositoryPath()}/labels?limit=100`);
+    if (response.isErr())
+      return response;
+    const resources = namedResources(response.unwrap().body, "label", "name");
+    return resources.isErr() ? resources : idsForNames(resources.unwrap(), names, "label");
+  }
+  async resolveMilestone(name) {
+    if (name === undefined || name === null)
+      return ok(undefined);
+    const response = await this.request(`${this.repositoryPath()}/milestones?state=all&type=all&limit=100`);
+    if (response.isErr())
+      return response;
+    const resources = namedResources(response.unwrap().body, "milestone", "title");
+    if (resources.isErr())
+      return resources;
+    const ids = idsForNames(resources.unwrap(), [name], "milestone");
+    return ids.isErr() ? ids : ok(ids.unwrap()[0]);
+  }
+  repositoryPath() {
+    return `/repos/${encodeURIComponent(this.options.owner)}/${encodeURIComponent(this.options.repository)}`;
+  }
+  issuePath(issueNumber) {
+    return `${this.repositoryPath()}/issues/${issueNumber}`;
+  }
+  request(path, init = {}) {
+    return this.requestAbsolute(`${this.instanceUrl}/api/v1${path}`, init);
+  }
+  async requestAbsolute(url, init = {}) {
+    const headers = new Headers(init.headers);
+    headers.set("accept", "application/json");
+    headers.set("authorization", `token ${this.options.token}`);
+    headers.set("content-type", "application/json");
+    headers.set("user-agent", "kairo-ticket-provider");
+    const response = await fromAsync(() => this.requestFetch(url, { ...init, headers }), () => ({
+      kind: 8 /* Unavailable */,
+      code: "forgejo_unavailable",
+      message: "Forgejo could not be reached"
+    }));
+    if (response.isErr())
+      return response;
+    if (!response.unwrap().ok)
+      return responseError(response.unwrap());
+    if (response.unwrap().status === 204) {
+      return ok({ body: undefined, headers: response.unwrap().headers });
+    }
+    const text = await fromAsync(() => response.unwrap().text(), () => ({
+      kind: 7 /* InvalidResponse */,
+      code: "forgejo_response_read_failed",
+      message: "Forgejo response could not be read"
+    }));
+    if (text.isErr())
+      return text;
+    const parsed = safeCall(() => JSON.parse(text.unwrap()), () => ({
+      kind: 7 /* InvalidResponse */,
+      code: "forgejo_invalid_json",
+      message: "Forgejo returned invalid JSON"
+    }));
+    return parsed.isErr() ? parsed : ok({ body: parsed.unwrap(), headers: response.unwrap().headers });
+  }
+}
+// packages/ticket-provider-github/src/errors.ts
+function githubError(kind, code, message, retryAfter) {
+  return err({
+    kind,
+    code,
+    message,
+    ...retryAfter === undefined ? {} : { retryAfter }
+  });
+}
+// packages/ticket-provider-github/src/github-ticket-provider.ts
+function isRecord12(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function responseError2(response) {
+  const retryAfter = response.headers.get("retry-after") ?? undefined;
+  if (response.status === 401) {
+    return githubError(2 /* AuthenticationFailed */, "github_authentication_failed", "GitHub rejected the configured credential");
+  }
+  if (response.status === 404) {
+    return githubError(1 /* NotFound */, "github_issue_not_found", "GitHub issue was not found");
+  }
+  if (response.status === 429 || response.status === 403 && response.headers.get("x-ratelimit-remaining") === "0") {
+    return githubError(4 /* RateLimited */, "github_rate_limited", "GitHub rate limit was exceeded", retryAfter);
+  }
+  if (response.status === 403) {
+    return githubError(3 /* PermissionDenied */, "github_permission_denied", "GitHub denied the requested issue operation");
+  }
+  if (response.status === 409 || response.status === 412 || response.status === 422) {
+    return githubError(5 /* Conflict */, "github_issue_conflict", "GitHub rejected a conflicting issue update");
+  }
+  return githubError(8 /* Unavailable */, "github_unavailable", `GitHub request failed with status ${response.status}`, retryAfter);
+}
+function stringsFromObjects2(value, key) {
+  if (!Array.isArray(value))
+    return [];
+  return value.flatMap((item) => isRecord12(item) && typeof item[key] === "string" ? [item[key]] : []);
+}
+function etagHeaders(revision) {
+  return revision?.includes('"') ? { "if-match": revision } : undefined;
+}
+function githubIssue(value, owner, repository, revisionHeader) {
+  if (!isRecord12(value) || typeof value.number !== "number" || typeof value.title !== "string" || value.body !== null && typeof value.body !== "string" || value.state !== "open" && value.state !== "closed" || typeof value.html_url !== "string" || typeof value.updated_at !== "string") {
+    return githubError(7 /* InvalidResponse */, "github_invalid_issue", "GitHub returned a malformed issue");
+  }
+  const milestone = isRecord12(value.milestone) && typeof value.milestone.title === "string" ? value.milestone.title : undefined;
+  const normalized = normalizeProviderDescription(value.body ?? "");
+  return ok({
+    binding: {
+      kind: "github",
+      owner,
+      repository,
+      issueNumber: value.number,
+      externalUrl: value.html_url,
+      lastSyncedRevision: revisionHeader ?? value.updated_at
+    },
+    title: value.title,
+    description: normalized.description,
+    ...normalized.marker === undefined ? {} : { marker: normalized.marker },
+    status: value.state === "closed" ? "done" : "backlog",
+    labels: stringsFromObjects2(value.labels, "name"),
+    assignees: stringsFromObjects2(value.assignees, "login"),
+    ...milestone === undefined ? {} : { milestone },
+    revision: revisionHeader ?? value.updated_at,
+    updatedAt: value.updated_at
+  });
+}
+
+class GitHubTicketProvider {
+  options;
+  kind = "github";
+  apiUrl;
+  requestFetch;
+  constructor(options) {
+    this.options = options;
+    this.apiUrl = (options.apiUrl ?? "https://api.github.com").replace(/\/$/, "");
+    this.requestFetch = options.fetch ?? ((input, init) => fetch(input, init));
+  }
+  async get(binding) {
+    if (binding.kind !== "github" || binding.owner !== this.options.owner || binding.repository !== this.options.repository) {
+      return githubError(5 /* Conflict */, "github_binding_mismatch", "Ticket binding does not belong to this GitHub connection");
+    }
+    const response = await this.request(`/repos/${encodeURIComponent(binding.owner)}/${encodeURIComponent(binding.repository)}/issues/${binding.issueNumber}`);
+    return response.isErr() ? response : githubIssue(response.unwrap().body, binding.owner, binding.repository, response.unwrap().headers.get("etag") ?? undefined);
+  }
+  async list(projectId) {
+    if (projectId !== this.options.projectId) {
+      return githubError(5 /* Conflict */, "github_project_mismatch", "Project does not belong to this GitHub connection");
+    }
+    const response = await this.request(`/repos/${encodeURIComponent(this.options.owner)}/${encodeURIComponent(this.options.repository)}/issues?state=all&per_page=100`);
+    if (response.isErr())
+      return response;
+    const body = response.unwrap().body;
+    if (!Array.isArray(body)) {
+      return githubError(7 /* InvalidResponse */, "github_invalid_issue_list", "GitHub returned a malformed issue list");
+    }
+    const tickets = [];
+    for (const issue of body) {
+      if (isRecord12(issue) && "pull_request" in issue)
+        continue;
+      const normalized = githubIssue(issue, this.options.owner, this.options.repository);
+      if (normalized.isErr())
+        return normalized;
+      tickets.push(normalized.unwrap());
+    }
+    return ok(tickets);
+  }
+  async create(projectId, input) {
+    if (projectId !== this.options.projectId) {
+      return githubError(5 /* Conflict */, "github_project_mismatch", "Project does not belong to this GitHub connection");
+    }
+    const body = input.marker ? `${input.description}
+
+<!-- ${input.marker} -->` : input.description;
+    const response = await this.request(`/repos/${encodeURIComponent(this.options.owner)}/${encodeURIComponent(this.options.repository)}/issues`, {
+      method: "POST",
+      body: JSON.stringify({
+        title: input.title,
+        body,
+        labels: input.labels ?? [],
+        assignees: input.assignees ?? []
+      })
+    });
+    return response.isErr() ? response : githubIssue(response.unwrap().body, this.options.owner, this.options.repository, response.unwrap().headers.get("etag") ?? undefined);
+  }
+  async update(binding, input) {
+    if (binding.kind !== "github") {
+      return githubError(5 /* Conflict */, "github_binding_mismatch", "A GitHub binding is required");
+    }
+    const response = await this.request(`/repos/${encodeURIComponent(binding.owner)}/${encodeURIComponent(binding.repository)}/issues/${binding.issueNumber}`, {
+      method: "PATCH",
+      headers: etagHeaders(input.expectedRevision),
+      body: JSON.stringify({
+        ...input.title === undefined ? {} : { title: input.title },
+        ...input.description === undefined ? {} : { body: input.description },
+        ...input.labels === undefined ? {} : { labels: input.labels },
+        ...input.assignees === undefined ? {} : { assignees: input.assignees }
+      })
+    });
+    return response.isErr() ? response : githubIssue(response.unwrap().body, binding.owner, binding.repository, response.unwrap().headers.get("etag") ?? undefined);
+  }
+  async addComment(binding, input) {
+    if (binding.kind !== "github") {
+      return githubError(5 /* Conflict */, "github_binding_mismatch", "A GitHub binding is required");
+    }
+    const response = await this.request(`/repos/${encodeURIComponent(binding.owner)}/${encodeURIComponent(binding.repository)}/issues/${binding.issueNumber}/comments`, { method: "POST", body: JSON.stringify({ body: input.body }) });
+    if (response.isErr())
+      return response;
+    const value = response.unwrap().body;
+    if (!isRecord12(value) || typeof value.id !== "number" && typeof value.id !== "string" || typeof value.body !== "string" || typeof value.created_at !== "string") {
+      return githubError(7 /* InvalidResponse */, "github_invalid_comment", "GitHub returned a malformed issue comment");
+    }
+    const author = isRecord12(value.user) && typeof value.user.login === "string" ? value.user.login : input.author;
+    return ok({
+      externalId: String(value.id),
+      author,
+      body: value.body,
+      createdAt: value.created_at,
+      ...typeof value.updated_at === "string" ? { updatedAt: value.updated_at } : {}
+    });
+  }
+  close(binding) {
+    return this.changeState(binding, "closed");
+  }
+  reopen(binding) {
+    return this.changeState(binding, "open");
+  }
+  detectCapabilities() {
+    return Promise.resolve(ok({
+      issues: true,
+      comments: true,
+      labels: true,
+      assignees: true,
+      milestones: true,
+      webhooks: true,
+      projects: false
+    }));
+  }
+  async changeState(binding, state) {
+    if (binding.kind !== "github") {
+      return githubError(5 /* Conflict */, "github_binding_mismatch", "A GitHub binding is required");
+    }
+    const response = await this.request(`/repos/${encodeURIComponent(binding.owner)}/${encodeURIComponent(binding.repository)}/issues/${binding.issueNumber}`, {
+      method: "PATCH",
+      headers: etagHeaders(binding.lastSyncedRevision),
+      body: JSON.stringify({ state })
+    });
+    return response.isErr() ? response : ok(undefined);
+  }
+  async request(path, init = {}) {
+    const headers = new Headers(init.headers);
+    headers.set("accept", "application/vnd.github+json");
+    headers.set("authorization", `Bearer ${this.options.token}`);
+    headers.set("content-type", "application/json");
+    headers.set("user-agent", "kairo-ticket-provider");
+    const response = await fromAsync(() => this.requestFetch(`${this.apiUrl}${path}`, {
+      ...init,
+      headers
+    }), () => ({
+      kind: 8 /* Unavailable */,
+      code: "github_unavailable",
+      message: "GitHub could not be reached"
+    }));
+    if (response.isErr())
+      return response;
+    if (!response.unwrap().ok)
+      return responseError2(response.unwrap());
+    if (response.unwrap().status === 204) {
+      return ok({ body: undefined, headers: response.unwrap().headers });
+    }
+    const text = await fromAsync(() => response.unwrap().text(), () => ({
+      kind: 7 /* InvalidResponse */,
+      code: "github_response_read_failed",
+      message: "GitHub response could not be read"
+    }));
+    if (text.isErr())
+      return text;
+    const parsed = safeCall(() => JSON.parse(text.unwrap()), () => ({
+      kind: 7 /* InvalidResponse */,
+      code: "github_invalid_json",
+      message: "GitHub returned invalid JSON"
+    }));
+    return parsed.isErr() ? parsed : ok({ body: parsed.unwrap(), headers: response.unwrap().headers });
+  }
+}
+// packages/cli/src/ticket-composition.ts
+function configured(values) {
+  return values.every((value) => Boolean(value?.trim()));
+}
+function composeTicketProviders(environment, forgejoMetadata) {
+  const providers = new Map;
+  const githubOwner = environment.KAIRO_GITHUB_OWNER?.trim();
+  const githubRepository = environment.KAIRO_GITHUB_REPOSITORY?.trim();
+  const githubProject = environment.KAIRO_GITHUB_PROJECT?.trim();
+  const githubToken = environment.KAIRO_GITHUB_TOKEN?.trim();
+  const githubApiUrl = environment.KAIRO_GITHUB_API_URL?.trim();
+  const hasGitHub = configured([githubOwner, githubRepository, githubProject, githubToken]);
+  if (hasGitHub && githubOwner && githubRepository && githubProject && githubToken) {
+    providers.set("github", new GitHubTicketProvider({
+      owner: githubOwner,
+      repository: githubRepository,
+      projectId: githubProject,
+      token: githubToken,
+      ...githubApiUrl ? { apiUrl: githubApiUrl } : {}
+    }));
+  }
+  const forgejoInstanceUrl = environment.KAIRO_FORGEJO_URL?.trim();
+  const forgejoOwner = environment.KAIRO_FORGEJO_OWNER?.trim();
+  const forgejoRepository = environment.KAIRO_FORGEJO_REPOSITORY?.trim();
+  const forgejoProject = environment.KAIRO_FORGEJO_PROJECT?.trim();
+  const forgejoToken = environment.KAIRO_FORGEJO_TOKEN?.trim();
+  const hasForgejo = configured([
+    forgejoInstanceUrl,
+    forgejoOwner,
+    forgejoRepository,
+    forgejoProject,
+    forgejoToken
+  ]);
+  if (hasForgejo && forgejoInstanceUrl && forgejoOwner && forgejoRepository && forgejoProject && forgejoToken) {
+    providers.set("forgejo", new ForgejoTicketProvider({
+      instanceUrl: forgejoInstanceUrl,
+      owner: forgejoOwner,
+      repository: forgejoRepository,
+      projectId: forgejoProject,
+      token: forgejoToken,
+      metadataStore: forgejoMetadata
+    }));
+  }
+  return {
+    providers,
+    configurations: [
+      {
+        id: "local",
+        displayName: "Local SQLite",
+        configured: true,
+        credentialSource: "none",
+        message: "Available without a remote account or repository."
+      },
+      {
+        id: "github",
+        displayName: "GitHub Issues",
+        configured: hasGitHub,
+        credentialSource: "server_environment",
+        ...githubApiUrl ? { endpoint: githubApiUrl } : {},
+        ...githubOwner ? { owner: githubOwner } : {},
+        ...githubRepository ? { repository: githubRepository } : {},
+        message: hasGitHub ? "Configured from the KAIRO_GITHUB_* environment variables." : "Set KAIRO_GITHUB_OWNER, REPOSITORY, PROJECT, and TOKEN."
+      },
+      {
+        id: "forgejo",
+        displayName: "Forgejo Issues",
+        configured: hasForgejo,
+        credentialSource: "server_environment",
+        ...forgejoInstanceUrl ? { endpoint: forgejoInstanceUrl } : {},
+        ...forgejoOwner ? { owner: forgejoOwner } : {},
+        ...forgejoRepository ? { repository: forgejoRepository } : {},
+        message: hasForgejo ? "Configured from the KAIRO_FORGEJO_* environment variables." : "Set KAIRO_FORGEJO_URL, OWNER, REPOSITORY, PROJECT, and TOKEN."
+      }
+    ]
+  };
+}
+
 // packages/cli/src/work-item.ts
 import { createHash as createHash5 } from "crypto";
 function normalizedStrings(values, sort) {
@@ -25818,6 +27398,19 @@ function createInlineWorkItem(task) {
     description,
     acceptanceCriteria: [],
     labels: []
+  });
+}
+function createStoredTicketWorkItem(ticket, stored) {
+  return snapshot({
+    kind: "ticket",
+    provider: "kairo",
+    reference: ticket.id,
+    revision: stored.providerRevision,
+    ...ticket.binding.kind === "local" ? {} : { url: ticket.binding.externalUrl },
+    title: stored.title,
+    description: stored.description,
+    acceptanceCriteria: [],
+    labels: stored.labels
   });
 }
 function splitTicketReference(ticket) {
@@ -25994,7 +27587,7 @@ function repositoryId(path) {
 function runId() {
   return `run-${Date.now().toString(36)}-${randomUUID5().slice(0, 8)}`;
 }
-function isRecord11(value) {
+function isRecord13(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function harnessRouteError(nodeIds, routes) {
@@ -26036,6 +27629,11 @@ class LocalKairoHost {
   tickets;
   ticketRuns;
   ticketSync;
+  ticketService;
+  ticketSyncService;
+  ticketMigrationService;
+  remoteTicketProviders;
+  ticketProviderViews;
   registry;
   ticketProviders;
   artifactWriter;
@@ -26052,6 +27650,17 @@ class LocalKairoHost {
     this.tickets = new SqliteTicketRepository(paths.databasePath);
     this.ticketRuns = new SqliteTicketRunStore(paths.databasePath);
     this.ticketSync = new SqliteTicketSyncStore(paths.databasePath);
+    const clock = { now: () => new Date().toISOString() };
+    const ids = {
+      ticketId: () => `ticket-${randomUUID5()}`,
+      commentId: () => `comment-${randomUUID5()}`
+    };
+    this.ticketService = new TicketService(this.tickets, clock, ids);
+    this.ticketSyncService = new TicketSyncService(this.tickets, this.ticketSync, clock, ids, this.ticketRuns, new KairoTicketRunQuery(this.store));
+    this.ticketMigrationService = new TicketMigrationService(this.tickets, this.ticketSync, clock);
+    const ticketComposition = composeTicketProviders(process.env, this.ticketSync);
+    this.remoteTicketProviders = ticketComposition.providers;
+    this.ticketProviderViews = ticketComposition.configurations;
     this.sandbox = new WorktreeSandboxProvider(paths.worktreeDirectory);
     this.artifactWriter = new LocalArtifactWriter(paths.artifactDirectory);
     this.registry = new HarnessRegistry(harnesses);
@@ -26090,6 +27699,13 @@ class LocalKairoHost {
     }
   }
   async create(request) {
+    const ticket = request.ticket?.trim();
+    if (ticket?.startsWith("kairo:")) {
+      return this.createTicketRun(request, ticket.slice("kairo:".length).trim());
+    }
+    return this.createRun(request);
+  }
+  async createRun(request, suppliedWorkItem) {
     if (!this.initialized) {
       return cliErr(1 /* Initialization */, "host_not_initialized", "Kairo is not initialized");
     }
@@ -26113,10 +27729,10 @@ class LocalKairoHost {
     if (task && ticket) {
       return cliErr(0 /* InvalidArguments */, "multiple_work_items", "Use exactly one of task or ticket");
     }
-    if (request.adw === "feature-development" && !task && !ticket) {
+    if (request.adw === "feature-development" && !task && !ticket && !suppliedWorkItem) {
       return cliErr(0 /* InvalidArguments */, "work_item_required", "feature-development requires --ticket, --task, or --task-file");
     }
-    const workItem = task ? createInlineWorkItem(task) : ticket ? await resolveTicketWorkItem(ticket, this.ticketProviders) : undefined;
+    const workItem = suppliedWorkItem ? ok(suppliedWorkItem) : task ? createInlineWorkItem(task) : ticket ? await resolveTicketWorkItem(ticket, this.ticketProviders) : undefined;
     if (workItem?.isErr()) {
       return cliErr(0 /* InvalidArguments */, workItem.error.code, workItem.error.message);
     }
@@ -26159,6 +27775,50 @@ class LocalKairoHost {
     const stable = await this.worker.runUntilStable(id);
     return ok({ runId: id, status: stable.state.status });
   }
+  async createTicketRun(request, ticketId) {
+    if (!ticketId) {
+      return cliErr(0 /* InvalidArguments */, "invalid_ticket_reference", "Kairo ticket references must use kairo:<ticket-id>");
+    }
+    if (request.task !== undefined) {
+      return cliErr(0 /* InvalidArguments */, "multiple_work_items", "Use exactly one of task or ticket");
+    }
+    let response;
+    const service = new TicketRunService(this.tickets, this.ticketRuns, new KairoTicketRunQuery(this.store), {
+      start: async ({ ticket, snapshot: snapshot2 }) => {
+        const workItem = createStoredTicketWorkItem(ticket, snapshot2);
+        if (workItem.isErr()) {
+          return toTicketError(1 /* InvalidInput */, {
+            field: "ticketId",
+            reason: workItem.error.message
+          });
+        }
+        const created = await this.createRun({ ...request, ticket: undefined }, workItem.unwrap());
+        if (created.isErr()) {
+          return toTicketError(1 /* InvalidInput */, {
+            field: "ticketId",
+            reason: created.error.message
+          });
+        }
+        response = created.unwrap();
+        return ok({ runId: response.runId });
+      }
+    }, { now: () => new Date().toISOString() }, {
+      ticketId: () => `ticket-${randomUUID5()}`,
+      commentId: () => `comment-${randomUUID5()}`,
+      snapshotId: () => `snapshot-${randomUUID5()}`
+    });
+    const started = await service.start({
+      ticketId,
+      kind: "implementation",
+      workflow: request.adw,
+      repositoryPath: request.repositoryPath,
+      actor: request.actor
+    });
+    if (started.isErr()) {
+      return cliErr(0 /* InvalidArguments */, "ticket_run_failed", JSON.stringify(started.error));
+    }
+    return response ? ok(response) : cliErr(4 /* Persistence */, "ticket_run_missing", "Ticket run started without a run response");
+  }
   coordinatorFor(aggregate) {
     const configuration = runConfiguration(aggregate);
     return this.coordinator(configuration?.worktreePath ?? process.cwd());
@@ -26178,8 +27838,67 @@ class LocalKairoHost {
         runs: this.ticketRuns,
         runQuery: new KairoTicketRunQuery(this.store),
         sync: this.ticketSync
-      }
+      },
+      ticketProviders: { list: () => this.ticketProviderViews }
     });
+  }
+  createTicket(input) {
+    return this.ticketService.create(input);
+  }
+  listTickets(projectId) {
+    return this.ticketService.list(projectId);
+  }
+  getTicket(ticketId) {
+    return this.ticketService.get(ticketId);
+  }
+  updateTicket(ticketId, input) {
+    return this.ticketService.update(ticketId, input);
+  }
+  moveTicket(ticketId, expectedRevision, status2) {
+    return this.ticketService.move(ticketId, expectedRevision, status2);
+  }
+  closeTicket(ticketId, expectedRevision) {
+    return this.ticketService.close(ticketId, expectedRevision);
+  }
+  cancelTicket(ticketId, expectedRevision) {
+    return this.ticketService.cancel(ticketId, expectedRevision);
+  }
+  reopenTicket(ticketId, expectedRevision) {
+    return this.ticketService.reopen(ticketId, expectedRevision);
+  }
+  addTicketComment(ticketId, author, body) {
+    return this.ticketService.addComment(ticketId, { author, body });
+  }
+  async importTickets(providerId, projectId) {
+    const provider = this.remoteTicketProviders.get(providerId);
+    return provider ? this.ticketSyncService.importProject(projectId, provider) : undefined;
+  }
+  async pullTicket(ticketId) {
+    const ticket = this.ticketService.get(ticketId);
+    if (ticket.isErr()) {
+      return toTicketSyncError(1 /* Ticket */, { error: ticket.error });
+    }
+    if (ticket.value.binding.kind === "local")
+      return;
+    const provider = this.remoteTicketProviders.get(ticket.value.binding.kind);
+    return provider ? this.ticketSyncService.reconcile(ticketId, provider) : undefined;
+  }
+  async pushTicket(ticketId, idempotencyKey) {
+    const ticket = this.ticketService.get(ticketId);
+    if (ticket.isErr()) {
+      return toTicketSyncError(1 /* Ticket */, { error: ticket.error });
+    }
+    if (ticket.value.binding.kind === "local")
+      return;
+    const provider = this.remoteTicketProviders.get(ticket.value.binding.kind);
+    return provider ? this.ticketSyncService.syncTicket(ticketId, provider, idempotencyKey) : undefined;
+  }
+  async migrateTicket(ticketId, projectId, providerId) {
+    const provider = this.remoteTicketProviders.get(providerId);
+    return provider ? this.ticketMigrationService.migrate(ticketId, projectId, provider) : undefined;
+  }
+  ticketProviderConfigurations() {
+    return this.ticketProviderViews;
   }
   async list() {
     const directory = resolve7(this.paths.worktreeDirectory, "repositories");
@@ -26188,7 +27907,7 @@ class LocalKairoHost {
       const repositories = [];
       for (const file2 of files) {
         const parsed = JSON.parse(await readFile6(resolve7(directory, file2), "utf8"));
-        if (isRecord11(parsed) && typeof parsed.repositoryId === "string" && typeof parsed.repositoryPath === "string") {
+        if (isRecord13(parsed) && typeof parsed.repositoryId === "string" && typeof parsed.repositoryPath === "string") {
           repositories.push({ id: parsed.repositoryId, path: parsed.repositoryPath });
         }
       }
@@ -26254,7 +27973,7 @@ class LocalKairoHost {
     };
     const metadataPath = resolve7(this.paths.worktreeDirectory, "runs", configuration.repositoryId, `${aggregate.runId}.json`);
     const recorded = JSON.parse(await readFile6(metadataPath, "utf8"));
-    if (!isRecord11(recorded) || typeof recorded.commonGitDirectory !== "string") {
+    if (!isRecord13(recorded) || typeof recorded.commonGitDirectory !== "string") {
       throw new Error("Run worktree metadata is corrupt");
     }
     const durableWorktree = { ...worktree, commonGitDirectory: recorded.commonGitDirectory };
@@ -26299,6 +28018,157 @@ class LocalKairoHost {
   }
 }
 
+// packages/cli/src/ticket-command.ts
+import { readFile as readFile7 } from "fs/promises";
+import { resolve as resolve8 } from "path";
+var priorities = ["low", "medium", "high", "critical"];
+var statuses = ["backlog", "ready", "blocked", "done", "cancelled"];
+function option(args, name) {
+  const index = args.indexOf(name);
+  return index < 0 ? undefined : args[index + 1];
+}
+function options(args, name) {
+  const values = [];
+  for (const [index, value] of args.entries()) {
+    const selected = args[index + 1];
+    if (value === name && selected)
+      values.push(selected);
+  }
+  return values;
+}
+function required(value, label) {
+  if (!value?.trim())
+    throw new Error(`${label} is required`);
+  return value.trim();
+}
+function revision(args) {
+  const value = Number(required(option(args, "--revision"), "--revision"));
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error("--revision must be a positive integer");
+  }
+  return value;
+}
+function priority(value) {
+  switch (value) {
+    case undefined:
+      return;
+    case "low":
+    case "medium":
+    case "high":
+    case "critical":
+      return value;
+  }
+  throw new Error(`--priority must be one of: ${priorities.join(", ")}`);
+}
+function status2(value) {
+  const selected = required(value, "--status");
+  switch (selected) {
+    case "backlog":
+    case "ready":
+    case "blocked":
+    case "done":
+    case "cancelled":
+      return selected;
+  }
+  throw new Error(`--status must be one of: ${statuses.join(", ")}`);
+}
+function remoteProvider(value) {
+  const selected = required(value, "provider");
+  if (selected !== "github" && selected !== "forgejo") {
+    throw new Error("provider must be github or forgejo");
+  }
+  return selected;
+}
+function failure2(error) {
+  return new Error(typeof error === "object" && error !== null && "message" in error ? String(error.message) : JSON.stringify(error));
+}
+function unwrap(result) {
+  if (result.isErr())
+    throw failure2(result.error);
+  return result.value;
+}
+function configured2(value, provider) {
+  if (value === undefined) {
+    throw new Error(`${provider} is not configured; run "kairo ticket providers" for required environment variables`);
+  }
+  return value;
+}
+async function description(args) {
+  const inline = option(args, "--description");
+  const file2 = option(args, "--description-file");
+  if (inline && file2)
+    throw new Error("Use one of --description or --description-file");
+  return file2 ? readFile7(resolve8(file2), "utf8") : required(inline, "--description");
+}
+async function executeTicketCommand(host, args, actor) {
+  const command = required(args[0], "ticket command");
+  if (command === "providers")
+    return host.ticketProviderConfigurations();
+  if (command === "create") {
+    const selectedPriority = priority(option(args, "--priority"));
+    return unwrap(host.createTicket({
+      projectId: required(option(args, "--project"), "--project"),
+      title: required(option(args, "--title"), "--title"),
+      description: await description(args),
+      ...selectedPriority ? { priority: selectedPriority } : {},
+      labels: options(args, "--label"),
+      assignees: options(args, "--assignee")
+    }));
+  }
+  if (command === "list") {
+    return unwrap(host.listTickets(required(option(args, "--project"), "--project")));
+  }
+  if (command === "show")
+    return unwrap(host.getTicket(required(args[1], "ticket-id")));
+  if (command === "update") {
+    const selectedPriority = priority(option(args, "--priority"));
+    const input = {
+      expectedRevision: revision(args),
+      ...option(args, "--title") ? { title: option(args, "--title") } : {},
+      ...option(args, "--description") ? { description: option(args, "--description") } : {},
+      ...selectedPriority ? { priority: selectedPriority } : {},
+      ...args.includes("--label") ? { labels: options(args, "--label") } : {},
+      ...args.includes("--assignee") ? { assignees: options(args, "--assignee") } : {}
+    };
+    return unwrap(host.updateTicket(required(args[1], "ticket-id"), input));
+  }
+  if (command === "move") {
+    return unwrap(host.moveTicket(required(args[1], "ticket-id"), revision(args), status2(option(args, "--status"))));
+  }
+  if (command === "close" || command === "cancel" || command === "reopen") {
+    const ticketId = required(args[1], "ticket-id");
+    const expectedRevision = revision(args);
+    const result = command === "close" ? host.closeTicket(ticketId, expectedRevision) : command === "cancel" ? host.cancelTicket(ticketId, expectedRevision) : host.reopenTicket(ticketId, expectedRevision);
+    return unwrap(result);
+  }
+  if (command === "comment") {
+    return unwrap(host.addTicketComment(required(args[1], "ticket-id"), option(args, "--author") ?? actor, required(option(args, "--body"), "--body")));
+  }
+  if (command === "import") {
+    const provider = remoteProvider(args[1]);
+    return unwrap(configured2(await host.importTickets(provider, required(option(args, "--project"), "--project")), provider));
+  }
+  if (command === "pull") {
+    const ticketId = required(args[1], "ticket-id");
+    const ticket = unwrap(host.getTicket(ticketId));
+    if (ticket.binding.kind === "local")
+      throw new Error("A local ticket cannot be pulled");
+    return unwrap(configured2(await host.pullTicket(ticketId), ticket.binding.kind));
+  }
+  if (command === "push") {
+    const ticketId = required(args[1], "ticket-id");
+    const ticket = unwrap(host.getTicket(ticketId));
+    if (ticket.binding.kind === "local")
+      throw new Error("Migrate a local ticket before pushing it");
+    return unwrap(configured2(await host.pushTicket(ticketId, `cli:push:${crypto.randomUUID()}`), ticket.binding.kind));
+  }
+  if (command === "migrate") {
+    const provider = remoteProvider(option(args, "--to"));
+    return unwrap(configured2(await host.migrateTicket(required(args[1], "ticket-id"), required(option(args, "--project"), "--project"), provider), provider));
+  }
+  throw new Error(`Unknown ticket command: ${command}`);
+}
+
 // packages/cli/src/main.ts
 var VERSION = "0.1.0";
 var HELP = `Kairo ${VERSION}
@@ -26306,6 +28176,17 @@ var HELP = `Kairo ${VERSION}
 Usage:
   kairo create adw <name> [--template <template>] [--output <directory>]
   kairo run <adw> --repo <path> (--ticket <provider:reference> | --task <text> | --task-file <path>) [--harness <id|node=id>]...
+  kairo ticket create --project <id> --title <text> (--description <text> | --description-file <path>) [--priority <value>] [--label <value>]...
+  kairo ticket list --project <id>
+  kairo ticket show <ticket-id>
+  kairo ticket update <ticket-id> --revision <number> [--title <text>] [--description <text>] [--priority <value>] [--label <value>]...
+  kairo ticket move <ticket-id> --revision <number> --status <status>
+  kairo ticket close|cancel|reopen <ticket-id> --revision <number>
+  kairo ticket comment <ticket-id> --body <text> [--author <name>]
+  kairo ticket providers
+  kairo ticket import <github|forgejo> --project <id>
+  kairo ticket pull|push <ticket-id>
+  kairo ticket migrate <ticket-id> --to <github|forgejo> --project <id>
   kairo runs
   kairo status <run-id>
   kairo approve <run-id> <invocation> --reason <text>
@@ -26319,11 +28200,11 @@ Usage:
 
 ADW templates:
   ${ADW_TEMPLATES.join(", ")}`;
-function option(args, name) {
+function option2(args, name) {
   const index = args.indexOf(name);
   return index < 0 ? undefined : args[index + 1];
 }
-function required(value, label) {
+function required2(value, label) {
   if (!value?.trim())
     throw new Error(`${label} is required`);
   return value;
@@ -26338,14 +28219,14 @@ function harnessOptions(args) {
   for (const [index, value] of args.entries()) {
     if (value !== "--harness")
       continue;
-    const selection = required(args[index + 1], "--harness");
+    const selection = required2(args[index + 1], "--harness");
     const separator = selection.indexOf("=");
     if (separator < 0) {
       harnesses.push(selection);
       continue;
     }
-    const nodeId = required(selection.slice(0, separator), "--harness node");
-    const harnessId = required(selection.slice(separator + 1), "--harness id");
+    const nodeId = required2(selection.slice(0, separator), "--harness node");
+    const harnessId = required2(selection.slice(separator + 1), "--harness id");
     (harnessesByNode[nodeId] ??= []).push(harnessId);
   }
   return { harnesses, harnessesByNode };
@@ -26364,17 +28245,17 @@ async function main() {
     return 0;
   }
   if (command === "create") {
-    if (required(args[1], "resource") !== "adw") {
+    if (required2(args[1], "resource") !== "adw") {
       throw new Error(`Unknown create resource: ${args[1]}`);
     }
-    const template = option(args, "--template") ?? "feature-development";
+    const template = option2(args, "--template") ?? "feature-development";
     if (!isAdwTemplate(template)) {
       throw new Error(`Unknown ADW template: ${template}. Choose: ${ADW_TEMPLATES.join(", ")}`);
     }
     const result = await createAdw({
-      name: required(args[2], "name"),
+      name: required2(args[2], "name"),
       template,
-      outputDirectory: resolve8(option(args, "--output") ?? resolve8(process.cwd(), ".kairo"))
+      outputDirectory: resolve9(option2(args, "--output") ?? resolve9(process.cwd(), ".kairo"))
     });
     if (result.isErr())
       throw new Error(`${result.error.code}: ${result.error.message}`);
@@ -26387,18 +28268,22 @@ async function main() {
     throw new Error(`${initialized.error.code}: ${initialized.error.message}`);
   const actor = process.env.USER?.trim() || "local-operator";
   try {
+    if (command === "ticket") {
+      print(await executeTicketCommand(host, args.slice(1), actor));
+      return 0;
+    }
     if (command === "run") {
       const { harnesses, harnessesByNode } = harnessOptions(args);
-      const taskFile = option(args, "--task-file");
-      const inlineTask = option(args, "--task");
+      const taskFile = option2(args, "--task-file");
+      const inlineTask = option2(args, "--task");
       if (taskFile && inlineTask) {
         throw new Error("Use exactly one of --task and --task-file");
       }
-      const task = taskFile ? await readFile7(resolve8(taskFile), "utf8") : inlineTask;
-      const ticket = option(args, "--ticket");
+      const task = taskFile ? await readFile8(resolve9(taskFile), "utf8") : inlineTask;
+      const ticket = option2(args, "--ticket");
       const result = await host.create({
-        adw: required(args[1], "adw"),
-        repositoryPath: required(option(args, "--repo"), "--repo"),
+        adw: required2(args[1], "adw"),
+        repositoryPath: required2(option2(args, "--repo"), "--repo"),
         ...task ? { task } : {},
         ...ticket ? { ticket } : {},
         ...harnesses.length ? { harnesses } : {},
@@ -26418,16 +28303,16 @@ async function main() {
       return 0;
     }
     if (command === "status") {
-      const result = getRun({ runs: host.store, coordinator: host.coordinator() }, required(args[1], "run-id"));
+      const result = getRun({ runs: host.store, coordinator: host.coordinator() }, required2(args[1], "run-id"));
       if (result.isErr())
         throw new Error(result.error.message);
       print(result.unwrap());
       return 0;
     }
     if (command === "approve" || command === "reject") {
-      const runId2 = required(args[1], "run-id");
-      const invocation = Number(required(args[2], "invocation"));
-      const reason = required(option(args, "--reason"), "--reason");
+      const runId2 = required2(args[1], "run-id");
+      const invocation = Number(required2(args[2], "invocation"));
+      const reason = required2(option2(args, "--reason"), "--reason");
       const loaded = host.store.loadRun(runId2);
       if (loaded.isErr())
         throw new Error(`Run ${runId2} was not found`);
@@ -26442,9 +28327,9 @@ async function main() {
       return 0;
     }
     if (["pause", "resume", "cancel"].includes(command)) {
-      const runId2 = required(args[1], "run-id");
+      const runId2 = required2(args[1], "run-id");
       const coordinator = host.coordinator();
-      const result = command === "pause" ? coordinator.pauseRun(runId2, actor, `pause:${randomUUID6()}`) : command === "resume" ? coordinator.resumeRun(runId2, actor, `resume:${randomUUID6()}`) : coordinator.cancelRun(runId2, actor, option(args, "--reason") ?? "cancelled by operator", `cancel:${randomUUID6()}`);
+      const result = command === "pause" ? coordinator.pauseRun(runId2, actor, `pause:${randomUUID6()}`) : command === "resume" ? coordinator.resumeRun(runId2, actor, `resume:${randomUUID6()}`) : coordinator.cancelRun(runId2, actor, option2(args, "--reason") ?? "cancelled by operator", `cancel:${randomUUID6()}`);
       if (result.isErr())
         throw new Error(`${command} failed`);
       const stable = command === "resume" ? await host.worker.runUntilStable(runId2) : result.unwrap();
@@ -26452,9 +28337,9 @@ async function main() {
       return 0;
     }
     if (["interrupt", "retry", "skip"].includes(command)) {
-      const runId2 = required(args[1], "run-id");
-      const invocation = Number(required(args[2], "invocation"));
-      const reason = required(option(args, "--reason"), "--reason");
+      const runId2 = required2(args[1], "run-id");
+      const invocation = Number(required2(args[2], "invocation"));
+      const reason = required2(option2(args, "--reason"), "--reason");
       const coordinator = host.coordinator();
       const key = `${command}:${randomUUID6()}`;
       const result = command === "interrupt" ? coordinator.interruptInvocation(runId2, invocation, actor, reason, key) : command === "retry" ? coordinator.retryInvocation(runId2, invocation, actor, reason, key) : coordinator.skipInvocation(runId2, invocation, actor, reason, key);
@@ -26469,7 +28354,7 @@ async function main() {
       return 0;
     }
     if (command === "serve") {
-      const port = Number(option(args, "--port") ?? 4317);
+      const port = Number(option2(args, "--port") ?? 4317);
       const served = await host.serve(port);
       if (served.isErr())
         throw new Error(served.error.message);
