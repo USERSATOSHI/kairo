@@ -24,9 +24,12 @@
     "packages/*"
   ],
   "files": [
+    "docs",
     "packages/cli/assets",
     "packages/cli/dist",
-    "packages/web/dist"
+    "packages/web/dist",
+    "plan.md",
+    "TODO.md"
   ],
   "type": "module",
   "scripts": {

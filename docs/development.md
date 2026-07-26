@@ -1,0 +1,244 @@
+# Kairo development and architecture guide
+
+This document is for contributors and package consumers. For installation and
+day-to-day CLI usage, start with the [user guide](../README.md).
+
+## Development setup
+
+Kairo is a Bun and TypeScript monorepo.
+
+```bash
+git clone <repository-url>
+cd kairo
+bun install
+```
+
+Run the CLI from source:
+
+```bash
+bun run kairo --help
+bun run kairo diagnostics
+bun run kairo run feature-development \
+  --repo /path/to/repository \
+  --harness codex
+```
+
+Build and link the distributable root CLI:
+
+```bash
+bun run build:cli
+bun link
+kairo --version
+```
+
+The generated executable is `packages/cli/dist/main.js`. It is committed
+because Git installations must work even when a package manager blocks
+lifecycle scripts.
+
+## Required validation
+
+Before completing a change, run:
+
+```bash
+bun run format
+bun run lint
+bun run typecheck
+bun test
+```
+
+Check the root distribution archive:
+
+```bash
+bun run build:cli
+bun pm pack --dry-run --ignore-scripts
+```
+
+Each independently distributed workspace includes its own `LICENSE` and
+`"license": "Apache-2.0"` metadata.
+
+## Workspace map
+
+| Package | Responsibility |
+| --- | --- |
+| `@kairo/domain` | Immutable domain types and durable event contracts |
+| `@kairo/adw` | ADW authoring SDK, package loading, validation, and deterministic compilation |
+| `@kairo/runtime` | Pure reduction, transition selection, scheduling, simulation, and recovery decisions |
+| `@kairo/executors` | Application coordination and execution ports |
+| `@kairo/persistence-sqlite` | Transactional event history and query projections |
+| `@kairo/sandbox-worktree` | Git repository registration, worktree isolation, artifacts, and delivery branches |
+| `@kairo/harnesses` | Claude Code, Codex, OpenCode, and Pi adapters |
+| `@kairo/api-contracts` | Transport DTOs and shared API contracts |
+| `@kairo/api` | Elysia application boundary and use cases |
+| `@kairo/web` | Read-only execution console and approval controls |
+| `@kairo/cli` | Local composition root, worker, HTTP host, and operator CLI |
+
+## Dependency direction
+
+Kairo maintains this dependency direction:
+
+```text
+Transport
+    ↓
+Application
+    ↓
+Domain and runtime
+    ↓
+Declared ports
+```
+
+Infrastructure implements ports and is composed by `@kairo/cli`.
+
+- Domain and runtime code does not import Elysia, React, SQLite adapters, Git
+  adapters, concrete harnesses, or filesystem APIs.
+- Route handlers validate input, invoke one application use case, and map its
+  `Result` into a response.
+- Workflow compilation, event reduction, transition selection, scheduling, and
+  recovery decisions remain pure and deterministic.
+- Filesystem, database, Git, subprocess, network, clock, and identifier work
+  stays in the imperative shell.
+
+See [AGENTS.md](../AGENTS.md) for the complete engineering rules.
+
+## Determinism contract
+
+Kairo's runtime guarantee is:
+
+> Given the same compiled workflow and ordered durable event history, Kairo
+> reconstructs the same state and emits the same next orchestration decisions.
+
+Kairo does not claim that agents, shell commands, Git, filesystems, or networks
+are deterministic. Their outcomes are recorded durably; orchestration decisions
+over those outcomes are deterministic.
+
+Important consequences:
+
+- Active runs are pinned to an exact compiled workflow checksum.
+- Sequential invocations select exactly one transition.
+- Multiple transition matches and missing matches are typed failures.
+- Cycles require explicit bounds.
+- Agents produce data but cannot alter the graph, permissions, limits, or
+  approval policy.
+- Side effects declare a recovery classification rather than claiming
+  exactly-once execution.
+
+Read [invariants.md](invariants.md), [runtime-model.md](runtime-model.md), and
+the [ADRs](adrs) before changing runtime semantics.
+
+## Authoring an ADW with the SDK
+
+The installed CLI templates use dependency-free data definitions so they work
+outside this monorepo. Package consumers can use the typed authoring SDK:
+
+```typescript
+import { WorkflowBuilder } from '@kairo/adw';
+
+const workflow = new WorkflowBuilder({
+  id: 'feature-work',
+  version: '1.0.0',
+});
+
+workflow.permissions(
+  'repository.read',
+  'repository.write',
+  'terminal.execute',
+);
+workflow.runLimits({
+  maxDurationMs: 4 * 60 * 60 * 1000,
+  maxNodeInvocations: 12,
+});
+
+const implement = workflow.agent('implement', {
+  role: 'implementer',
+  prompt: './prompts/implement.md',
+  capabilities: [
+    'repository.read',
+    'repository.write',
+    'terminal.execute',
+  ],
+  recoveryPolicy: 'resume_supported',
+});
+const validate = workflow.command('validate', {
+  command: 'bun run format && bun run lint && bun run typecheck && bun test',
+  capabilities: ['repository.read', 'terminal.execute'],
+  recoveryPolicy: 'replay_safe',
+});
+const complete = workflow.complete('complete');
+const failed = workflow.complete('failed', { result: 'failed' });
+
+workflow.startAt(implement);
+implement.on('success').to(validate);
+validate.on('success').to(complete);
+validate.on('failure').to(failed);
+
+export default workflow.build();
+```
+
+An ADW package contains:
+
+```text
+my-workflow/
+  manifest.json
+  kairo.adw.ts
+  prompts/
+  schemas/
+```
+
+Prompts and output schemas referenced by agent nodes are compiled into the
+content-addressed workflow bundle. Declaration order does not decide transition
+selection.
+
+For a complete implementation, see the built-in
+[`feature-development`](../packages/cli/assets/adws/feature-development)
+workflow and the [`@kairo/adw` package guide](../packages/adw/README.md).
+
+## Local composition
+
+`@kairo/cli` owns the single-process local application:
+
+```text
+CLI and HTTP
+    ↓
+LocalKairoHost
+    ├── SqliteEventStore
+    ├── WorktreeSandboxProvider
+    ├── HarnessRegistry
+    ├── LocalArtifactWriter
+    ├── LocalWorker
+    └── Elysia API and web console
+```
+
+Initialization creates the XDG data directories, opens SQLite, initializes the
+worktree provider, and recovers interrupted runs. The local worker advances
+runs to stable boundaries. Successful terminal runs capture Git artifacts,
+create a controlled commit, and expose a `kairo/<run-id>` delivery branch.
+
+The local MVP is intentionally single-process. Separate workers, PostgreSQL,
+remote isolation, automatic merge, and deployment remain deferred.
+
+## Project status
+
+Milestones M1 through M7 are accepted:
+
+- deterministic compiler, reducer, scheduler, transitions, loops, and recovery;
+- durable SQLite runtime and approval execution;
+- Git worktree isolation and recovery;
+- provider-neutral agent harness execution;
+- bounded feature-development workflow;
+- HTTP API and execution console;
+- distributable local CLI and worker composition.
+
+The detailed acceptance evidence lives under [milestones](milestones). Future
+scope and explicit exclusions live in [the implementation plan](../plan.md) and
+[TODO](../TODO.md).
+
+## Architectural changes
+
+Record architecture changes in an ADR before implementation. A behavior change
+should also update the lowest useful test level:
+
+- pure decisions: unit or simulation tests;
+- ports and adapters: reusable contract tests;
+- SQLite, Git, worktrees, and subprocesses: integration tests;
+- recovery behavior: interruption tests around the side effect and durable
+  completion boundary;
+- determinism: byte-stable compilation, replay, and ordered-decision tests.
