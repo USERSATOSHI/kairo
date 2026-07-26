@@ -1,4 +1,5 @@
 import {
+  normalizeProviderDescription,
   TicketProviderErrorKind,
   type AddTicketCommentInput,
   type ForgejoInstanceMetadata,
@@ -153,6 +154,7 @@ function forgejoIssue(
     isRecord(value.milestone) && typeof value.milestone.title === 'string'
       ? value.milestone.title
       : undefined;
+  const normalized = normalizeProviderDescription(value.body ?? '');
   return ok({
     binding: {
       kind: 'forgejo',
@@ -164,7 +166,8 @@ function forgejoIssue(
       lastSyncedRevision: value.updated_at,
     },
     title: value.title,
-    description: value.body ?? '',
+    description: normalized.description,
+    ...(normalized.marker === undefined ? {} : { marker: normalized.marker }),
     status: value.state === 'closed' ? 'done' : 'backlog',
     labels: stringsFromObjects(value.labels, 'name'),
     assignees: stringsFromObjects(value.assignees, 'login'),

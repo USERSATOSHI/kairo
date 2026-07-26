@@ -16,12 +16,15 @@ interface FakeGitHub {
   failStatus?: number;
 }
 
-function issue(state: 'open' | 'closed' = 'open'): Record<string, unknown> {
+function issue(
+  state: 'open' | 'closed' = 'open',
+  description = 'Provider-owned description',
+): Record<string, unknown> {
   return {
     id: 100,
     number: 7,
     title: 'GitHub ticket',
-    body: 'Provider-owned description',
+    body: description,
     state,
     html_url: 'https://github.test/acme/kairo/issues/7',
     updated_at: state === 'open' ? '2026-07-26T10:00:00Z' : '2026-07-26T11:00:00Z',
@@ -58,7 +61,8 @@ function fakeGitHub(): FakeGitHub {
       if (method === 'GET' && url.pathname.endsWith('/issues')) {
         return Response.json([issue()]);
       }
-      return new Response(JSON.stringify(issue(requestedState)), {
+      const description = isRecord(body) && typeof body.body === 'string' ? body.body : undefined;
+      return new Response(JSON.stringify(issue(requestedState, description)), {
         status: method === 'POST' ? 201 : 200,
         headers: { etag: '"revision-7"' },
       });
@@ -97,6 +101,8 @@ describe('T3 GitHub ticket provider', () => {
     const binding = created.unwrap().binding;
     expect(created.unwrap()).toMatchObject({
       title: 'GitHub ticket',
+      description: 'Provider-owned description',
+      marker: 'kairo-ticket:ticket-1',
       labels: ['ticket'],
       assignees: ['satoshi'],
       milestone: 'T3',

@@ -3,6 +3,7 @@ import { Database } from 'bun:sqlite';
 import { err, ok, safeCall, type Result } from '@usersatoshi/results';
 
 import type { ExternalTicketProjection, TicketRepository } from '../application/ports.ts';
+import type { TicketBindingWriter } from '../integration/ports.ts';
 import type {
   Ticket,
   TicketBinding,
@@ -136,7 +137,7 @@ function commentBinding(
 /**
  * SQLite-backed local ticket repository. Each aggregate mutation is atomic.
  */
-export class SqliteTicketRepository implements TicketRepository {
+export class SqliteTicketRepository implements TicketBindingWriter, TicketRepository {
   private readonly database: Database;
 
   constructor(path: string) {
@@ -456,6 +457,36 @@ export class SqliteTicketRepository implements TicketRepository {
            WHERE ticket_id = ?`,
         )
         .run(projection.status, updatedAt, ticketId);
+      return this.loadTicketUnsafe(ticketId);
+    });
+  }
+
+  setBinding(
+    ticketId: string,
+    expectedRevision: number,
+    binding: TicketBinding,
+    updatedAt: string,
+  ): Result<Ticket, TicketError> {
+    return this.executeTransaction('setBinding', () => {
+      const current = this.loadTicketUnsafe(ticketId);
+      if (current.isErr()) return current;
+      const ticket = current.unwrap();
+      if (ticket.revision !== expectedRevision) {
+        return toTicketError(TicketErrorKind.RevisionConflict, {
+          ticketId,
+          expected: expectedRevision,
+          actual: ticket.revision,
+        });
+      }
+      this.database.query('DELETE FROM ticket_bindings WHERE ticket_id = ?').run(ticketId);
+      this.insertBinding(ticketId, binding);
+      this.database
+        .query(
+          `UPDATE tickets
+           SET revision = revision + 1, updated_at = ?
+           WHERE id = ? AND revision = ?`,
+        )
+        .run(updatedAt, ticketId, expectedRevision);
       return this.loadTicketUnsafe(ticketId);
     });
   }

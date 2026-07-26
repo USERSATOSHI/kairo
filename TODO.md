@@ -354,10 +354,12 @@ Status: **Complete** (accepted 2026-07-26)
 
 ### T5 — Ticket migration
 
-- [ ] Durable local-to-GitHub migration
-- [ ] Durable local-to-Forgejo migration
-- [ ] Remote verification and duplicate prevention
-- [ ] Interruption and resume coverage
+Status: **Complete** (accepted 2026-07-26)
+
+- [x] Durable local-to-GitHub migration
+- [x] Durable local-to-Forgejo migration
+- [x] Remote verification and duplicate prevention
+- [x] Interruption and resume coverage
 
 ### T6 — Ticket UI
 

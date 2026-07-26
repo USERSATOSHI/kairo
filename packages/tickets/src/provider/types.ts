@@ -32,6 +32,7 @@ export interface ProviderTicket {
   readonly binding: TicketBinding;
   readonly title: string;
   readonly description: string;
+  readonly marker?: string;
   readonly status: Extract<TicketStatus, 'backlog' | 'done'>;
   readonly labels: readonly string[];
   readonly assignees: readonly string[];
@@ -59,6 +60,10 @@ export interface TicketProviderCapabilities {
 }
 
 export interface ProviderCreateTicketInput extends CreateTicketInput {
+  /**
+   * Durable identity embedded in provider-visible content so an interrupted
+   * create can be rediscovered before Kairo retries it.
+   */
   readonly marker?: string;
   readonly milestone?: string;
 }

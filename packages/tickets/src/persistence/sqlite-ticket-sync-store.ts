@@ -4,13 +4,19 @@ import { safeCall, type Result } from '@usersatoshi/results';
 
 import type { TicketError } from '../errors.ts';
 import { TicketErrorKind, toErr } from '../errors.ts';
-import type { ForgejoMetadataStore, TicketSyncStore } from '../integration/ports.ts';
+import type {
+  ForgejoMetadataStore,
+  TicketMigrationStore,
+  TicketSyncStore,
+} from '../integration/ports.ts';
 import type {
   ExternalTicketEvent,
   ForgejoInstanceMetadata,
+  TicketMigration,
   TicketSyncState,
 } from '../integration/types.ts';
-import type { TicketProviderCapabilities } from '../provider/types.ts';
+import type { TicketBinding, TicketStatus } from '../domain/types.ts';
+import type { ProviderTicket, TicketProviderCapabilities } from '../provider/types.ts';
 
 interface SyncStateRow {
   readonly ticket_id: string;
@@ -29,8 +35,150 @@ interface ForgejoMetadataRow {
   readonly last_checked_at: string;
 }
 
+interface MigrationRow {
+  readonly state_json: string;
+}
+
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function parseStringArray(value: unknown): readonly string[] | undefined {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+    ? value
+    : undefined;
+}
+
+function parseBinding(value: unknown): TicketBinding | undefined {
+  if (!isRecord(value) || typeof value.kind !== 'string') return undefined;
+  if (value.kind === 'local') return { kind: 'local' };
+  if (
+    (value.kind !== 'github' && value.kind !== 'forgejo') ||
+    typeof value.owner !== 'string' ||
+    typeof value.repository !== 'string' ||
+    typeof value.issueNumber !== 'number' ||
+    typeof value.externalUrl !== 'string'
+  ) {
+    return undefined;
+  }
+  const revision =
+    typeof value.lastSyncedRevision === 'string'
+      ? { lastSyncedRevision: value.lastSyncedRevision }
+      : {};
+  return value.kind === 'github'
+    ? {
+        kind: value.kind,
+        owner: value.owner,
+        repository: value.repository,
+        issueNumber: value.issueNumber,
+        externalUrl: value.externalUrl,
+        ...revision,
+      }
+    : typeof value.instanceUrl === 'string'
+      ? {
+          kind: value.kind,
+          instanceUrl: value.instanceUrl,
+          owner: value.owner,
+          repository: value.repository,
+          issueNumber: value.issueNumber,
+          externalUrl: value.externalUrl,
+          ...revision,
+        }
+      : undefined;
+}
+
+function parseProviderTicket(value: unknown): ProviderTicket | undefined {
+  if (!isRecord(value)) return undefined;
+  const binding = parseBinding(value.binding);
+  const labels = parseStringArray(value.labels);
+  const assignees = parseStringArray(value.assignees);
+  if (
+    !binding ||
+    binding.kind === 'local' ||
+    typeof value.title !== 'string' ||
+    typeof value.description !== 'string' ||
+    (value.status !== 'backlog' && value.status !== 'done') ||
+    !labels ||
+    !assignees ||
+    typeof value.revision !== 'string' ||
+    typeof value.updatedAt !== 'string'
+  ) {
+    return undefined;
+  }
+  return {
+    binding,
+    title: value.title,
+    description: value.description,
+    ...(typeof value.marker === 'string' ? { marker: value.marker } : {}),
+    status: value.status,
+    labels,
+    assignees,
+    ...(typeof value.milestone === 'string' ? { milestone: value.milestone } : {}),
+    revision: value.revision,
+    updatedAt: value.updatedAt,
+  };
+}
+
+function isTicketStatus(value: unknown): value is TicketStatus {
+  return (
+    value === 'backlog' ||
+    value === 'ready' ||
+    value === 'blocked' ||
+    value === 'done' ||
+    value === 'cancelled'
+  );
+}
+
+function parseMigration(value: string): TicketMigration {
+  const parsed: unknown = JSON.parse(value);
+  if (!isRecord(parsed) || !isRecord(parsed.snapshot)) {
+    throw new Error('Stored ticket migration is malformed');
+  }
+  const labels = parseStringArray(parsed.snapshot.labels);
+  const assignees = parseStringArray(parsed.snapshot.assignees);
+  const remoteTicket =
+    parsed.remoteTicket === undefined ? undefined : parseProviderTicket(parsed.remoteTicket);
+  if (
+    typeof parsed.ticketId !== 'string' ||
+    (parsed.targetProvider !== 'github' && parsed.targetProvider !== 'forgejo') ||
+    typeof parsed.projectId !== 'string' ||
+    typeof parsed.marker !== 'string' ||
+    (parsed.stage !== 'prepared' &&
+      parsed.stage !== 'remote_created' &&
+      parsed.stage !== 'verified' &&
+      parsed.stage !== 'completed') ||
+    typeof parsed.snapshot.revision !== 'number' ||
+    typeof parsed.snapshot.title !== 'string' ||
+    typeof parsed.snapshot.description !== 'string' ||
+    !isTicketStatus(parsed.snapshot.status) ||
+    !labels ||
+    !assignees ||
+    (parsed.remoteTicket !== undefined && !remoteTicket) ||
+    (parsed.lastError !== undefined && typeof parsed.lastError !== 'string') ||
+    typeof parsed.createdAt !== 'string' ||
+    typeof parsed.updatedAt !== 'string'
+  ) {
+    throw new Error('Stored ticket migration is malformed');
+  }
+  return {
+    ticketId: parsed.ticketId,
+    targetProvider: parsed.targetProvider,
+    projectId: parsed.projectId,
+    marker: parsed.marker,
+    stage: parsed.stage,
+    snapshot: {
+      revision: parsed.snapshot.revision,
+      title: parsed.snapshot.title,
+      description: parsed.snapshot.description,
+      status: parsed.snapshot.status,
+      labels,
+      assignees,
+    },
+    ...(remoteTicket === undefined ? {} : { remoteTicket }),
+    ...(typeof parsed.lastError === 'string' ? { lastError: parsed.lastError } : {}),
+    createdAt: parsed.createdAt,
+    updatedAt: parsed.updatedAt,
+  };
 }
 
 function parseCapabilities(value: string): TicketProviderCapabilities {
@@ -65,7 +213,9 @@ function databaseError(operation: string, error: unknown): TicketError {
   });
 }
 
-export class SqliteTicketSyncStore implements TicketSyncStore, ForgejoMetadataStore {
+export class SqliteTicketSyncStore
+  implements ForgejoMetadataStore, TicketMigrationStore, TicketSyncStore
+{
   private readonly database: Database;
 
   constructor(path: string) {
@@ -115,6 +265,16 @@ export class SqliteTicketSyncStore implements TicketSyncStore, ForgejoMetadataSt
             api_version TEXT,
             capabilities_json TEXT NOT NULL,
             last_checked_at TEXT NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS ticket_migrations (
+            ticket_id TEXT PRIMARY KEY,
+            target_provider TEXT NOT NULL CHECK (target_provider IN ('github', 'forgejo')),
+            stage TEXT NOT NULL CHECK (
+              stage IN ('prepared', 'remote_created', 'verified', 'completed')
+            ),
+            state_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE
           );
         `);
       },
@@ -277,6 +437,46 @@ export class SqliteTicketSyncStore implements TicketSyncStore, ForgejoMetadataSt
         };
       },
       (error) => databaseError('getForgejoMetadata', error),
+    );
+  }
+
+  getMigration(ticketId: string): Result<TicketMigration | undefined, TicketError> {
+    return safeCall(
+      () => {
+        const row = this.database
+          .query<MigrationRow, [string]>(
+            'SELECT state_json FROM ticket_migrations WHERE ticket_id = ?',
+          )
+          .get(ticketId);
+        return row ? parseMigration(row.state_json) : undefined;
+      },
+      (error) => databaseError('getTicketMigration', error),
+    );
+  }
+
+  saveMigration(migration: TicketMigration): Result<void, TicketError> {
+    return safeCall(
+      () => {
+        this.database
+          .query(
+            `INSERT INTO ticket_migrations (
+              ticket_id, target_provider, stage, state_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(ticket_id) DO UPDATE SET
+              target_provider = excluded.target_provider,
+              stage = excluded.stage,
+              state_json = excluded.state_json,
+              updated_at = excluded.updated_at`,
+          )
+          .run(
+            migration.ticketId,
+            migration.targetProvider,
+            migration.stage,
+            JSON.stringify(migration),
+            migration.updatedAt,
+          );
+      },
+      (error) => databaseError('saveTicketMigration', error),
     );
   }
 

@@ -7,6 +7,7 @@ import type {
   ForgejoInstanceMetadata,
   TicketRunLink,
   TicketRunView,
+  TicketMigration,
   TicketSnapshot,
   TicketSyncState,
 } from './types.ts';
@@ -44,6 +45,11 @@ export interface ForgejoMetadataStore {
   getForgejoMetadata(instanceUrl: string): Result<ForgejoInstanceMetadata | undefined, TicketError>;
 }
 
+export interface TicketMigrationStore {
+  getMigration(ticketId: TicketId): Result<TicketMigration | undefined, TicketError>;
+  saveMigration(migration: TicketMigration): Result<void, TicketError>;
+}
+
 export interface TicketRunQuery {
   get(runId: string): Result<TicketRunView | undefined, TicketError>;
 }
@@ -67,6 +73,7 @@ export interface ActiveRunTicketCommander {
 export interface TicketBindingWriter {
   setBinding(
     ticketId: TicketId,
+    expectedRevision: number,
     binding: TicketBinding,
     updatedAt: string,
   ): Result<Ticket, TicketError>;

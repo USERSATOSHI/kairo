@@ -23,12 +23,13 @@ interface FakeForgejo {
 function issue(
   state: 'open' | 'closed' = 'open',
   updatedAt = '2026-07-26T14:00:00Z',
+  description = 'Provider-owned description',
 ): Record<string, unknown> {
   return {
     id: 100,
     number: 7,
     title: 'Forgejo ticket',
-    body: 'Provider-owned description',
+    body: description,
     state,
     html_url: 'https://forgejo.test/acme/kairo/issues/7',
     updated_at: updatedAt,
@@ -95,7 +96,8 @@ function fakeForgejo(): FakeForgejo {
         return Response.json([issue()]);
       }
       const state = isRecord(body) && body.state === 'closed' ? 'closed' : 'open';
-      return new Response(JSON.stringify(issue(state)), {
+      const description = isRecord(body) && typeof body.body === 'string' ? body.body : undefined;
+      return new Response(JSON.stringify(issue(state, undefined, description)), {
         status: method === 'POST' ? 201 : 200,
       });
     },
@@ -139,6 +141,8 @@ describe('T4 Forgejo ticket provider', () => {
     });
     expect(created.unwrap()).toMatchObject({
       title: 'Forgejo ticket',
+      description: 'Provider-owned description',
+      marker: 'kairo-ticket:ticket-1',
       labels: ['ticket'],
       assignees: ['satoshi'],
       milestone: 'T4',

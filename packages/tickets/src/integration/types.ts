@@ -102,3 +102,27 @@ export interface ForgejoInstanceMetadata {
   readonly capabilities: import('../provider/types.ts').TicketProviderCapabilities;
   readonly lastCheckedAt: string;
 }
+
+export type TicketMigrationStage = 'prepared' | 'remote_created' | 'verified' | 'completed';
+
+export interface TicketMigrationSnapshot {
+  readonly revision: number;
+  readonly title: string;
+  readonly description: string;
+  readonly status: Ticket['status'];
+  readonly labels: readonly string[];
+  readonly assignees: readonly string[];
+}
+
+export interface TicketMigration {
+  readonly ticketId: TicketId;
+  readonly targetProvider: Extract<TicketBinding['kind'], 'github' | 'forgejo'>;
+  readonly projectId: ProjectId;
+  readonly marker: string;
+  readonly stage: TicketMigrationStage;
+  readonly snapshot: TicketMigrationSnapshot;
+  readonly remoteTicket?: import('../provider/types.ts').ProviderTicket;
+  readonly lastError?: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
