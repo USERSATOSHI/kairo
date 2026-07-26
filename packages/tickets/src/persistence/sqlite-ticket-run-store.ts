@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite';
 
-import { safeCall, type Result } from '@usersatoshi/results';
+import { err, ok, safeCall, type Result } from '@usersatoshi/results';
 
 import type { TicketError } from '../errors.ts';
 import { TicketErrorKind, toErr } from '../errors.ts';
@@ -36,12 +36,26 @@ function databaseError(operation: string, error: unknown): TicketError {
   });
 }
 
-function stringArray(serialized: string): readonly string[] {
-  const parsed: unknown = JSON.parse(serialized);
+function stringArray(serialized: string, entity: string): Result<readonly string[], TicketError> {
+  const decoded = safeCall(
+    (): unknown => JSON.parse(serialized),
+    () =>
+      toErr(TicketErrorKind.CorruptData, {
+        entity,
+        reason: 'value is not valid JSON',
+      }),
+  );
+  if (decoded.isErr()) return decoded;
+  const parsed = decoded.unwrap();
   if (!Array.isArray(parsed) || !parsed.every((value) => typeof value === 'string')) {
-    throw new Error('Ticket snapshot string collection is malformed');
+    return err(
+      toErr(TicketErrorKind.CorruptData, {
+        entity,
+        reason: 'value is not a string array',
+      }),
+    );
   }
-  return parsed;
+  return ok(parsed);
 }
 
 export class SqliteTicketRunStore implements TicketRunStore {
@@ -136,9 +150,10 @@ export class SqliteTicketRunStore implements TicketRunStore {
   }
 
   listSnapshots(ticketId: string): Result<readonly TicketSnapshot[], TicketError> {
-    return safeCall(
-      () =>
-        this.database
+    const loaded = safeCall(
+      () => {
+        const snapshots: TicketSnapshot[] = [];
+        const rows = this.database
           .query<SnapshotRow, [string]>(
             `SELECT id, run_id, ticket_id, project_id, title, description, priority,
                     labels_json, assignees_json, provider, provider_revision, captured_at
@@ -146,8 +161,13 @@ export class SqliteTicketRunStore implements TicketRunStore {
              WHERE ticket_id = ?
              ORDER BY captured_at, id`,
           )
-          .all(ticketId)
-          .map((row) => ({
+          .all(ticketId);
+        for (const row of rows) {
+          const labels = stringArray(row.labels_json, `ticket_snapshot:${row.id}:labels`);
+          if (labels.isErr()) return labels;
+          const assignees = stringArray(row.assignees_json, `ticket_snapshot:${row.id}:assignees`);
+          if (assignees.isErr()) return assignees;
+          snapshots.push({
             id: row.id,
             runId: row.run_id,
             ticketId: row.ticket_id,
@@ -155,14 +175,18 @@ export class SqliteTicketRunStore implements TicketRunStore {
             title: row.title,
             description: row.description,
             ...(row.priority === null ? {} : { priority: row.priority }),
-            labels: stringArray(row.labels_json),
-            assignees: stringArray(row.assignees_json),
+            labels: labels.unwrap(),
+            assignees: assignees.unwrap(),
             provider: row.provider,
             providerRevision: row.provider_revision,
             capturedAt: row.captured_at,
-          })),
+          });
+        }
+        return ok(snapshots);
+      },
       (error) => databaseError('listSnapshots', error),
     );
+    return loaded.isErr() ? loaded : loaded.unwrap();
   }
 
   listRunLinks(ticketId: string): Result<readonly TicketRunLink[], TicketError> {

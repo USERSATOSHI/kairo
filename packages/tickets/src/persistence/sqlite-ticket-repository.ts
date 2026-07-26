@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite';
 
-import { ok, safeCall, type Result } from '@usersatoshi/results';
+import { err, ok, safeCall, type Result } from '@usersatoshi/results';
 
 import type { TicketRepository } from '../application/ports.ts';
 import type {
@@ -69,18 +69,22 @@ function databaseError(operation: string, error: unknown): TicketError {
   });
 }
 
-function bindingFromRow(row: BindingRow): TicketBinding {
-  if (row.provider === 'local') return { kind: 'local' };
+function corruptData(entity: string, reason: string): TicketError {
+  return toErr(TicketErrorKind.CorruptData, { entity, reason });
+}
+
+function bindingFromRow(row: BindingRow, ticketId: string): Result<TicketBinding, TicketError> {
+  if (row.provider === 'local') return ok({ kind: 'local' });
   if (
     row.owner === null ||
     row.repository === null ||
     row.issue_number === null ||
     row.external_url === null
   ) {
-    throw new Error('Provider ticket binding is incomplete');
+    return err(corruptData(`ticket_binding:${ticketId}`, 'provider binding is incomplete'));
   }
   if (row.provider === 'github') {
-    return {
+    return ok({
       kind: 'github',
       owner: row.owner,
       repository: row.repository,
@@ -89,12 +93,12 @@ function bindingFromRow(row: BindingRow): TicketBinding {
       ...(row.last_synced_revision === null
         ? {}
         : { lastSyncedRevision: row.last_synced_revision }),
-    };
+    });
   }
   if (row.instance_url === null) {
-    throw new Error('Forgejo ticket binding is missing its instance URL');
+    return err(corruptData(`ticket_binding:${ticketId}`, 'Forgejo binding has no instance URL'));
   }
-  return {
+  return ok({
     kind: 'forgejo',
     instanceUrl: row.instance_url,
     owner: row.owner,
@@ -102,23 +106,31 @@ function bindingFromRow(row: BindingRow): TicketBinding {
     issueNumber: row.issue_number,
     externalUrl: row.external_url,
     ...(row.last_synced_revision === null ? {} : { lastSyncedRevision: row.last_synced_revision }),
-  };
+  });
 }
 
-function commentBinding(serialized: string): TicketCommentBinding {
-  const parsed: unknown = JSON.parse(serialized);
+function commentBinding(
+  serialized: string,
+  commentId: string,
+): Result<TicketCommentBinding, TicketError> {
+  const decoded = safeCall(
+    (): unknown => JSON.parse(serialized),
+    () => corruptData(`ticket_comment:${commentId}`, 'binding is not valid JSON'),
+  );
+  if (decoded.isErr()) return decoded;
+  const parsed = decoded.unwrap();
   if (parsed !== null && typeof parsed === 'object' && 'kind' in parsed) {
     const kind = parsed.kind;
-    if (kind === 'local') return { kind };
+    if (kind === 'local') return ok({ kind });
     if (
       (kind === 'github' || kind === 'forgejo') &&
       'externalId' in parsed &&
       typeof parsed.externalId === 'string'
     ) {
-      return { kind, externalId: parsed.externalId };
+      return ok({ kind, externalId: parsed.externalId });
     }
   }
-  throw new Error('Ticket comment binding is malformed');
+  return err(corruptData(`ticket_comment:${commentId}`, 'binding is malformed'));
 }
 
 /**
@@ -414,25 +426,29 @@ export class SqliteTicketRepository implements TicketRepository {
       () => {
         const ticket = this.loadTicketUnsafe(ticketId);
         if (ticket.isErr()) return ticket;
-        return ok(
-          this.database
-            .query<CommentRow, [string]>(
-              `SELECT id, ticket_id, author, body, binding_json, created_at, updated_at
-               FROM ticket_comments
-               WHERE ticket_id = ?
-               ORDER BY created_at, id`,
-            )
-            .all(ticketId)
-            .map((row) => ({
-              id: row.id,
-              ticketId: row.ticket_id,
-              author: row.author,
-              body: row.body,
-              binding: commentBinding(row.binding_json),
-              createdAt: row.created_at,
-              ...(row.updated_at === null ? {} : { updatedAt: row.updated_at }),
-            })),
-        );
+        const comments: TicketComment[] = [];
+        const rows = this.database
+          .query<CommentRow, [string]>(
+            `SELECT id, ticket_id, author, body, binding_json, created_at, updated_at
+             FROM ticket_comments
+             WHERE ticket_id = ?
+             ORDER BY created_at, id`,
+          )
+          .all(ticketId);
+        for (const row of rows) {
+          const binding = commentBinding(row.binding_json, row.id);
+          if (binding.isErr()) return binding;
+          comments.push({
+            id: row.id,
+            ticketId: row.ticket_id,
+            author: row.author,
+            body: row.body,
+            binding: binding.unwrap(),
+            createdAt: row.created_at,
+            ...(row.updated_at === null ? {} : { updatedAt: row.updated_at }),
+          });
+        }
+        return ok(comments);
       },
       (error) => databaseError('listComments', error),
     );
@@ -530,7 +546,11 @@ export class SqliteTicketRepository implements TicketRepository {
          WHERE ticket_id = ?`,
       )
       .get(ticketId);
-    if (!binding) throw new Error(`Ticket ${ticketId} has no binding`);
+    if (!binding) {
+      return err(corruptData(`ticket:${ticketId}`, 'ticket has no provider binding'));
+    }
+    const parsedBinding = bindingFromRow(binding, ticketId);
+    if (parsedBinding.isErr()) return parsedBinding;
     const labels = this.readValues('ticket_labels', 'label', ticketId);
     const assignees = this.readValues('ticket_assignees', 'assignee', ticketId);
     return ok({
@@ -542,7 +562,7 @@ export class SqliteTicketRepository implements TicketRepository {
       ...(row.priority === null ? {} : { priority: row.priority }),
       labels,
       assignees,
-      binding: bindingFromRow(binding),
+      binding: parsedBinding.unwrap(),
       revision: row.revision,
       createdAt: row.created_at,
       updatedAt: row.updated_at,

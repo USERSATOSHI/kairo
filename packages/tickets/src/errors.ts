@@ -8,6 +8,7 @@ export const enum TicketErrorKind {
   InvalidStatusTransition = 5,
   RelationshipConflict = 6,
   DatabaseFailure = 7,
+  CorruptData = 8,
 }
 
 export type TicketError =
@@ -46,6 +47,11 @@ export type TicketError =
       readonly kind: TicketErrorKind.DatabaseFailure;
       readonly operation: string;
       readonly message: string;
+    }
+  | {
+      readonly kind: TicketErrorKind.CorruptData;
+      readonly entity: string;
+      readonly reason: string;
     };
 
 export function toErr<K extends TicketError['kind']>(
