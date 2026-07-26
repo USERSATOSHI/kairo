@@ -14,6 +14,7 @@
     "@kairo/domain": "0.1.0",
     "@kairo/executors": "0.1.0",
     "@kairo/persistence-sqlite": "0.1.0",
+    "@kairo/tickets": "0.1.0",
     "@usersatoshi/results": "^1.0.0",
     "elysia": "^1.4.29"
   }

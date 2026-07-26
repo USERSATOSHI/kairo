@@ -325,12 +325,14 @@ Status: **Complete** (accepted 2026-07-26)
 
 ### T2 — Kairo run integration
 
-- [ ] Immutable ticket snapshots
-- [ ] Ticket-to-run links
-- [ ] Existing run-start application service integration
-- [ ] Active implementation-run uniqueness
-- [ ] Derived execution columns
-- [ ] Active-run ticket-change policy
+Status: **Complete** (accepted 2026-07-26)
+
+- [x] Immutable ticket snapshots
+- [x] Ticket-to-run links
+- [x] Existing run-start application service integration
+- [x] Active implementation-run uniqueness
+- [x] Derived execution columns
+- [x] Active-run ticket-change policy
 
 ### T3 — GitHub Issues
 

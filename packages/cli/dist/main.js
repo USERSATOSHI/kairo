@@ -23330,6 +23330,15 @@ class LocalArtifactContentReader {
     }
   }
 }
+// packages/tickets/src/domain/validation.ts
+var ticketStatuses = [
+  "backlog",
+  "ready",
+  "blocked",
+  "done",
+  "cancelled"
+];
+var ticketStatusValues = new Set(ticketStatuses);
 // packages/cli/src/create-adw.ts
 import { mkdir, mkdtemp, readFile as readFile3, readdir, rename, rm, stat as stat2, writeFile } from "fs/promises";
 import { basename, dirname, resolve as resolve3 } from "path";
@@ -23916,7 +23925,7 @@ class HarnessRegistry {
   }
 }
 // packages/sandbox-worktree/src/errors.ts
-function toErr4(kind, details) {
+function toErr5(kind, details) {
   return { kind, ...details };
 }
 // packages/sandbox-worktree/src/git-command-runner.ts
@@ -23943,7 +23952,7 @@ class GitCommandRunner {
         new Response(child.stderr).text()
       ]);
       return { exitCode, stdout, stderr };
-    }, (error) => toErr4(2 /* GitFailure */, {
+    }, (error) => toErr5(2 /* GitFailure */, {
       operation,
       exitCode: -1,
       message: messageFor2(error)
@@ -23952,7 +23961,7 @@ class GitCommandRunner {
       return executed;
     const output = executed.unwrap();
     if (output.exitCode !== 0) {
-      return err(toErr4(2 /* GitFailure */, {
+      return err(toErr5(2 /* GitFailure */, {
         operation,
         exitCode: output.exitCode,
         message: output.stderr.trim() || "Git process failed"
@@ -23979,7 +23988,7 @@ function messageFor3(error) {
   return error instanceof Error ? error.message : "Filesystem operation failed";
 }
 function filesystemError(operation, error) {
-  return toErr4(3 /* FilesystemFailure */, {
+  return toErr5(3 /* FilesystemFailure */, {
     operation,
     message: messageFor3(error),
     ...errorCode(error) ? { code: errorCode(error) } : {}
@@ -23989,7 +23998,7 @@ function filesystemCode(error) {
   return error.kind === 3 /* FilesystemFailure */ ? error.code : undefined;
 }
 function validateIdentifier(field, value) {
-  return identifierPattern.test(value) ? ok(undefined) : err(toErr4(1 /* InvalidIdentifier */, { field, value }));
+  return identifierPattern.test(value) ? ok(undefined) : err(toErr5(1 /* InvalidIdentifier */, { field, value }));
 }
 function isRegisteredRepository(value) {
   return isRecord9(value) && typeof value.repositoryId === "string" && typeof value.repositoryPath === "string" && typeof value.commonGitDirectory === "string";
@@ -24082,7 +24091,7 @@ class WorktreeSandboxProvider {
         return existing;
       const current = existing.unwrap();
       if (current) {
-        return current.repositoryPath === registration.repositoryPath && current.commonGitDirectory === registration.commonGitDirectory ? ok(current) : err(toErr4(4 /* RegistrationConflict */, { repositoryId }));
+        return current.repositoryPath === registration.repositoryPath && current.commonGitDirectory === registration.commonGitDirectory ? ok(current) : err(toErr5(4 /* RegistrationConflict */, { repositoryId }));
       }
       const written = await this.writeJsonAtomic(metadataPath, registration);
       return written.isErr() ? written : ok(registration);
@@ -24133,7 +24142,7 @@ class WorktreeSandboxProvider {
         return metadata;
       const recorded = metadata.unwrap();
       if (recorded && !sameWorktree(recorded, expected)) {
-        return err(toErr4(7 /* WorktreeConflict */, {
+        return err(toErr5(7 /* WorktreeConflict */, {
           runId,
           path: expected.path,
           reason: "recorded worktree identity does not match the request"
@@ -24194,7 +24203,7 @@ class WorktreeSandboxProvider {
     if (ready.isErr())
       return ready;
     if (!isCanonicalTimestamp(input.timestamp)) {
-      return err(toErr4(7 /* WorktreeConflict */, {
+      return err(toErr5(7 /* WorktreeConflict */, {
         runId: input.worktree.runId,
         path: input.worktree.path,
         reason: "commit timestamp must be a canonical ISO-8601 timestamp"
@@ -24217,7 +24226,7 @@ class WorktreeSandboxProvider {
         return tree;
       const actualTree = tree.unwrap().stdout.trim();
       if (actualTree !== input.expectedTree) {
-        return err(toErr4(10 /* TreeConflict */, {
+        return err(toErr5(10 /* TreeConflict */, {
           runId: input.worktree.runId,
           expected: input.expectedTree,
           received: actualTree
@@ -24246,7 +24255,7 @@ class WorktreeSandboxProvider {
         return ok({ commit: expectedCommit, recovered: true });
       }
       if (actualHead !== input.expectedHead) {
-        return err(toErr4(9 /* HeadConflict */, {
+        return err(toErr5(9 /* HeadConflict */, {
           runId: input.worktree.runId,
           expected: input.expectedHead,
           received: actualHead
@@ -24269,7 +24278,7 @@ class WorktreeSandboxProvider {
     if (ready.isErr())
       return ready;
     if (!/^kairo\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(branchName)) {
-      return err(toErr4(7 /* WorktreeConflict */, {
+      return err(toErr5(7 /* WorktreeConflict */, {
         runId: worktree.runId,
         path: worktree.path,
         reason: "delivery branch must use the kairo/<name> namespace"
@@ -24286,7 +24295,7 @@ class WorktreeSandboxProvider {
         `refs/heads/${branchName}`
       ]);
       if (current.isOk()) {
-        return current.unwrap().stdout.trim() === commit ? ok(undefined) : err(toErr4(9 /* HeadConflict */, {
+        return current.unwrap().stdout.trim() === commit ? ok(undefined) : err(toErr5(9 /* HeadConflict */, {
           runId: worktree.runId,
           expected: commit,
           received: current.unwrap().stdout.trim()
@@ -24356,7 +24365,7 @@ class WorktreeSandboxProvider {
           if (status2.isErr())
             return status2;
           if (status2.unwrap().stdout.length > 0) {
-            return err(toErr4(8 /* DirtyWorktree */, { runId: worktree.runId }));
+            return err(toErr5(8 /* DirtyWorktree */, { runId: worktree.runId }));
           }
         }
         const args = force ? ["worktree", "remove", "--force", worktree.path] : ["worktree", "remove", worktree.path];
@@ -24372,7 +24381,7 @@ class WorktreeSandboxProvider {
     });
   }
   validateReady() {
-    return this.initialized ? ok(undefined) : err(toErr4(0 /* NotInitialized */, {}));
+    return this.initialized ? ok(undefined) : err(toErr5(0 /* NotInitialized */, {}));
   }
   repositoryMetadataPath(repositoryId) {
     return resolve5(this.managementRoot, "repositories", `${repositoryId}.json`);
@@ -24394,7 +24403,7 @@ class WorktreeSandboxProvider {
     if (metadata.isErr())
       return metadata;
     const recorded = metadata.unwrap();
-    return recorded?.repositoryPath === repository.repositoryPath && recorded.commonGitDirectory === repository.commonGitDirectory ? ok(undefined) : err(toErr4(5 /* RepositoryMismatch */, {
+    return recorded?.repositoryPath === repository.repositoryPath && recorded.commonGitDirectory === repository.commonGitDirectory ? ok(undefined) : err(toErr5(5 /* RepositoryMismatch */, {
       repositoryId: repository.repositoryId,
       expected: recorded?.commonGitDirectory ?? "registered repository",
       received: repository.commonGitDirectory
@@ -24406,7 +24415,7 @@ class WorktreeSandboxProvider {
       return metadata;
     const recorded = metadata.unwrap();
     if (!recorded || !sameWorktree(recorded, worktree)) {
-      return err(toErr4(7 /* WorktreeConflict */, {
+      return err(toErr5(7 /* WorktreeConflict */, {
         runId: worktree.runId,
         path: worktree.path,
         reason: "worktree does not match its durable metadata"
@@ -24422,7 +24431,7 @@ class WorktreeSandboxProvider {
     if (common.isErr()) {
       const repaired = await this.git.run(this.repositoryPathFor(worktree), "repair interrupted worktree", ["worktree", "repair", worktree.path]);
       if (repaired.isErr()) {
-        return err(toErr4(7 /* WorktreeConflict */, {
+        return err(toErr5(7 /* WorktreeConflict */, {
           runId: worktree.runId,
           path: worktree.path,
           reason: "existing path is not a recoverable Git worktree"
@@ -24439,7 +24448,7 @@ class WorktreeSandboxProvider {
     if (commonPath.isErr())
       return commonPath;
     if (commonPath.unwrap() !== worktree.commonGitDirectory) {
-      return err(toErr4(5 /* RepositoryMismatch */, {
+      return err(toErr5(5 /* RepositoryMismatch */, {
         repositoryId: worktree.repositoryId,
         expected: worktree.commonGitDirectory,
         received: commonPath.unwrap()
@@ -24458,7 +24467,7 @@ class WorktreeSandboxProvider {
     if (mergeBase.isErr())
       return mergeBase;
     if (mergeBase.unwrap().stdout.trim() !== worktree.startingCommit) {
-      return err(toErr4(6 /* StartingCommitMismatch */, {
+      return err(toErr5(6 /* StartingCommitMismatch */, {
         runId: worktree.runId,
         startingCommit: worktree.startingCommit,
         head: head.unwrap().stdout.trim()
@@ -24528,7 +24537,7 @@ class WorktreeSandboxProvider {
       if (!reclaimed.unwrap())
         await delay(this.lockRetryMs);
     }
-    return err(toErr4(11 /* LockTimeout */, {
+    return err(toErr5(11 /* LockTimeout */, {
       repositoryId: repository.repositoryId
     }));
   }
@@ -24537,7 +24546,7 @@ class WorktreeSandboxProvider {
     if (text.isErr()) {
       return filesystemCode(text.error) === "ENOENT" ? ok(true) : text;
     }
-    const parsed = safeCall(() => JSON.parse(text.unwrap()), () => toErr4(12 /* CorruptMetadata */, { path }));
+    const parsed = safeCall(() => JSON.parse(text.unwrap()), () => toErr5(12 /* CorruptMetadata */, { path }));
     const record = parsed.isOk() ? parsed.unwrap() : null;
     if (isLockRecord(record) && this.processExists(record.processId)) {
       return ok(false);
@@ -24567,12 +24576,12 @@ class WorktreeSandboxProvider {
     if (text.isErr()) {
       return filesystemCode(text.error) === "ENOENT" ? ok(undefined) : text;
     }
-    const parsed = safeCall(() => JSON.parse(text.unwrap()), () => toErr4(12 /* CorruptMetadata */, { path: lock.path }));
+    const parsed = safeCall(() => JSON.parse(text.unwrap()), () => toErr5(12 /* CorruptMetadata */, { path: lock.path }));
     if (parsed.isErr())
       return parsed;
     const record = parsed.unwrap();
     if (!isLockRecord(record) || record.token !== lock.token) {
-      return err(toErr4(12 /* CorruptMetadata */, { path: lock.path }));
+      return err(toErr5(12 /* CorruptMetadata */, { path: lock.path }));
     }
     return this.removeFileIfPresent(lock.path, "release repository lock");
   }
@@ -24595,11 +24604,11 @@ class WorktreeSandboxProvider {
     if (text.isErr()) {
       return filesystemCode(text.error) === "ENOENT" ? ok(null) : text;
     }
-    const parsed = safeCall(() => JSON.parse(text.unwrap()), () => toErr4(12 /* CorruptMetadata */, { path }));
+    const parsed = safeCall(() => JSON.parse(text.unwrap()), () => toErr5(12 /* CorruptMetadata */, { path }));
     if (parsed.isErr())
       return parsed;
     const value = parsed.unwrap();
-    return validate2(value) ? ok(value) : err(toErr4(12 /* CorruptMetadata */, { path }));
+    return validate2(value) ? ok(value) : err(toErr5(12 /* CorruptMetadata */, { path }));
   }
   async writeJsonAtomic(path, value) {
     return this.writeAtomic(path, `${JSON.stringify(value, null, 2)}
