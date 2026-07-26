@@ -1,0 +1,9 @@
+{
+  "id": "{{id}}",
+  "name": "{{name}}",
+  "version": "1.0.0",
+  "description": "Reproduction-led bug-fix workflow.",
+  "kairo": ">=0.1.0",
+  "entrypoint": "./kairo.adw.ts",
+  "permissions": ["repository.read", "repository.write", "terminal.execute"]
+}

@@ -1,0 +1,26 @@
+{
+  "name": "@kairo/cli",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "bin": {
+    "kairo": "./src/main.ts"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@kairo/adw": "0.1.0",
+    "@kairo/api": "0.1.0",
+    "@kairo/api-contracts": "0.1.0",
+    "@kairo/domain": "0.1.0",
+    "@kairo/executors": "0.1.0",
+    "@kairo/harnesses": "0.1.0",
+    "@kairo/persistence-sqlite": "0.1.0",
+    "@kairo/sandbox-worktree": "0.1.0",
+    "@usersatoshi/results": "^1.0.0"
+  }
+}

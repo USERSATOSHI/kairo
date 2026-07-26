@@ -1,0 +1,9 @@
+{
+  "id": "feature-simulation",
+  "name": "Feature Simulation",
+  "version": "1.0.0",
+  "description": "Compiles resolved prompts, schemas, and subworkflows.",
+  "kairo": ">=0.1.0",
+  "entrypoint": "./kairo.adw.ts",
+  "permissions": ["repository.read", "terminal.execute"]
+}

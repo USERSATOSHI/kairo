@@ -1,0 +1,251 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, describe, expect, test } from 'bun:test';
+
+import { compileWorkflow } from '@kairo/adw';
+import { createKairoApp, LocalArtifactContentReader, type ArtifactContentReader } from '@kairo/api';
+import type { ArtifactReference, WorkflowSourceBundle } from '@kairo/domain';
+import type { CommandExecution, CommandRunner, CommandRunnerError } from '@kairo/executors';
+import { RunCoordinator } from '@kairo/executors';
+import { LocalArtifactWriter } from '@kairo/harnesses';
+import { SqliteEventStore } from '@kairo/persistence-sqlite';
+import { ok, type Result } from '@usersatoshi/results';
+
+class UnusedCommandRunner implements CommandRunner {
+  execute(): Promise<Result<CommandExecution, CommandRunnerError>> {
+    throw new Error('The approval-only API fixture must not execute commands');
+  }
+}
+
+const artifactReference: ArtifactReference = {
+  id: 'delivery.diff',
+  kind: 'git_diff',
+  mediaType: 'text/x-diff',
+  checksum: `sha256:${'1'.repeat(64)}`,
+  size: 18,
+};
+
+function approvalWorkflow(): WorkflowSourceBundle {
+  return {
+    manifest: { id: 'api-approval', version: '1.0.0' },
+    semanticVersions: { compiler: '0.1.0', ir: '1', expressions: '1' },
+    entryNodeId: 'approve',
+    nodes: [
+      { id: 'approve', type: 'approval', title: 'Ship the change' },
+      { id: 'complete', type: 'complete' },
+      { id: 'failed', type: 'complete', result: 'failed' },
+    ],
+    transitions: [
+      {
+        id: 'approve.approved.complete',
+        from: { nodeId: 'approve', outcome: 'approved' },
+        toNodeId: 'complete',
+      },
+      {
+        id: 'approve.rejected.failed',
+        from: { nodeId: 'approve', outcome: 'rejected' },
+        toNodeId: 'failed',
+      },
+    ],
+    counterLimits: {},
+  };
+}
+
+function responseJson(response: Response): Promise<unknown> {
+  return response.json();
+}
+
+const disposals: (() => void)[] = [];
+
+afterEach(() => {
+  while (disposals.length > 0) disposals.pop()?.();
+});
+
+describe('M6 observable Elysia and web MVP', () => {
+  test('local artifact reads verify durable size and checksum metadata', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'kairo-m6-artifact-'));
+    disposals.push(() => rmSync(directory, { recursive: true, force: true }));
+    const writer = new LocalArtifactWriter(directory);
+    const artifact = (
+      await writer.write({
+        runId: 'artifact-run',
+        invocationSequence: 2,
+        attemptNumber: 1,
+        kind: 'harness_transcript',
+        mediaType: 'application/x-ndjson',
+        content: '{"event":"complete"}\n',
+      })
+    ).unwrap();
+    const reader = new LocalArtifactContentReader(directory);
+
+    expect((await reader.read('artifact-run', artifact, 2, 1)).unwrap().content).toBe(
+      '{"event":"complete"}\n',
+    );
+    expect(
+      (
+        await reader.read(
+          'artifact-run',
+          { ...artifact, checksum: `sha256:${'0'.repeat(64)}` },
+          2,
+          1,
+        )
+      ).isErr(),
+    ).toBe(true);
+  });
+
+  test('factory exposes durable state and decides an approval without opening a port', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'kairo-m6-api-'));
+    const store = new SqliteEventStore(join(directory, 'runs.sqlite'));
+    const initialized = store.initialize();
+    if (initialized.isErr()) throw new Error(JSON.stringify(initialized.error));
+    disposals.push(() => {
+      store.dispose();
+      rmSync(directory, { recursive: true, force: true });
+    });
+
+    const compiled = compileWorkflow(approvalWorkflow()).unwrap();
+    const coordinator = new RunCoordinator(store, new UnusedCommandRunner());
+    coordinator
+      .createRun({
+        runId: 'observable-run',
+        artifact: compiled,
+        startingCommit: 'abc123',
+        configuration: {},
+        idempotencyKey: 'create',
+      })
+      .unwrap();
+    await coordinator.advance('observable-run');
+    coordinator.publishRunArtifact('observable-run', artifactReference, 'publish-diff').unwrap();
+    await coordinator.advance('observable-run');
+
+    const reader: ArtifactContentReader = {
+      read() {
+        return Promise.resolve(
+          ok({
+            mediaType: 'text/x-diff',
+            content: '+ observable diff',
+          }),
+        );
+      },
+    };
+    const app = createKairoApp({
+      runs: store,
+      coordinator,
+      artifacts: reader,
+      repositories: {
+        list: () =>
+          Promise.resolve([
+            {
+              id: 'kairo',
+              path: '/repositories/kairo',
+              startingCommit: 'abc123',
+            },
+          ]),
+      },
+    });
+
+    const runsResponse = await app.handle(new Request('http://kairo.test/runs'));
+    expect(runsResponse.status).toBe(200);
+    expect(await responseJson(runsResponse)).toEqual([
+      expect.objectContaining({
+        id: 'observable-run',
+        status: 'waiting_for_approval',
+        pendingApprovalCount: 1,
+      }),
+    ]);
+
+    const runResponse = await app.handle(new Request('http://kairo.test/runs/observable-run'));
+    expect(await responseJson(runResponse)).toEqual(
+      expect.objectContaining({
+        nodes: expect.arrayContaining([
+          expect.objectContaining({ id: 'approve', latestState: 'waiting_for_approval' }),
+        ]),
+        edges: expect.arrayContaining([
+          expect.objectContaining({ id: 'approve.approved.complete' }),
+        ]),
+      }),
+    );
+
+    const artifactResponse = await app.handle(
+      new Request('http://kairo.test/runs/observable-run/artifacts/delivery.diff'),
+    );
+    expect(await responseJson(artifactResponse)).toEqual(
+      expect.objectContaining({ id: 'delivery.diff', content: '+ observable diff' }),
+    );
+
+    const approvalResponse = await app.handle(
+      new Request('http://kairo.test/runs/observable-run/approvals/1', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          decision: 'grant',
+          actor: 'user:test',
+          reason: 'The recorded diff is ready',
+          idempotencyKey: 'web:approval:1',
+        }),
+      }),
+    );
+    expect(approvalResponse.status).toBe(200);
+    expect(await responseJson(approvalResponse)).toEqual({
+      runId: 'observable-run',
+      invocationSequence: 1,
+      status: 'running',
+    });
+    expect(store.loadRun('observable-run').unwrap().events.at(-1)?.type).toBe('approval.granted');
+
+    expect(
+      await responseJson(await app.handle(new Request('http://kairo.test/workflows'))),
+    ).toEqual([expect.objectContaining({ id: 'api-approval', nodeCount: 3 })]);
+    expect(
+      await responseJson(await app.handle(new Request('http://kairo.test/repositories'))),
+    ).toEqual([expect.objectContaining({ id: 'kairo' })]);
+  });
+
+  test('event reconnect replays only sequences after the client cursor', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'kairo-m6-events-'));
+    const store = new SqliteEventStore(join(directory, 'runs.sqlite'));
+    const initialized = store.initialize();
+    if (initialized.isErr()) throw new Error(JSON.stringify(initialized.error));
+    disposals.push(() => {
+      store.dispose();
+      rmSync(directory, { recursive: true, force: true });
+    });
+    const coordinator = new RunCoordinator(store, new UnusedCommandRunner());
+    coordinator
+      .createRun({
+        runId: 'reconnect-run',
+        artifact: compileWorkflow(approvalWorkflow()).unwrap(),
+        startingCommit: 'abc123',
+        configuration: {},
+        idempotencyKey: 'create',
+      })
+      .unwrap();
+    await coordinator.advance('reconnect-run');
+    await coordinator.advance('reconnect-run');
+    const app = createKairoApp({ runs: store, coordinator });
+
+    const response = await app.handle(
+      new Request('http://kairo.test/runs/reconnect-run/events', {
+        headers: { 'last-event-id': '1' },
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/event-stream');
+    const stream = await response.text();
+    expect(stream).not.toContain('id: 1\n');
+    expect(stream).toContain('id: 2\n');
+    expect(stream).toContain('event: approval.requested');
+  });
+
+  test('domain and runtime remain free of Elysia imports', async () => {
+    const files = [
+      ...(await Array.fromAsync(new Bun.Glob('packages/domain/src/**/*.ts').scan('.'))),
+      ...(await Array.fromAsync(new Bun.Glob('packages/runtime/src/**/*.ts').scan('.'))),
+    ];
+    for (const file of files) {
+      expect(await Bun.file(file).text()).not.toContain('elysia');
+    }
+  });
+});

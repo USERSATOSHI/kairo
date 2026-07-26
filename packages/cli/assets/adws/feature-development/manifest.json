@@ -1,0 +1,9 @@
+{
+  "id": "feature-development",
+  "name": "Feature Development",
+  "version": "1.0.0",
+  "description": "Bounded approval-gated local feature development.",
+  "kairo": ">=0.1.0",
+  "entrypoint": "./kairo.adw.ts",
+  "permissions": ["repository.read", "repository.write", "terminal.execute"]
+}

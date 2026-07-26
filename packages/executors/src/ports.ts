@@ -1,0 +1,187 @@
+import type {
+  ArtifactReference,
+  CompiledWorkflowArtifact,
+  JsonValue,
+  RunEvent,
+  RunEventInput,
+  RunState,
+} from '@kairo/domain';
+import type { Result } from '@usersatoshi/results';
+
+export const enum RunStoreErrorKind {
+  DatabaseFailure = 0,
+  RunNotFound = 1,
+  RunAlreadyExists = 2,
+  EventSequenceConflict = 3,
+  IdempotencyConflict = 4,
+  InvalidEvent = 5,
+  CorruptData = 6,
+  InvalidArtifact = 7,
+}
+
+export type RunStoreError =
+  | {
+      readonly kind: RunStoreErrorKind.DatabaseFailure;
+      readonly operation: string;
+      readonly message: string;
+    }
+  | {
+      readonly kind: RunStoreErrorKind.RunNotFound;
+      readonly runId: string;
+    }
+  | {
+      readonly kind: RunStoreErrorKind.RunAlreadyExists;
+      readonly runId: string;
+    }
+  | {
+      readonly kind: RunStoreErrorKind.EventSequenceConflict;
+      readonly runId: string;
+      readonly expected: number;
+      readonly received: number;
+    }
+  | {
+      readonly kind: RunStoreErrorKind.IdempotencyConflict;
+      readonly runId: string;
+      readonly idempotencyKey: string;
+    }
+  | {
+      readonly kind: RunStoreErrorKind.InvalidEvent;
+      readonly runId: string;
+      readonly error: JsonValue;
+    }
+  | {
+      readonly kind: RunStoreErrorKind.CorruptData;
+      readonly runId: string;
+      readonly reason: string;
+    }
+  | {
+      readonly kind: RunStoreErrorKind.InvalidArtifact;
+      readonly runId: string;
+      readonly reason: string;
+    };
+
+export interface RunAggregate {
+  readonly runId: string;
+  readonly artifact: CompiledWorkflowArtifact;
+  readonly events: readonly RunEvent[];
+  readonly state: RunState;
+  readonly nextEventSequence: number;
+}
+
+export interface CreateRunInput {
+  readonly runId: string;
+  readonly artifact: CompiledWorkflowArtifact;
+  readonly startingCommit: string;
+  readonly configuration: Readonly<Record<string, JsonValue>>;
+  readonly startedAt?: string;
+  readonly idempotencyKey: string;
+}
+
+export interface AppendRunEventInput {
+  readonly runId: string;
+  readonly expectedSequence: number;
+  readonly idempotencyKey: string;
+  readonly event: RunEventInput;
+}
+
+export interface RunStore {
+  createRun(input: CreateRunInput): Result<RunAggregate, RunStoreError>;
+  loadRun(runId: string): Result<RunAggregate, RunStoreError>;
+  appendEvent(input: AppendRunEventInput): Result<RunAggregate, RunStoreError>;
+}
+
+export const enum CommandRunnerErrorKind {
+  ProcessFailure = 0,
+}
+
+export interface CommandRunnerError {
+  readonly kind: CommandRunnerErrorKind.ProcessFailure;
+  readonly message: string;
+}
+
+export interface CommandExecution {
+  readonly outcome: string;
+  readonly output: JsonValue;
+}
+
+export interface CommandRunner {
+  execute(command: string): Promise<Result<CommandExecution, CommandRunnerError>>;
+}
+
+export interface Clock {
+  now(): string;
+}
+
+export const enum HarnessErrorKind {
+  Unavailable = 0,
+  ProcessFailure = 1,
+  InvalidResponse = 2,
+  ResumeUnsupported = 3,
+}
+
+export type HarnessError =
+  | {
+      readonly kind: HarnessErrorKind.Unavailable | HarnessErrorKind.ProcessFailure;
+      readonly message: string;
+    }
+  | {
+      readonly kind: HarnessErrorKind.InvalidResponse;
+      readonly message: string;
+      readonly transcript: string;
+    }
+  | {
+      readonly kind: HarnessErrorKind.ResumeUnsupported;
+      readonly harnessId: string;
+    };
+
+export interface HarnessExecutionRequest {
+  readonly runId: string;
+  readonly invocationSequence: number;
+  readonly attemptNumber: number;
+  readonly workingDirectory: string;
+  readonly role: string;
+  readonly prompt: string;
+  readonly capabilities: readonly string[];
+  readonly outputSchema?: JsonValue;
+}
+
+export interface HarnessExecution {
+  readonly output: unknown;
+  readonly transcript: string;
+  readonly resumeToken?: string;
+}
+
+export interface AgentHarness {
+  readonly id: string;
+  execute(request: HarnessExecutionRequest): Promise<Result<HarnessExecution, HarnessError>>;
+  resume(
+    request: HarnessExecutionRequest,
+    token: string,
+  ): Promise<Result<HarnessExecution, HarnessError>>;
+}
+
+export interface AgentHarnessRegistry {
+  get(harnessId: string): Result<AgentHarness, HarnessError>;
+}
+
+export interface ArtifactWriteRequest {
+  readonly runId: string;
+  readonly invocationSequence: number;
+  readonly attemptNumber: number;
+  readonly kind: ArtifactReference['kind'];
+  readonly mediaType: string;
+  readonly content: string;
+}
+
+export const enum ArtifactWriterErrorKind {
+  WriteFailure = 0,
+}
+
+export interface ArtifactWriterError {
+  readonly kind: ArtifactWriterErrorKind.WriteFailure;
+  readonly message: string;
+}
+
+export interface ArtifactWriter {
+  write(request: ArtifactWriteRequest): Promise<Result<ArtifactReference, ArtifactWriterError>>;
+}

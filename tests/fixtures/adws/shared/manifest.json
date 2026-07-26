@@ -1,0 +1,9 @@
+{
+  "id": "shared-validation",
+  "name": "Shared Validation",
+  "version": "1.0.0",
+  "description": "A pinned shared workflow used by compiler fixtures.",
+  "kairo": ">=0.1.0",
+  "entrypoint": "./kairo.adw.ts",
+  "permissions": []
+}
