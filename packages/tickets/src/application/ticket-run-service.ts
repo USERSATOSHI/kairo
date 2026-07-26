@@ -40,7 +40,7 @@ export class TicketRunService {
       for (const link of links.unwrap().filter(({ kind }) => kind === 'implementation')) {
         const run = this.runs.get(link.runId);
         if (run.isErr()) return run;
-        if (run.unwrap()?.active) {
+        if (run.value?.active) {
           return toTicketError(TicketErrorKind.InvalidInput, {
             field: 'ticketId',
             reason: 'ticket already has an active implementation run',
@@ -98,8 +98,8 @@ export class TicketRunService {
       for (const link of links.unwrap().toReversed()) {
         const run = this.runs.get(link.runId);
         if (run.isErr()) return run;
-        if (run.unwrap()?.active) {
-          activeRun = run.unwrap();
+        if (run.value?.active) {
+          activeRun = run.value;
           break;
         }
       }

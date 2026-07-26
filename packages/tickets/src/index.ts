@@ -11,3 +11,6 @@ export * from './integration/types.ts';
 export * from './provider/types.ts';
 export * from './persistence/sqlite-ticket-run-store.ts';
 export * from './persistence/sqlite-ticket-repository.ts';
+export * from './persistence/sqlite-ticket-sync-store.ts';
+export * from './sync/errors.ts';
+export * from './sync/ticket-sync-service.ts';

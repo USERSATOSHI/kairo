@@ -2,7 +2,7 @@ import { Database } from 'bun:sqlite';
 
 import { err, ok, safeCall, type Result } from '@usersatoshi/results';
 
-import type { TicketRepository } from '../application/ports.ts';
+import type { ExternalTicketProjection, TicketRepository } from '../application/ports.ts';
 import type {
   Ticket,
   TicketBinding,
@@ -314,6 +314,34 @@ export class SqliteTicketRepository implements TicketRepository {
     return ok(tickets);
   }
 
+  findByBinding(binding: TicketBinding): Result<Ticket | undefined, TicketError> {
+    if (binding.kind === 'local') return ok(undefined);
+    const loaded = safeCall(
+      () => {
+        const row = this.database
+          .query<{ readonly ticket_id: string }, [string, string, string, string, number]>(
+            `SELECT ticket_id
+             FROM ticket_bindings
+             WHERE provider = ?
+               AND COALESCE(instance_url, '') = ?
+               AND owner = ?
+               AND repository = ?
+               AND issue_number = ?`,
+          )
+          .get(
+            binding.kind,
+            binding.kind === 'forgejo' ? binding.instanceUrl : '',
+            binding.owner,
+            binding.repository,
+            binding.issueNumber,
+          );
+        return row ? this.loadTicketUnsafe(row.ticket_id) : ok(undefined);
+      },
+      (error) => databaseError('findByBinding', error),
+    );
+    return loaded.isErr() ? loaded : loaded.unwrap();
+  }
+
   update(
     ticketId: string,
     input: UpdateTicketInput,
@@ -391,6 +419,43 @@ export class SqliteTicketRepository implements TicketRepository {
            WHERE ticket_id = ?`,
         )
         .run(status, updatedAt, ticketId);
+      return this.loadTicketUnsafe(ticketId);
+    });
+  }
+
+  applyExternal(
+    ticketId: string,
+    projection: ExternalTicketProjection,
+    updatedAt: string,
+  ): Result<Ticket, TicketError> {
+    return this.executeTransaction('applyExternal', () => {
+      const current = this.loadTicketUnsafe(ticketId);
+      if (current.isErr()) return current;
+      const ticket = current.unwrap();
+      this.database
+        .query(
+          `UPDATE tickets
+           SET title = ?, description = ?, status = ?, revision = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(
+          projection.title,
+          projection.description,
+          projection.status,
+          ticket.revision + 1,
+          updatedAt,
+          ticketId,
+        );
+      this.replaceValues('ticket_labels', 'label', ticketId, projection.labels);
+      this.replaceValues('ticket_assignees', 'assignee', ticketId, projection.assignees);
+      this.database.query('DELETE FROM ticket_bindings WHERE ticket_id = ?').run(ticketId);
+      this.insertBinding(ticketId, projection.binding);
+      this.database
+        .query(
+          `UPDATE kanban_planning_state SET status = ?, updated_at = ?
+           WHERE ticket_id = ?`,
+        )
+        .run(projection.status, updatedAt, ticketId);
       return this.loadTicketUnsafe(ticketId);
     });
   }

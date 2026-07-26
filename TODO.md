@@ -336,10 +336,12 @@ Status: **Complete** (accepted 2026-07-26)
 
 ### T3 — GitHub Issues
 
-- [ ] GitHub provider and contract coverage
-- [ ] Import, create, update, comments, labels, and assignees
-- [ ] Webhooks and polling reconciliation
-- [ ] Idempotent run-status synchronization
+Status: **Complete** (accepted 2026-07-26)
+
+- [x] GitHub provider and contract coverage
+- [x] Import, create, update, comments, labels, and assignees
+- [x] Webhooks and polling reconciliation
+- [x] Idempotent run-status synchronization
 
 ### T4 — Forgejo Issues
 

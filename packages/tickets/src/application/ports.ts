@@ -10,10 +10,22 @@ import type {
   UpdateTicketInput,
 } from '../domain/types.ts';
 
+export interface ExternalTicketProjection {
+  readonly title: string;
+  readonly description: string;
+  readonly status: TicketStatus;
+  readonly labels: readonly string[];
+  readonly assignees: readonly string[];
+  readonly binding: import('../domain/types.ts').TicketBinding;
+}
+
 export interface TicketRepository {
   create(ticket: Ticket): Result<Ticket, TicketError>;
   get(ticketId: TicketId): Result<Ticket, TicketError>;
   list(projectId: string): Result<readonly Ticket[], TicketError>;
+  findByBinding(
+    binding: import('../domain/types.ts').TicketBinding,
+  ): Result<Ticket | undefined, TicketError>;
   update(
     ticketId: TicketId,
     input: UpdateTicketInput,
@@ -23,6 +35,11 @@ export interface TicketRepository {
     ticketId: TicketId,
     expectedRevision: number,
     status: TicketStatus,
+    updatedAt: string,
+  ): Result<Ticket, TicketError>;
+  applyExternal(
+    ticketId: TicketId,
+    projection: ExternalTicketProjection,
     updatedAt: string,
   ): Result<Ticket, TicketError>;
   addComment(comment: TicketComment, updatedAt: string): Result<TicketComment, TicketError>;
