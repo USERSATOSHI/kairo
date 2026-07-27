@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   incrementPatchVersion,
   orderPublishWorkspaces,
+  synchronizeLockfileWorkspaces,
   type PublishWorkspace,
   updateManifestVersion,
 } from '../../scripts/publish-packages.ts';
@@ -83,6 +84,49 @@ describe('release versioning', () => {
       devDependencies: {
         '@kouro/adw': '0.1.1',
       },
+    });
+  });
+
+  test('synchronizes workspace metadata without resolving external packages', () => {
+    const lockfile = JSON.stringify({
+      lockfileVersion: 1,
+      workspaces: {
+        '': { name: 'kouro', devDependencies: { '@kouro/cli': '0.1.0' } },
+      },
+      packages: { react: ['react@1.0.0'] },
+    });
+
+    const updated: unknown = JSON.parse(
+      synchronizeLockfileWorkspaces(
+        lockfile,
+        {
+          name: 'kouro',
+          version: '0.1.2',
+          dependencies: { '@kouro/cli': '0.1.2' },
+        },
+        [
+          {
+            name: '@kouro/cli',
+            version: '0.1.2',
+            bin: { kouro: './src/main.ts' },
+            dependencies: { '@kouro/domain': '0.1.2' },
+          },
+        ],
+      ),
+    );
+
+    expect(updated).toEqual({
+      lockfileVersion: 1,
+      workspaces: {
+        '': { name: 'kouro', dependencies: { '@kouro/cli': '0.1.2' } },
+        'packages/cli': {
+          name: '@kouro/cli',
+          version: '0.1.2',
+          dependencies: { '@kouro/domain': '0.1.2' },
+          bin: { kouro: './src/main.ts' },
+        },
+      },
+      packages: { react: ['react@1.0.0'] },
     });
   });
 });

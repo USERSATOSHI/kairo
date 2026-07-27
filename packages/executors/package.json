@@ -1,6 +1,6 @@
 {
   "name": "@kouro/executors",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -17,8 +17,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@kouro/domain": "0.1.2",
-    "@kouro/runtime": "0.1.2",
+    "@kouro/domain": "0.1.3",
+    "@kouro/runtime": "0.1.3",
     "@usersatoshi/results": "^1.0.0"
   }
 }

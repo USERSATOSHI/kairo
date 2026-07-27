@@ -173,15 +173,76 @@ async function writeManifestUpdates(
   await Promise.all(updates.map((update) => writeFile(update.path, update[contents], 'utf8')));
 }
 
-async function refreshLockfile(root: string): Promise<void> {
-  const processResult = Bun.spawn(['bun', 'install', '--lockfile-only', '--ignore-scripts'], {
-    cwd: root,
-    stdin: 'inherit',
-    stdout: 'inherit',
-    stderr: 'inherit',
-  });
-  const exitCode = await processResult.exited;
-  if (exitCode !== 0) throw new Error(`Updating bun.lock failed with exit code ${exitCode}`);
+function findObjectEnd(source: string, start: number): number {
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = start; index < source.length; index += 1) {
+    const character = source[index];
+    if (quoted) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === '"') {
+        quoted = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      quoted = true;
+    } else if (character === '{') {
+      depth += 1;
+    } else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  throw new Error('bun.lock has an unterminated workspaces object');
+}
+
+function lockfileWorkspace(
+  manifest: PackageManifest,
+  includeVersion: boolean,
+): Readonly<Record<string, unknown>> {
+  const workspace: Record<string, unknown> = { name: manifest.name };
+  if (includeVersion) workspace.version = manifest.version;
+  for (const field of DEPENDENCY_FIELDS) {
+    const dependencies = manifest[field];
+    if (isRecord(dependencies) && Object.keys(dependencies).length > 0) {
+      workspace[field] = dependencies;
+    }
+  }
+  if (isRecord(manifest.bin)) workspace.bin = manifest.bin;
+  return workspace;
+}
+
+/** Synchronizes lockfile workspace metadata without resolving external packages. */
+export function synchronizeLockfileWorkspaces(
+  lockfile: string,
+  rootManifest: PackageManifest,
+  workspaceManifests: readonly PackageManifest[],
+): string {
+  const key = '"workspaces"';
+  const keyIndex = lockfile.indexOf(key);
+  if (keyIndex < 0) throw new Error('bun.lock is missing the workspaces object');
+  const objectStart = lockfile.indexOf('{', keyIndex + key.length);
+  if (lockfile[objectStart] !== '{') throw new Error('bun.lock workspaces value is not an object');
+  const objectEnd = findObjectEnd(lockfile, objectStart);
+  const workspaces: Record<string, Readonly<Record<string, unknown>>> = {
+    '': lockfileWorkspace(rootManifest, false),
+  };
+  for (const manifest of workspaceManifests.toSorted((left, right) =>
+    left.name.localeCompare(right.name),
+  )) {
+    workspaces[`packages/${manifest.name.replace('@kouro/', '')}`] = lockfileWorkspace(
+      manifest,
+      true,
+    );
+  }
+  return `${lockfile.slice(0, objectStart)}${JSON.stringify(workspaces, null, 2)}${lockfile.slice(
+    objectEnd + 1,
+  )}`;
 }
 
 async function loadWorkspaces(root: string): Promise<readonly PublishWorkspace[]> {
@@ -315,7 +376,16 @@ async function main(): Promise<void> {
   await writeManifestUpdates(releaseVersion.updates, 'nextContents');
   let published = false;
   try {
-    await refreshLockfile(root);
+    const releaseManifests = releaseVersion.updates.map((update) =>
+      parseManifest(update.nextContents, update.path),
+    );
+    const [nextRootManifest, ...nextWorkspaceManifests] = releaseManifests;
+    if (!nextRootManifest) throw new Error('Release is missing the root manifest');
+    await writeFile(
+      lockfilePath,
+      synchronizeLockfileWorkspaces(previousLockfile, nextRootManifest, nextWorkspaceManifests),
+      'utf8',
+    );
     const workspaces = orderPublishWorkspaces(await loadWorkspaces(root));
     for (const target of targets) {
       process.stdout.write(`\nPublishing to ${target.registry}\n`);

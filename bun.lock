@@ -2,179 +2,183 @@
   "lockfileVersion": 1,
   "configVersion": 1,
   "workspaces": {
-    "": {
-      "name": "kouro",
-      "devDependencies": {
-        "@kouro/adw": "0.1.0",
-        "@kouro/api": "0.1.0",
-        "@kouro/api-contracts": "0.1.0",
-        "@kouro/cli": "0.1.0",
-        "@kouro/domain": "0.1.0",
-        "@kouro/executors": "0.1.0",
-        "@kouro/harnesses": "0.1.0",
-        "@kouro/persistence-sqlite": "0.1.0",
-        "@kouro/runtime": "0.1.0",
-        "@kouro/sandbox-worktree": "0.1.0",
-        "@kouro/ticket-provider-forgejo": "0.1.0",
-        "@kouro/ticket-provider-github": "0.1.0",
-        "@kouro/ticket-provider-local": "0.1.0",
-        "@kouro/tickets": "0.1.0",
-        "@kouro/web": "0.1.0",
-        "@types/bun": "latest",
-        "oxfmt": "^0.60.0",
-        "oxlint": "^1.75.0",
-        "oxlint-tsgolint": "^7.0.2001",
-        "typescript": "^7.0.2",
-      },
+  "": {
+    "name": "kouro",
+    "dependencies": {
+      "@kouro/cli": "0.1.3"
     },
-    "packages/adw": {
-      "name": "@kouro/adw",
-      "version": "0.1.0",
-      "dependencies": {
-        "@kouro/domain": "0.1.0",
-        "@usersatoshi/results": "^1.0.0",
-      },
+    "devDependencies": {
+      "@kouro/adw": "0.1.3",
+      "@kouro/api": "0.1.3",
+      "@kouro/api-contracts": "0.1.3",
+      "@kouro/domain": "0.1.3",
+      "@kouro/executors": "0.1.3",
+      "@kouro/harnesses": "0.1.3",
+      "@kouro/persistence-sqlite": "0.1.3",
+      "@kouro/runtime": "0.1.3",
+      "@kouro/sandbox-worktree": "0.1.3",
+      "@kouro/ticket-provider-forgejo": "0.1.3",
+      "@kouro/ticket-provider-github": "0.1.3",
+      "@kouro/ticket-provider-local": "0.1.3",
+      "@kouro/tickets": "0.1.3",
+      "@kouro/web": "0.1.3",
+      "@types/bun": "latest",
+      "oxfmt": "^0.60.0",
+      "oxlint": "^1.75.0",
+      "oxlint-tsgolint": "^7.0.2001",
+      "typescript": "^7.0.2"
     },
-    "packages/api": {
-      "name": "@kouro/api",
-      "version": "0.1.0",
-      "dependencies": {
-        "@elysiajs/eden": "^1.4.9",
-        "@kouro/api-contracts": "0.1.0",
-        "@kouro/domain": "0.1.0",
-        "@kouro/executors": "0.1.0",
-        "@kouro/persistence-sqlite": "0.1.0",
-        "@kouro/tickets": "0.1.0",
-        "@usersatoshi/results": "^1.0.0",
-        "elysia": "^1.4.29",
-      },
-    },
-    "packages/api-contracts": {
-      "name": "@kouro/api-contracts",
-      "version": "0.1.0",
-      "dependencies": {
-        "@kouro/domain": "0.1.0",
-        "@kouro/tickets": "0.1.0",
-      },
-    },
-    "packages/cli": {
-      "name": "@kouro/cli",
-      "version": "0.1.0",
-      "bin": {
-        "kouro": "./src/main.ts",
-      },
-      "dependencies": {
-        "@kouro/adw": "0.1.0",
-        "@kouro/api": "0.1.0",
-        "@kouro/api-contracts": "0.1.0",
-        "@kouro/domain": "0.1.0",
-        "@kouro/executors": "0.1.0",
-        "@kouro/harnesses": "0.1.0",
-        "@kouro/persistence-sqlite": "0.1.0",
-        "@kouro/sandbox-worktree": "0.1.0",
-        "@kouro/ticket-provider-forgejo": "0.1.0",
-        "@kouro/ticket-provider-github": "0.1.0",
-        "@kouro/tickets": "0.1.0",
-        "@usersatoshi/results": "^1.0.0",
-      },
-    },
-    "packages/domain": {
-      "name": "@kouro/domain",
-      "version": "0.1.0",
-    },
-    "packages/executors": {
-      "name": "@kouro/executors",
-      "version": "0.1.0",
-      "dependencies": {
-        "@kouro/domain": "0.1.0",
-        "@kouro/runtime": "0.1.0",
-        "@usersatoshi/results": "^1.0.0",
-      },
-    },
-    "packages/harnesses": {
-      "name": "@kouro/harnesses",
-      "version": "0.1.0",
-      "dependencies": {
-        "@kouro/domain": "0.1.0",
-        "@kouro/executors": "0.1.0",
-        "@usersatoshi/results": "^1.0.0",
-      },
-    },
-    "packages/persistence-sqlite": {
-      "name": "@kouro/persistence-sqlite",
-      "version": "0.1.0",
-      "dependencies": {
-        "@kouro/adw": "0.1.0",
-        "@kouro/domain": "0.1.0",
-        "@kouro/executors": "0.1.0",
-        "@kouro/runtime": "0.1.0",
-        "@usersatoshi/results": "^1.0.0",
-      },
-    },
-    "packages/runtime": {
-      "name": "@kouro/runtime",
-      "version": "0.1.0",
-      "dependencies": {
-        "@kouro/adw": "0.1.0",
-        "@kouro/domain": "0.1.0",
-        "@usersatoshi/results": "^1.0.0",
-      },
-    },
-    "packages/sandbox-worktree": {
-      "name": "@kouro/sandbox-worktree",
-      "version": "0.1.0",
-      "dependencies": {
-        "@usersatoshi/results": "^1.0.0",
-      },
-    },
-    "packages/ticket-provider-forgejo": {
-      "name": "@kouro/ticket-provider-forgejo",
-      "version": "0.1.0",
-      "dependencies": {
-        "@kouro/tickets": "0.1.0",
-        "@usersatoshi/results": "^1.0.0",
-      },
-    },
-    "packages/ticket-provider-github": {
-      "name": "@kouro/ticket-provider-github",
-      "version": "0.1.0",
-      "dependencies": {
-        "@kouro/tickets": "0.1.0",
-        "@usersatoshi/results": "^1.0.0",
-      },
-    },
-    "packages/ticket-provider-local": {
-      "name": "@kouro/ticket-provider-local",
-      "version": "0.1.0",
-      "dependencies": {
-        "@kouro/tickets": "0.1.0",
-        "@usersatoshi/results": "^1.0.0",
-      },
-    },
-    "packages/tickets": {
-      "name": "@kouro/tickets",
-      "version": "0.1.0",
-      "dependencies": {
-        "@usersatoshi/results": "^1.0.0",
-      },
-    },
-    "packages/web": {
-      "name": "@kouro/web",
-      "version": "0.1.0",
-      "dependencies": {
-        "@kouro/api-contracts": "workspace:*",
-        "@xyflow/react": "^12.11.2",
-        "react": "^19.2.8",
-        "react-dom": "^19.2.8",
-      },
-      "devDependencies": {
-        "@types/react": "^19.2.17",
-        "@types/react-dom": "^19.2.3",
-        "@vitejs/plugin-react": "^6.0.4",
-        "vite": "^8.1.5",
-      },
-    },
+    "bin": {
+      "kouro": "bin/kouro.ts"
+    }
   },
+  "packages/adw": {
+    "name": "@kouro/adw",
+    "version": "0.1.3",
+    "dependencies": {
+      "@kouro/domain": "0.1.3",
+      "@usersatoshi/results": "^1.0.0"
+    }
+  },
+  "packages/api": {
+    "name": "@kouro/api",
+    "version": "0.1.3",
+    "dependencies": {
+      "@elysiajs/eden": "^1.4.9",
+      "@kouro/api-contracts": "0.1.3",
+      "@kouro/domain": "0.1.3",
+      "@kouro/executors": "0.1.3",
+      "@kouro/persistence-sqlite": "0.1.3",
+      "@kouro/tickets": "0.1.3",
+      "@usersatoshi/results": "^1.0.0",
+      "elysia": "^1.4.29"
+    }
+  },
+  "packages/api-contracts": {
+    "name": "@kouro/api-contracts",
+    "version": "0.1.3",
+    "dependencies": {
+      "@kouro/domain": "0.1.3",
+      "@kouro/tickets": "0.1.3"
+    }
+  },
+  "packages/cli": {
+    "name": "@kouro/cli",
+    "version": "0.1.3",
+    "dependencies": {
+      "@kouro/adw": "0.1.3",
+      "@kouro/api": "0.1.3",
+      "@kouro/api-contracts": "0.1.3",
+      "@kouro/domain": "0.1.3",
+      "@kouro/executors": "0.1.3",
+      "@kouro/harnesses": "0.1.3",
+      "@kouro/persistence-sqlite": "0.1.3",
+      "@kouro/sandbox-worktree": "0.1.3",
+      "@kouro/ticket-provider-forgejo": "0.1.3",
+      "@kouro/ticket-provider-github": "0.1.3",
+      "@kouro/tickets": "0.1.3",
+      "@kouro/web": "0.1.3",
+      "@usersatoshi/results": "^1.0.0"
+    },
+    "bin": {
+      "kouro": "./src/main.ts"
+    }
+  },
+  "packages/domain": {
+    "name": "@kouro/domain",
+    "version": "0.1.3"
+  },
+  "packages/executors": {
+    "name": "@kouro/executors",
+    "version": "0.1.3",
+    "dependencies": {
+      "@kouro/domain": "0.1.3",
+      "@kouro/runtime": "0.1.3",
+      "@usersatoshi/results": "^1.0.0"
+    }
+  },
+  "packages/harnesses": {
+    "name": "@kouro/harnesses",
+    "version": "0.1.3",
+    "dependencies": {
+      "@kouro/domain": "0.1.3",
+      "@kouro/executors": "0.1.3",
+      "@usersatoshi/results": "^1.0.0"
+    }
+  },
+  "packages/persistence-sqlite": {
+    "name": "@kouro/persistence-sqlite",
+    "version": "0.1.3",
+    "dependencies": {
+      "@kouro/adw": "0.1.3",
+      "@kouro/domain": "0.1.3",
+      "@kouro/executors": "0.1.3",
+      "@kouro/runtime": "0.1.3",
+      "@usersatoshi/results": "^1.0.0"
+    }
+  },
+  "packages/runtime": {
+    "name": "@kouro/runtime",
+    "version": "0.1.3",
+    "dependencies": {
+      "@kouro/adw": "0.1.3",
+      "@kouro/domain": "0.1.3",
+      "@usersatoshi/results": "^1.0.0"
+    }
+  },
+  "packages/sandbox-worktree": {
+    "name": "@kouro/sandbox-worktree",
+    "version": "0.1.3",
+    "dependencies": {
+      "@usersatoshi/results": "^1.0.0"
+    }
+  },
+  "packages/ticket-provider-forgejo": {
+    "name": "@kouro/ticket-provider-forgejo",
+    "version": "0.1.3",
+    "dependencies": {
+      "@kouro/tickets": "0.1.3",
+      "@usersatoshi/results": "^1.0.0"
+    }
+  },
+  "packages/ticket-provider-github": {
+    "name": "@kouro/ticket-provider-github",
+    "version": "0.1.3",
+    "dependencies": {
+      "@kouro/tickets": "0.1.3",
+      "@usersatoshi/results": "^1.0.0"
+    }
+  },
+  "packages/ticket-provider-local": {
+    "name": "@kouro/ticket-provider-local",
+    "version": "0.1.3",
+    "dependencies": {
+      "@kouro/tickets": "0.1.3",
+      "@usersatoshi/results": "^1.0.0"
+    }
+  },
+  "packages/tickets": {
+    "name": "@kouro/tickets",
+    "version": "0.1.3",
+    "dependencies": {
+      "@usersatoshi/results": "^1.0.0"
+    }
+  },
+  "packages/web": {
+    "name": "@kouro/web",
+    "version": "0.1.3",
+    "devDependencies": {
+      "@kouro/api-contracts": "0.1.3",
+      "@types/react": "^19.2.17",
+      "@types/react-dom": "^19.2.3",
+      "@vitejs/plugin-react": "^6.0.4",
+      "@xyflow/react": "^12.11.2",
+      "react": "^19.2.8",
+      "react-dom": "^19.2.8",
+      "vite": "^8.1.5"
+    }
+  }
+},
   "packages": {
     "@borewit/text-codec": ["@borewit/text-codec@0.2.2", "https://git.usersatoshi.com/api/packages/kouro/npm/@borewit/text-codec/-/text-codec-0.2.2.tgz", {}, "sha512-DDaRehssg1aNrH4+2hnj1B7vnUGEjU6OIlyRdkMd0aUdIUvKXrJfXsy8LVtXAy7DRvYVluWbMspsRhz2lcW0mQ=="],
 
