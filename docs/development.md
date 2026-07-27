@@ -203,7 +203,6 @@ An ADW package contains:
 my-workflow/
   manifest.json
   kouro.adw.ts
-  kouro-sdk.ts
   prompts/
   schemas/
 ```

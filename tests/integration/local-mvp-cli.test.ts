@@ -174,7 +174,7 @@ describe('M7 runnable local MVP and operator CLI', () => {
 
   test('distribution bundle exposes the CLI and packaged templates', async () => {
     const root = resolve(import.meta.dir, '..', '..');
-    const output = await mkdtemp(resolve(tmpdir(), 'kouro-distribution-'));
+    const output = await mkdtemp(resolve(root, '.kouro-distribution-'));
     roots.push(output);
 
     const built = await process(['bun', 'run', 'build:cli'], root);
@@ -237,13 +237,11 @@ describe('M7 runnable local MVP and operator CLI', () => {
           .join(' '),
       );
       const entrypoint = await readFile(resolve(output, name, 'kouro.adw.ts'), 'utf8');
-      expect(entrypoint).toContain("import { WorkflowBuilder } from './kouro-sdk.ts'");
+      expect(entrypoint).toContain("import { WorkflowBuilder } from '@kouro/adw'");
       expect(entrypoint).toContain('workflow.startAt(');
       expect(entrypoint).toContain(".on('success').to(");
       expect(entrypoint).toContain('export default workflow.build()');
-      expect(await readFile(resolve(output, name, 'kouro-sdk.ts'), 'utf8')).toContain(
-        'export class WorkflowBuilder',
-      );
+      expect(await Bun.file(resolve(output, name, 'kouro-sdk.ts')).exists()).toBe(false);
       const compiled = await compileAdwPackage(resolve(output, name));
       expect(compiled.isOk()).toBe(true);
       if (template === 'chore' && compiled.isOk()) {

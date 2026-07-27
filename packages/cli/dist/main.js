@@ -25516,7 +25516,7 @@ function displayName(name) {
   return name.split("-").map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`).join(" ");
 }
 function render(content, name) {
-  return content.replaceAll("{{id}}", name).replaceAll("{{name}}", displayName(name)).replaceAll("from '../kouro-sdk.ts'", "from './kouro-sdk.ts'");
+  return content.replaceAll("{{id}}", name).replaceAll("{{name}}", displayName(name));
 }
 async function pathExists(path) {
   try {
@@ -25561,8 +25561,6 @@ async function createAdw(request) {
     const temporary = await mkdtemp(resolve3(dirname(target), `.${basename(target)}.tmp-`));
     try {
       await renderTemplate(source, temporary, request.name);
-      const sdkSource = resolve3(import.meta.dir, "..", "assets", "adw-templates", "kouro-sdk.ts");
-      await writeFile(resolve3(temporary, "kouro-sdk.ts"), await readFile3(sdkSource, "utf8"));
       await rename(temporary, target);
     } catch (cause) {
       await rm(temporary, { recursive: true, force: true });

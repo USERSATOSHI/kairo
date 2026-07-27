@@ -1,4 +1,4 @@
-import { WorkflowBuilder } from '../kouro-sdk.ts';
+import { WorkflowBuilder } from '@kouro/adw';
 
 const workflow = new WorkflowBuilder({
   id: '{{id}}',

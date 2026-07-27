@@ -240,6 +240,7 @@ Create an editable ADW package in the current repository:
 
 ```bash
 cd /path/to/your/repository
+bun add --dev @kouro/adw
 kouro create adw my-workflow --template feature-development
 ```
 
@@ -249,15 +250,12 @@ The default output is:
 .kouro/my-workflow/
   manifest.json
   kouro.adw.ts
-  kouro-sdk.ts
   prompts/
 ```
 
-The entrypoint uses the fluent `WorkflowBuilder` API. `kouro-sdk.ts` is a
-self-contained SDK snapshot, so the generated package is immediately runnable
-without installing authoring dependencies. Add nodes with `workflow.agent`,
-`workflow.command`, `workflow.approval`, or `workflow.complete`, then connect
-their handles with `node.on(...).to(...)`.
+The entrypoint imports the fluent `WorkflowBuilder` API from `@kouro/adw`. Add
+nodes with `workflow.agent`, `workflow.command`, `workflow.approval`, or
+`workflow.complete`, then connect their handles with `node.on(...).to(...)`.
 
 Run it by passing its directory:
 

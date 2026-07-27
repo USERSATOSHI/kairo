@@ -109,10 +109,10 @@ Available templates:
 - `bug-fix` — reproduce, fix, and validate a defect
 - `chore` — implement and validate a focused maintenance task
 
-Each generated entrypoint uses `WorkflowBuilder` and includes a self-contained
-`kouro-sdk.ts` snapshot. The package can run immediately without installing
-dependencies, and can be extended through node handles and fluent transitions
-instead of editing raw node and transition records.
+Each generated entrypoint imports `WorkflowBuilder` from `@kouro/adw`. Install
+that package in the repository before compiling the workflow. Templates can be
+extended through node handles and fluent transitions instead of editing raw
+node and transition records.
 
 The command refuses to replace an existing folder.
 
