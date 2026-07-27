@@ -276,21 +276,36 @@ async function publishPackage(
 
 async function main(): Promise<void> {
   const root = resolve(import.meta.dir, '..');
-  const targetName = process.argv[2] ?? '';
-  const target = TARGETS[targetName];
-  const options = process.argv.slice(3);
-  const dryRun = options.length === 1 && options[0] === '--dry-run';
-  if (!target || (options.length > 0 && !dryRun)) {
-    process.stderr.write('Usage: bun run scripts/publish-packages.ts <forgejo|npm> [--dry-run]\n');
-    process.exitCode = 1;
-    return;
-  }
-  if (!dryRun && !process.env[target.tokenEnvironmentVariable]) {
+  const args = process.argv.slice(2);
+  const dryRunArg = args.indexOf('--dry-run');
+  const dryRun = dryRunArg !== -1;
+  const targetNames = dryRunArg !== -1
+    ? args.slice(0, dryRunArg)
+    : args;
+  if (targetNames.length === 0) {
     process.stderr.write(
-      `Set ${target.tokenEnvironmentVariable} before publishing to ${targetName}.\n`,
+      'Usage: bun run scripts/publish-packages.ts <target...> [--dry-run]\n' +
+        'Targets: forgejo, github, npm (pass multiple to publish to all)\n',
     );
     process.exitCode = 1;
     return;
+  }
+  const targets: RegistryTarget[] = [];
+  for (const name of targetNames) {
+    const target = TARGETS[name];
+    if (!target) {
+      process.stderr.write(`Unknown target: ${name}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    if (!dryRun && !process.env[target.tokenEnvironmentVariable]) {
+      process.stderr.write(
+        `Set ${target.tokenEnvironmentVariable} before publishing to ${name}.\n`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+    targets.push(target);
   }
 
   const lockfilePath = resolve(root, 'bun.lock');
@@ -304,14 +319,17 @@ async function main(): Promise<void> {
   try {
     await refreshLockfile(root);
     const workspaces = orderPublishWorkspaces(await loadWorkspaces(root));
-    for (const workspace of workspaces) {
-      if (workspace.private) {
-        process.stdout.write(`Skipping private workspace ${workspace.name}\n`);
-        continue;
+    for (const target of targets) {
+      process.stdout.write(`\nPublishing to ${target.registry}\n`);
+      for (const workspace of workspaces) {
+        if (workspace.private) {
+          process.stdout.write(`Skipping private workspace ${workspace.name}\n`);
+          continue;
+        }
+        await publishPackage(root, workspace.directory, workspace.name, target, dryRun);
       }
-      await publishPackage(root, workspace.directory, workspace.name, target, dryRun);
+      await publishPackage(root, root, 'kouro', target, dryRun);
     }
-    await publishPackage(root, root, 'kouro', target, dryRun);
     published = true;
   } finally {
     if (dryRun || !published) {

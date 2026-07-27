@@ -41,6 +41,8 @@
     "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives .",
     "prepare": "bun run build:cli",
     "release:check": "bun run format:check && bun run lint && bun run typecheck && bun test && bun run build:cli && bun run --cwd packages/web build",
+    "release:all": "bun run release:check && bun run scripts/publish-packages.ts forgejo github npm",
+    "release:all:dry-run": "bun run release:check && bun run scripts/publish-packages.ts forgejo github npm --dry-run",
     "release:forgejo": "bun run release:check && bun run scripts/publish-packages.ts forgejo",
     "release:forgejo:dry-run": "bun run release:check && bun run scripts/publish-packages.ts forgejo --dry-run",
     "release:github": "bun run release:check && bun run scripts/publish-packages.ts github",
