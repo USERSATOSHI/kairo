@@ -18,7 +18,7 @@ describe('package distribution', () => {
     const manifest = await packageManifest('package.json');
 
     expect(manifest.bin?.kouro).toBe('bin/kouro.ts');
-    expect(manifest.dependencies?.['@kouro/cli']).toBe('0.1.2');
+    expect(manifest.dependencies?.['@kouro/cli']).toBe('0.1.3');
     expect(manifest.files).toContain('bin');
     expect(manifest.files).not.toContain('packages/cli/dist');
   });
@@ -30,7 +30,7 @@ describe('package distribution', () => {
     ]);
 
     expect(cli.private).not.toBe(true);
-    expect(cli.dependencies?.['@kouro/web']).toBe('0.1.2');
+    expect(cli.dependencies?.['@kouro/web']).toBe('0.1.3');
     expect(cli.files).toEqual(expect.arrayContaining(['src', 'assets']));
     expect(web.private).not.toBe(true);
     expect(web.files).toContain('dist');
