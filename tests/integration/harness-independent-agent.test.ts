@@ -545,7 +545,6 @@ describe('M4 harness-independent agent execution', () => {
       '--session',
       'pi-session',
       '--approve',
-      '--no-extensions',
       '--no-skills',
       '--no-prompt-templates',
       '--no-themes',

@@ -74,11 +74,13 @@ are included in the normalized prompt and independently validated by Kouro.
 ### PiHarness
 
 Runs Pi in JSON mode with an exact session ID, project instructions enabled,
-and project extensions and optional resources disabled. It resumes with
-`--session <token>`. Pi's built-in tool allowlist is derived from declared
-capabilities: read tools are always present, edit/write require a write
-capability, and Bash requires an execute capability. Schemas are included in
-the normalized prompt and independently validated by Kouro.
+and configured extensions enabled so custom provider packages such as
+`pi-llama-cpp` remain available. It resumes with `--session <token>`. Pi's
+built-in tool allowlist is derived from declared capabilities: read tools are
+always present, edit/write require a write capability, and Bash requires an
+execute capability. Skills, prompt templates, and themes remain disabled.
+Schemas are included in the normalized prompt and independently validated by
+Kouro.
 
 ### ScriptedFakeHarness
 

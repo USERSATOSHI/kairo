@@ -124,7 +124,6 @@ export class PiHarness implements AgentHarness {
         sessionFlag,
         token,
         '--approve',
-        '--no-extensions',
         '--no-skills',
         '--no-prompt-templates',
         '--no-themes',
