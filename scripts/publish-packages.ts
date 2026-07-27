@@ -40,6 +40,12 @@ const TARGETS: Readonly<Record<string, RegistryTarget>> = {
     tokenEnvironmentVariable: 'KOURO_FORGEJO_TOKEN',
     publicAccess: false,
   },
+  github: {
+    configFile: 'bunfig.publish-github.toml',
+    registry: 'https://npm.pkg.github.com/',
+    tokenEnvironmentVariable: 'GITHUB_TOKEN',
+    publicAccess: false,
+  },
   npm: {
     configFile: 'bunfig.publish-npm.toml',
     registry: 'https://registry.npmjs.org/',

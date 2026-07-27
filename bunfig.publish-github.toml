@@ -1,0 +1,2 @@
+[publish]
+token = "$NPM_CONFIG_TOKEN"

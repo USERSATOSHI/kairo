@@ -43,6 +43,8 @@
     "release:check": "bun run format:check && bun run lint && bun run typecheck && bun test && bun run build:cli && bun run --cwd packages/web build",
     "release:forgejo": "bun run release:check && bun run scripts/publish-packages.ts forgejo",
     "release:forgejo:dry-run": "bun run release:check && bun run scripts/publish-packages.ts forgejo --dry-run",
+    "release:github": "bun run release:check && bun run scripts/publish-packages.ts github",
+    "release:github:dry-run": "bun run release:check && bun run scripts/publish-packages.ts github --dry-run",
     "release:npm": "bun run release:check && bun run scripts/publish-packages.ts npm",
     "release:npm:dry-run": "bun run release:check && bun run scripts/publish-packages.ts npm --dry-run",
     "test": "bun test",
