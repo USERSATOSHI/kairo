@@ -1,8 +1,12 @@
 {
   "name": "@kouro/sandbox-worktree",
   "version": "0.1.0",
-  "private": true,
   "license": "Apache-2.0",
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

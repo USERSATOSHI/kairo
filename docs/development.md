@@ -240,6 +240,43 @@ create a controlled commit, and expose a `kouro/<run-id>` delivery branch.
 The local MVP is intentionally single-process. Separate workers, PostgreSQL,
 remote isolation, automatic merge, and deployment remain deferred.
 
+## Publishing packages
+
+Kouro publishes its reusable `@kouro/*` libraries in dependency order, followed
+by the bundled root `kouro` CLI package. The internal `@kouro/cli` source
+workspace and embedded `@kouro/web` application remain private because they are
+implementation inputs to the root distribution rather than supported
+standalone packages.
+
+Configure the target registry token without committing it:
+
+```bash
+export KOURO_FORGEJO_TOKEN="..."
+# Later, for the public npm registry:
+export NPM_TOKEN="..."
+```
+
+Inspect every package without uploading:
+
+```bash
+bun run release:forgejo:dry-run
+bun run release:npm:dry-run
+```
+
+Publish to the selected registry:
+
+```bash
+bun run release:forgejo
+bun run release:npm
+```
+
+The release commands run formatting, linting, type checking, tests, and
+production builds before publication. Registry selection and npm public access
+are command-level release policy, so package manifests do not pin
+`publishConfig` to one registry. Existing versions are tolerated to make a
+partially completed release safe to rerun; bump the root and workspace versions
+and their exact internal dependency versions before publishing a new release.
+
 ## Project status
 
 Milestones M1 through M7 and ticket milestones T1 through T5 are accepted:
