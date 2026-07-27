@@ -1,6 +1,6 @@
 {
   "name": "@kouro/harnesses",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -17,8 +17,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@kouro/domain": "0.1.4",
-    "@kouro/executors": "0.1.4",
+    "@kouro/domain": "0.1.5",
+    "@kouro/executors": "0.1.5",
     "@usersatoshi/results": "^1.0.0"
   }
 }
