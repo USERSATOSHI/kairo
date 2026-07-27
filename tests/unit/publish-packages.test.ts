@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 
-import { orderPublishWorkspaces, type PublishWorkspace } from '../../scripts/publish-packages.ts';
+import {
+  incrementPatchVersion,
+  orderPublishWorkspaces,
+  type PublishWorkspace,
+  updateManifestVersion,
+} from '../../scripts/publish-packages.ts';
 
 function workspace(name: string, internalDependencies: readonly string[] = []): PublishWorkspace {
   return {
@@ -35,5 +40,49 @@ describe('workspace publication order', () => {
         workspace('@kouro/second', ['@kouro/first']),
       ]),
     ).toThrow('Workspace dependency cycle includes');
+  });
+});
+
+describe('release versioning', () => {
+  test('increments the patch component', () => {
+    expect(incrementPatchVersion('0.1.0')).toBe('0.1.1');
+    expect(incrementPatchVersion('2.7.99')).toBe('2.7.100');
+  });
+
+  test('rejects prerelease and non-semantic versions', () => {
+    expect(() => incrementPatchVersion('1.0.0-beta.1')).toThrow(
+      'Cannot automatically increment version',
+    );
+    expect(() => incrementPatchVersion('latest')).toThrow('Cannot automatically increment version');
+  });
+
+  test('updates the package and exact internal dependency versions', () => {
+    expect(
+      updateManifestVersion(
+        {
+          name: '@kouro/runtime',
+          version: '0.1.0',
+          dependencies: {
+            '@kouro/domain': '0.1.0',
+            zod: '^4.0.0',
+          },
+          devDependencies: {
+            '@kouro/adw': '0.1.0',
+          },
+        },
+        new Set(['@kouro/adw', '@kouro/domain', '@kouro/runtime']),
+        '0.1.1',
+      ),
+    ).toEqual({
+      name: '@kouro/runtime',
+      version: '0.1.1',
+      dependencies: {
+        '@kouro/domain': '0.1.1',
+        zod: '^4.0.0',
+      },
+      devDependencies: {
+        '@kouro/adw': '0.1.1',
+      },
+    });
   });
 });

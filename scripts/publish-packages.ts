@@ -1,4 +1,4 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 interface RegistryTarget {
@@ -14,6 +14,24 @@ export interface PublishWorkspace {
   readonly name: string;
   readonly private: boolean;
 }
+
+type DependencyField =
+  | 'dependencies'
+  | 'devDependencies'
+  | 'optionalDependencies'
+  | 'peerDependencies';
+
+const DEPENDENCY_FIELDS: readonly DependencyField[] = [
+  'dependencies',
+  'devDependencies',
+  'optionalDependencies',
+  'peerDependencies',
+];
+const PUBLISHED_DEPENDENCY_FIELDS: readonly DependencyField[] = [
+  'dependencies',
+  'optionalDependencies',
+  'peerDependencies',
+];
 
 const TARGETS: Readonly<Record<string, RegistryTarget>> = {
   forgejo: {
@@ -36,12 +54,128 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 
 function dependencyNames(manifest: Readonly<Record<string, unknown>>): readonly string[] {
   const names = new Set<string>();
-  for (const field of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+  for (const field of PUBLISHED_DEPENDENCY_FIELDS) {
     const dependencies = manifest[field];
     if (!isRecord(dependencies)) continue;
     for (const name of Object.keys(dependencies)) names.add(name);
   }
   return [...names].toSorted((left, right) => left.localeCompare(right));
+}
+
+/** Returns the next patch version for a stable semantic version. */
+export function incrementPatchVersion(version: string): string {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+  if (!match) throw new Error(`Cannot automatically increment version ${version}`);
+  const [, major, minor, patch] = match;
+  return `${major}.${minor}.${Number(patch) + 1}`;
+}
+
+/** Updates a package manifest and its exact internal dependency versions. */
+export function updateManifestVersion(
+  manifest: Readonly<Record<string, unknown>>,
+  internalPackageNames: ReadonlySet<string>,
+  version: string,
+): Readonly<Record<string, unknown>> {
+  const updated: Record<string, unknown> = { ...manifest, version };
+  for (const field of DEPENDENCY_FIELDS) {
+    const dependencies = manifest[field];
+    if (!isRecord(dependencies)) continue;
+    updated[field] = Object.fromEntries(
+      Object.entries(dependencies).map(([name, dependencyVersion]) => [
+        name,
+        internalPackageNames.has(name) ? version : dependencyVersion,
+      ]),
+    );
+  }
+  return updated;
+}
+
+interface ManifestUpdate {
+  readonly path: string;
+  readonly previousContents: string;
+  readonly nextContents: string;
+}
+
+interface ReleaseVersionUpdate {
+  readonly updates: readonly ManifestUpdate[];
+  readonly version: string;
+}
+
+interface PackageManifest extends Readonly<Record<string, unknown>> {
+  readonly name: string;
+  readonly version: string;
+}
+
+function parseManifest(contents: string, path: string): PackageManifest {
+  const value: unknown = JSON.parse(contents);
+  if (!isRecord(value) || typeof value.name !== 'string' || typeof value.version !== 'string') {
+    throw new Error(`Invalid package manifest at ${path}`);
+  }
+  return { ...value, name: value.name, version: value.version };
+}
+
+async function prepareReleaseVersion(root: string): Promise<ReleaseVersionUpdate> {
+  const rootManifestPath = resolve(root, 'package.json');
+  const rootManifestContents = await readFile(rootManifestPath, 'utf8');
+  const rootManifest = parseManifest(rootManifestContents, rootManifestPath);
+  const currentVersion = rootManifest.version;
+  if (typeof currentVersion !== 'string') throw new Error('Root package version is missing');
+  const version = incrementPatchVersion(currentVersion);
+
+  const packagesDirectory = resolve(root, 'packages');
+  const entries = await readdir(packagesDirectory, { withFileTypes: true });
+  const manifests = await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory())
+      .toSorted((left, right) => left.name.localeCompare(right.name))
+      .map(async (entry) => {
+        const path = resolve(packagesDirectory, entry.name, 'package.json');
+        const contents = await readFile(path, 'utf8');
+        return { contents, manifest: parseManifest(contents, path), path };
+      }),
+  );
+  const internalPackageNames = new Set([
+    rootManifest.name,
+    ...manifests.map(({ manifest }) => manifest.name),
+  ]);
+  const updates = [
+    { contents: rootManifestContents, manifest: rootManifest, path: rootManifestPath },
+    ...manifests,
+  ].map(({ contents, manifest, path }) => {
+    if (manifest.version !== currentVersion) {
+      throw new Error(
+        `Package ${manifest.name} is version ${manifest.version}; expected ${currentVersion}`,
+      );
+    }
+    return {
+      path,
+      previousContents: contents,
+      nextContents: `${JSON.stringify(
+        updateManifestVersion(manifest, internalPackageNames, version),
+        null,
+        2,
+      )}\n`,
+    };
+  });
+  return { updates, version };
+}
+
+async function writeManifestUpdates(
+  updates: readonly ManifestUpdate[],
+  contents: 'nextContents' | 'previousContents',
+): Promise<void> {
+  await Promise.all(updates.map((update) => writeFile(update.path, update[contents], 'utf8')));
+}
+
+async function refreshLockfile(root: string): Promise<void> {
+  const processResult = Bun.spawn(['bun', 'install', '--lockfile-only', '--ignore-scripts'], {
+    cwd: root,
+    stdin: 'inherit',
+    stdout: 'inherit',
+    stderr: 'inherit',
+  });
+  const exitCode = await processResult.exited;
+  if (exitCode !== 0) throw new Error(`Updating bun.lock failed with exit code ${exitCode}`);
 }
 
 async function loadWorkspaces(root: string): Promise<readonly PublishWorkspace[]> {
@@ -153,15 +287,32 @@ async function main(): Promise<void> {
     return;
   }
 
-  const workspaces = orderPublishWorkspaces(await loadWorkspaces(root));
-  for (const workspace of workspaces) {
-    if (workspace.private) {
-      process.stdout.write(`Skipping private workspace ${workspace.name}\n`);
-      continue;
+  const lockfilePath = resolve(root, 'bun.lock');
+  const previousLockfile = await readFile(lockfilePath, 'utf8');
+  const releaseVersion = await prepareReleaseVersion(root);
+  process.stdout.write(
+    `${dryRun ? 'Previewing' : 'Preparing'} release ${releaseVersion.version}\n`,
+  );
+  await writeManifestUpdates(releaseVersion.updates, 'nextContents');
+  let published = false;
+  try {
+    await refreshLockfile(root);
+    const workspaces = orderPublishWorkspaces(await loadWorkspaces(root));
+    for (const workspace of workspaces) {
+      if (workspace.private) {
+        process.stdout.write(`Skipping private workspace ${workspace.name}\n`);
+        continue;
+      }
+      await publishPackage(root, workspace.directory, workspace.name, target, dryRun);
     }
-    await publishPackage(root, workspace.directory, workspace.name, target, dryRun);
+    await publishPackage(root, root, 'kouro', target, dryRun);
+    published = true;
+  } finally {
+    if (dryRun || !published) {
+      await writeManifestUpdates(releaseVersion.updates, 'previousContents');
+      await writeFile(lockfilePath, previousLockfile, 'utf8');
+    }
   }
-  await publishPackage(root, root, 'kouro', target, dryRun);
 }
 
 if (import.meta.main) {

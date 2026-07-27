@@ -274,8 +274,12 @@ The release commands run formatting, linting, type checking, tests, and
 production builds before publication. Registry selection and npm public access
 are command-level release policy, so package manifests do not pin
 `publishConfig` to one registry. Existing versions are tolerated to make a
-partially completed release safe to rerun; bump the root and workspace versions
-and their exact internal dependency versions before publishing a new release.
+partially completed release safe to rerun. Each release automatically increments
+the shared patch version in the root and all workspace manifests, updates exact
+internal dependency versions and `bun.lock`, then publishes that version. A dry
+run previews the next version and restores the manifests and lockfile afterward.
+Failed releases also restore these files, so the same version can be retried
+safely with already-published packages tolerated.
 
 ## Project status
 
