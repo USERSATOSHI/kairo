@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import cliPackageManifest from '../../packages/cli/package.json' with { type: 'json' };
 
 import {
   createInlineWorkItem,
@@ -169,7 +170,7 @@ describe('M7 runnable local MVP and operator CLI', () => {
       ['bun', 'run', resolve(root, 'packages', 'cli', 'src', 'main.ts'), '--version'],
       root,
     );
-    expect(version).toEqual({ exitCode: 0, stdout: '0.1.0\n', stderr: '' });
+    expect(version).toEqual({ exitCode: 0, stdout: `${cliPackageManifest.version}\n`, stderr: '' });
   });
 
   test('package launcher exposes the CLI and packaged templates', async () => {
@@ -180,7 +181,7 @@ describe('M7 runnable local MVP and operator CLI', () => {
     const launcher = resolve(root, 'bin', 'kouro.ts');
     const help = await process(['bun', 'run', launcher, '--help'], root);
     expect(help.exitCode).toBe(0);
-    expect(help.stdout).toContain('Kouro 0.1.0');
+    expect(help.stdout).toContain(`Kouro ${cliPackageManifest.version}`);
 
     const created = await process(
       ['bun', 'run', launcher, 'create', 'adw', 'packaged-cli', '--output', output],

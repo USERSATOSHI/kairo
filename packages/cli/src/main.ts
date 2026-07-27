@@ -3,6 +3,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import packageManifest from '../package.json' with { type: 'json' };
 
 import { listRuns, getRun } from '@kouro/api';
 
@@ -10,7 +11,7 @@ import { ADW_TEMPLATES, createAdw, isAdwTemplate } from './create-adw.ts';
 import { LocalKouroHost } from './local-host.ts';
 import { executeTicketCommand } from './ticket-command.ts';
 
-const VERSION = '0.1.0';
+const VERSION = packageManifest.version;
 const HELP = `Kouro ${VERSION}
 
 Usage:
