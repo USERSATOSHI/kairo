@@ -1,11 +1,11 @@
-# Kairo
+# Kouro
 
-Kairo runs repeatable development workflows around coding agents, commands,
+Kouro runs repeatable development workflows around coding agents, commands,
 Git worktrees, and human approvals.
 
-Give Kairo a workflow, a Git repository, and an installed coding-agent CLI. It
+Give Kouro a workflow, a Git repository, and an installed coding-agent CLI. It
 creates an isolated worktree, runs the declared steps, pauses when a decision
-needs you, and produces a merge-ready `kairo/<run-id>` branch when the workflow
+needs you, and produces a merge-ready `kouro/<run-id>` branch when the workflow
 finishes successfully.
 
 ## Requirements
@@ -18,10 +18,10 @@ finishes successfully.
   - `opencode`
   - `pi`
 
-Kairo runs locally. Repository worktrees, run history, logs, and artifacts stay
+Kouro runs locally. Repository worktrees, run history, logs, and artifacts stay
 on your machine.
 
-Kairo also contains the accepted T1–T6 ticket system: local greenfield
+Kouro also contains the accepted T1–T6 ticket system: local greenfield
 planning, immutable run snapshots, GitHub Issues synchronization, and
 capability-aware Forgejo Issues synchronization, including resumable migration
 from local authority to either remote provider. The local dashboard provides a
@@ -33,39 +33,39 @@ provider configuration status.
 Install directly from GitHub without cloning the repository:
 
 ```bash
-npm install --global github:usersatoshi/kairo
+npm install --global github:usersatoshi/kouro
 ```
 
 Or install it globally with Bun:
 
 ```bash
-bun add --global github:usersatoshi/kairo
+bun add --global github:usersatoshi/kouro
 ```
 
 Confirm that the command is available:
 
 ```bash
-kairo --version
-kairo --help
+kouro --version
+kouro --help
 ```
 
-Kairo ships its executable bundle in the repository, so installation does not
+Kouro ships its executable bundle in the repository, so installation does not
 depend on package lifecycle scripts being enabled.
 
 To upgrade, run the same global installation command again. Uninstall with the
 package manager you used:
 
 ```bash
-npm uninstall --global kairo
-bun remove --global kairo
+npm uninstall --global kouro
+bun remove --global kouro
 ```
 
 ## Quick start
 
-First, check which agent harnesses Kairo can use:
+First, check which agent harnesses Kouro can use:
 
 ```bash
-kairo diagnostics
+kouro diagnostics
 ```
 
 The result reports whether each supported CLI is available:
@@ -82,7 +82,7 @@ The result reports whether each supported CLI is available:
 Run the built-in feature-development workflow against a Git repository:
 
 ```bash
-kairo run feature-development \
+kouro run feature-development \
   --repo /path/to/your/repository \
   --task "Add account export with tests" \
   --harness codex
@@ -92,33 +92,33 @@ For kanban-backed work, use a source-qualified ticket reference after
 configuring that ticket provider:
 
 ```bash
-kairo run feature-development \
+kouro run feature-development \
   --repo /path/to/your/repository \
   --ticket kanban:ENG-123 \
   --harness codex
 ```
 
-Kairo resolves the ticket before creating a worktree, stores an immutable
+Kouro resolves the ticket before creating a worktree, stores an immutable
 snapshot in the run, and gives the same objective and acceptance criteria to
 every agent. Use `--task-file request.md` for longer standalone requests.
 
-Kairo-owned planning tickets are usable through the CLI:
+Kouro-owned planning tickets are usable through the CLI:
 
 ```bash
-kairo ticket create --project personal \
+kouro ticket create --project personal \
   --title "Add CSV export" \
   --description "Export filtered results as CSV."
-kairo ticket list --project personal
-kairo run feature-development --repo /path/to/repository \
-  --ticket kairo:<ticket-id> --harness codex
+kouro ticket list --project personal
+kouro run feature-development --repo /path/to/repository \
+  --ticket kouro:<ticket-id> --harness codex
 ```
 
 GitHub and Forgejo imports, synchronization, and local-to-remote migration are
 composed from environment-only credentials. See
-[`packages/cli/README.md`](packages/cli/README.md#kairo-ticket-) for setup and
+[`packages/cli/README.md`](packages/cli/README.md#kouro-ticket-) for setup and
 command examples.
 
-Kairo returns the new run ID and its current status:
+Kouro returns the new run ID and its current status:
 
 ```json
 {
@@ -130,15 +130,15 @@ Kairo returns the new run ID and its current status:
 Keep the run ID. Use it to inspect and control the run:
 
 ```bash
-kairo status run-example
-kairo runs
+kouro status run-example
+kouro runs
 ```
 
 When the workflow reaches an approval node, `status` shows the pending
 invocation sequence. Approve the plan and let the workflow continue:
 
 ```bash
-kairo approve run-example 3 --reason "Plan looks good"
+kouro approve run-example 3 --reason "Plan looks good"
 ```
 
 The built-in workflow asks for approval twice:
@@ -146,8 +146,8 @@ The built-in workflow asks for approval twice:
 1. Before implementation begins.
 2. Before the completed changes are delivered.
 
-After the final approval, Kairo creates a merge-ready branch named
-`kairo/<run-id>` in the target repository. Kairo does not merge that branch for
+After the final approval, Kouro creates a merge-ready branch named
+`kouro/<run-id>` in the target repository. Kouro does not merge that branch for
 you.
 
 ## What the built-in workflow does
@@ -170,8 +170,8 @@ Review change requests can return to the same agent context up to two times.
 Those bounds are part of the compiled workflow and cannot be increased by an
 agent.
 
-Your original checkout is not used as the agent's working directory. Kairo
-pins its current `HEAD` and creates a separate worktree under Kairo's data
+Your original checkout is not used as the agent's working directory. Kouro
+pins its current `HEAD` and creates a separate worktree under Kouro's data
 directory.
 
 ## Choose agent harnesses
@@ -179,7 +179,7 @@ directory.
 Use one harness for every unpinned agent node:
 
 ```bash
-kairo run feature-development \
+kouro run feature-development \
   --repo /path/to/repository \
   --task "Implement the requested change" \
   --harness codex
@@ -188,7 +188,7 @@ kairo run feature-development \
 Route individual nodes to different harnesses:
 
 ```bash
-kairo run feature-development \
+kouro run feature-development \
   --repo /path/to/repository \
   --task "Implement the requested change" \
   --harness plan=claude-code \
@@ -199,14 +199,14 @@ kairo run feature-development \
 Repeat a route to define fallback order:
 
 ```bash
-kairo run feature-development \
+kouro run feature-development \
   --repo /path/to/repository \
   --task "Implement the requested change" \
   --harness implement=opencode \
   --harness implement=codex
 ```
 
-If no `--harness` option is supplied, Kairo tries its default supported
+If no `--harness` option is supplied, Kouro tries its default supported
 harness order. Supplying an explicit harness is recommended so a missing CLI
 does not surprise you.
 
@@ -228,10 +228,10 @@ const implement = workflow.agent('implement', {
 });
 ```
 
-Kairo selects the entry for the harness used by that attempt. This supports a
+Kouro selects the entry for the harness used by that attempt. This supports a
 different model for each fallback harness. The selected model is included in
 the compiled workflow checksum and durable attempt history, and resumed
-sessions keep the same selection. If the selected harness has no entry, Kairo
+sessions keep the same selection. If the selected harness has no entry, Kouro
 leaves the model unset and that CLI uses its configured default.
 
 ## Create your own workflow
@@ -240,22 +240,29 @@ Create an editable ADW package in the current repository:
 
 ```bash
 cd /path/to/your/repository
-kairo create adw my-workflow --template feature-development
+kouro create adw my-workflow --template feature-development
 ```
 
 The default output is:
 
 ```text
-.kairo/my-workflow/
+.kouro/my-workflow/
   manifest.json
-  kairo.adw.ts
+  kouro.adw.ts
+  kouro-sdk.ts
   prompts/
 ```
+
+The entrypoint uses the fluent `WorkflowBuilder` API. `kouro-sdk.ts` is a
+self-contained SDK snapshot, so the generated package is immediately runnable
+without installing authoring dependencies. Add nodes with `workflow.agent`,
+`workflow.command`, `workflow.approval`, or `workflow.complete`, then connect
+their handles with `node.on(...).to(...)`.
 
 Run it by passing its directory:
 
 ```bash
-kairo run .kairo/my-workflow --repo . --harness codex
+kouro run .kouro/my-workflow --repo . --harness codex
 ```
 
 Available starter templates:
@@ -268,30 +275,30 @@ Available starter templates:
 | `chore` | Implement and validate focused maintenance work |
 
 Use `--output <directory>` to create the workflow somewhere other than
-`.kairo`. Kairo refuses to overwrite an existing workflow directory.
+`.kouro`. Kouro refuses to overwrite an existing workflow directory.
 
 ## Run operations
 
 ### Inspect runs
 
 ```bash
-kairo runs
-kairo status <run-id>
+kouro runs
+kouro status <run-id>
 ```
 
 ### Decide approvals
 
 ```bash
-kairo approve <run-id> <invocation> --reason "Approved"
-kairo reject <run-id> <invocation> --reason "Needs a different approach"
+kouro approve <run-id> <invocation> --reason "Approved"
+kouro reject <run-id> <invocation> --reason "Needs a different approach"
 ```
 
 ### Control a run
 
 ```bash
-kairo pause <run-id>
-kairo resume <run-id>
-kairo cancel <run-id> --reason "No longer needed"
+kouro pause <run-id>
+kouro resume <run-id>
+kouro cancel <run-id> --reason "No longer needed"
 ```
 
 Pausing is recoverable. Cancellation is terminal.
@@ -299,9 +306,9 @@ Pausing is recoverable. Cancellation is terminal.
 ### Control an invocation
 
 ```bash
-kairo interrupt <run-id> <invocation> --reason "Taking too long"
-kairo retry <run-id> <invocation> --reason "Transient failure"
-kairo skip <run-id> <invocation> --reason "Not applicable"
+kouro interrupt <run-id> <invocation> --reason "Taking too long"
+kouro retry <run-id> <invocation> --reason "Transient failure"
+kouro skip <run-id> <invocation> --reason "Not applicable"
 ```
 
 Skipping works only when the workflow explicitly declares that invocation as
@@ -312,7 +319,7 @@ eligible to skip.
 Start the local server:
 
 ```bash
-kairo serve
+kouro serve
 ```
 
 Then open:
@@ -324,7 +331,7 @@ http://localhost:4317
 Choose a different port when needed:
 
 ```bash
-kairo serve --port 8080
+kouro serve --port 8080
 ```
 
 The server exposes the API under `/api/` and serves the bundled execution
@@ -333,22 +340,22 @@ console.
 
 ## Local data
 
-Kairo follows the XDG Base Directory Specification:
+Kouro follows the XDG Base Directory Specification:
 
 | Data | Default location | Override |
 | --- | --- | --- |
-| Database and run data | `~/.local/share/kairo` | `KAIRO_DATA_DIR` |
-| Configuration | `~/.config/kairo` | `KAIRO_CONFIG_DIR` |
-| Artifacts | `~/.local/share/kairo/artifacts` | Derived from data directory |
-| Worktrees | `~/.local/share/kairo/worktrees` | Derived from data directory |
+| Database and run data | `~/.local/share/kouro` | `KOURO_DATA_DIR` |
+| Configuration | `~/.config/kouro` | `KOURO_CONFIG_DIR` |
+| Artifacts | `~/.local/share/kouro/artifacts` | Derived from data directory |
+| Worktrees | `~/.local/share/kouro/worktrees` | Derived from data directory |
 
-`XDG_DATA_HOME` and `XDG_CONFIG_HOME` are respected when the Kairo-specific
+`XDG_DATA_HOME` and `XDG_CONFIG_HOME` are respected when the Kouro-specific
 variables are not set.
 
 Use a separate data directory for an isolated experiment:
 
 ```bash
-KAIRO_DATA_DIR=/tmp/kairo-demo kairo runs
+KOURO_DATA_DIR=/tmp/kouro-demo kouro runs
 ```
 
 ## Troubleshooting
@@ -358,24 +365,24 @@ KAIRO_DATA_DIR=/tmp/kairo-demo kairo runs
 Run:
 
 ```bash
-kairo diagnostics
+kouro diagnostics
 ```
 
 Install the missing agent CLI, authenticate it using that tool's normal login
-flow, and retry with its Kairo harness ID. Note that the executable names and
+flow, and retry with its Kouro harness ID. Note that the executable names and
 harness IDs differ for Claude Code: the executable is `claude`, while the
 harness ID is `claude-code`.
 
-### Kairo is waiting for approval
+### Kouro is waiting for approval
 
 Inspect the run:
 
 ```bash
-kairo status <run-id>
+kouro status <run-id>
 ```
 
 Find the pending approval invocation sequence, then pass that number to
-`kairo approve` or `kairo reject`.
+`kouro approve` or `kouro reject`.
 
 ### A repository cannot be registered
 
@@ -385,18 +392,18 @@ Confirm that the path is a Git repository with a valid `HEAD`:
 git -C /path/to/repository rev-parse HEAD
 ```
 
-Kairo pins that commit before creating its worktree. Uncommitted changes in
+Kouro pins that commit before creating its worktree. Uncommitted changes in
 your existing checkout are not part of the pinned starting commit.
 
 ### Where are the completed changes?
 
-Inspect the target repository's Kairo branches:
+Inspect the target repository's Kouro branches:
 
 ```bash
-git -C /path/to/repository branch --list 'kairo/*'
+git -C /path/to/repository branch --list 'kouro/*'
 ```
 
-The branch name for a successful run is `kairo/<run-id>`.
+The branch name for a successful run is `kouro/<run-id>`.
 
 ## Documentation
 
@@ -408,4 +415,4 @@ The branch name for a successful run is `kairo/<run-id>`.
 - [Milestone acceptance records](docs/milestones)
 - [Architecture decisions](docs/adrs)
 
-Kairo is licensed under [Apache-2.0](LICENSE).
+Kouro is licensed under [Apache-2.0](LICENSE).

@@ -10,7 +10,7 @@ intentionally design a specific stage for a specific coding harness. Requiring
 operators to repeat that fixed choice on every run is noisy and makes the
 workflow's intended execution policy implicit.
 
-Kairo still needs portable agent nodes whose harness is selected when a run is
+Kouro still needs portable agent nodes whose harness is selected when a run is
 created.
 
 ## Decision

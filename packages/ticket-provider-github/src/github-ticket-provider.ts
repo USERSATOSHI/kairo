@@ -11,7 +11,7 @@ import {
   type TicketProvider,
   type TicketProviderCapabilities,
   type TicketProviderError,
-} from '@kairo/tickets';
+} from '@kouro/tickets';
 import { fromAsync, ok, safeCall, type Result } from '@usersatoshi/results';
 
 import { githubError } from './errors.ts';
@@ -377,7 +377,7 @@ export class GitHubTicketProvider implements TicketProvider {
     headers.set('accept', 'application/vnd.github+json');
     headers.set('authorization', `Bearer ${this.options.token}`);
     headers.set('content-type', 'application/json');
-    headers.set('user-agent', 'kairo-ticket-provider');
+    headers.set('user-agent', 'kouro-ticket-provider');
     const response = await fromAsync(
       () =>
         this.requestFetch(`${this.apiUrl}${path}`, {

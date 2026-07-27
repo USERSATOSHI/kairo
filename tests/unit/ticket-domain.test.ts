@@ -7,7 +7,7 @@ import {
   validateRelationship,
   validateTicketBinding,
   validateUpdateTicketInput,
-} from '@kairo/tickets';
+} from '@kouro/tickets';
 
 describe('ticket domain validation', () => {
   test('normalizes ticket labels and assignees deterministically', () => {
@@ -47,7 +47,7 @@ describe('ticket domain validation', () => {
     const binding = validateTicketBinding({
       kind: 'github',
       owner: '',
-      repository: 'kairo',
+      repository: 'kouro',
       issueNumber: 1,
       externalUrl: 'https://example.test/1',
     });

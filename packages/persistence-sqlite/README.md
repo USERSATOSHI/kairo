@@ -1,6 +1,6 @@
-# `@kairo/persistence-sqlite` — SQLite Event Store
+# `@kouro/persistence-sqlite` — SQLite Event Store
 
-SQLite-backed event-sourcing persistence for Kairo runs. Implements the `RunStore` port from `@kairo/executors` with append-only event storage, transactional materialized projections, idempotency tracking, and restart-safe loading with corruption detection.
+SQLite-backed event-sourcing persistence for Kouro runs. Implements the `RunStore` port from `@kouro/executors` with append-only event storage, transactional materialized projections, idempotency tracking, and restart-safe loading with corruption detection.
 
 ## Architecture
 
@@ -24,9 +24,9 @@ SqliteEventStore (this package)
 ## Usage
 
 ```typescript
-import { SqliteEventStore } from '@kairo/persistence-sqlite';
+import { SqliteEventStore } from '@kouro/persistence-sqlite';
 
-const store = new SqliteEventStore('/path/to/kairo.db');
+const store = new SqliteEventStore('/path/to/kouro.db');
 
 // Initialize (create tables, run migrations)
 const initResult = store.initialize();
@@ -174,8 +174,8 @@ class SqliteEventStore implements RunStore {
 
 | Package | Purpose |
 |---------|---------|
-| `@kairo/adw` | `canonicalJson`, `sha256` for canonical serialization |
-| `@kairo/domain` | Domain types for events, state, bindings |
-| `@kairo/executors` | `RunStore` port interface, `RunAggregate`, `RunStoreError` |
-| `@kairo/runtime` | `reduceRun` — pure state machine for event replay |
+| `@kouro/adw` | `canonicalJson`, `sha256` for canonical serialization |
+| `@kouro/domain` | Domain types for events, state, bindings |
+| `@kouro/executors` | `RunStore` port interface, `RunAggregate`, `RunStoreError` |
+| `@kouro/runtime` | `reduceRun` — pure state machine for event replay |
 | `@usersatoshi/results` | `Result<T, E>` type |

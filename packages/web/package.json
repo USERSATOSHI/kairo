@@ -1,5 +1,5 @@
 {
-  "name": "@kairo/web",
+  "name": "@kouro/web",
   "version": "0.1.0",
   "private": true,
   "license": "Apache-2.0",
@@ -9,7 +9,7 @@
     "dev": "vite"
   },
   "dependencies": {
-    "@kairo/api-contracts": "0.1.0",
+    "@kouro/api-contracts": "0.1.0",
     "@xyflow/react": "^12.11.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"

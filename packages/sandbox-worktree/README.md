@@ -1,6 +1,6 @@
-# `@kairo/sandbox-worktree` — Isolated Git Worktree Manager
+# `@kouro/sandbox-worktree` — Isolated Git Worktree Manager
 
-Infrastructure adapter for managing **isolated, disposable Git worktrees** as execution sandboxes for Kairo workflow runs. Provides deterministic, recoverable operations on top of Git repositories — registration, commit pinning, worktree creation, controlled commits, artifact capture, and cleanup.
+Infrastructure adapter for managing **isolated, disposable Git worktrees** as execution sandboxes for Kouro workflow runs. Provides deterministic, recoverable operations on top of Git repositories — registration, commit pinning, worktree creation, controlled commits, artifact capture, and cleanup.
 
 ## Architecture
 
@@ -16,7 +16,7 @@ WorktreeSandboxProvider
 ### Lifecycle
 
 ```typescript
-import { WorktreeSandboxProvider } from '@kairo/sandbox-worktree';
+import { WorktreeSandboxProvider } from '@kouro/sandbox-worktree';
 
 const sandbox = new WorktreeSandboxProvider('/path/to/management/root');
 
@@ -51,13 +51,13 @@ const commitResult = await sandbox.commitWorktree({
   expectedHead: prepared.head,
   expectedTree: prepared.tree,
   message: 'Workflow output',
-  identity: { name: 'Kairo', email: 'kairo@example.com' },
+  identity: { name: 'Kouro', email: 'kouro@example.com' },
   timestamp: '2026-07-26T12:00:00.000Z',
 });
 // Returns: { commit: 'ghi...', recovered: false }
 
-// 9. Create delivery branch (kairo/ namespace)
-await sandbox.createDeliveryBranch(worktree, 'kairo/run-abc', commitResult.commit);
+// 9. Create delivery branch (kouro/ namespace)
+await sandbox.createDeliveryBranch(worktree, 'kouro/run-abc', commitResult.commit);
 
 // 10. Clean up the worktree
 await sandbox.cleanupWorktree(worktree);
@@ -142,7 +142,7 @@ The **fully controlled commit** operation:
 
 ### `createDeliveryBranch(worktree, branchName, commit)`
 
-- Creates a branch in the `kairo/<name>` namespace
+- Creates a branch in the `kouro/<name>` namespace
 - If branch exists at same commit → no-op
 - If branch exists at different commit → `HeadConflict`
 
@@ -208,4 +208,4 @@ Per-repository filesystem locks under `locks/`:
 |---------|---------|
 | `@usersatoshi/results` | `Result<T, E>` type |
 
-No other Kairo dependencies — this is a standalone infrastructure package.
+No other Kouro dependencies — this is a standalone infrastructure package.

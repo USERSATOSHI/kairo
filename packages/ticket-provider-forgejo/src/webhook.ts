@@ -4,7 +4,7 @@ import {
   TicketProviderErrorKind,
   type ProviderTicket,
   type TicketProviderError,
-} from '@kairo/tickets';
+} from '@kouro/tickets';
 import { ok, safeCall, type Result } from '@usersatoshi/results';
 
 import { forgejoError } from './errors.ts';

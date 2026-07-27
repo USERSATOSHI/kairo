@@ -1,24 +1,24 @@
-# Kairo development and architecture guide
+# Kouro development and architecture guide
 
 This document is for contributors and package consumers. For installation and
 day-to-day CLI usage, start with the [user guide](../README.md).
 
 ## Development setup
 
-Kairo is a Bun and TypeScript monorepo.
+Kouro is a Bun and TypeScript monorepo.
 
 ```bash
 git clone <repository-url>
-cd kairo
+cd kouro
 bun install
 ```
 
 Run the CLI from source:
 
 ```bash
-bun run kairo --help
-bun run kairo diagnostics
-bun run kairo run feature-development \
+bun run kouro --help
+bun run kouro diagnostics
+bun run kouro run feature-development \
   --repo /path/to/repository \
   --task "Implement the requested change" \
   --harness codex
@@ -52,7 +52,7 @@ Build and link the distributable root CLI:
 ```bash
 bun run build:cli
 bun link
-kairo --version
+kouro --version
 ```
 
 The generated executable is `packages/cli/dist/main.js`. It is committed
@@ -84,21 +84,21 @@ Each independently distributed workspace includes its own `LICENSE` and
 
 | Package | Responsibility |
 | --- | --- |
-| `@kairo/domain` | Immutable domain types and durable event contracts |
-| `@kairo/adw` | ADW authoring SDK, package loading, validation, and deterministic compilation |
-| `@kairo/runtime` | Pure reduction, transition selection, scheduling, simulation, and recovery decisions |
-| `@kairo/executors` | Application coordination and execution ports |
-| `@kairo/persistence-sqlite` | Transactional event history and query projections |
-| `@kairo/sandbox-worktree` | Git repository registration, worktree isolation, artifacts, and delivery branches |
-| `@kairo/harnesses` | Claude Code, Codex, OpenCode, and Pi adapters |
-| `@kairo/api-contracts` | Transport DTOs and shared API contracts |
-| `@kairo/api` | Elysia application boundary and use cases |
-| `@kairo/web` | Read-only execution console and approval controls |
-| `@kairo/cli` | Local composition root, worker, HTTP host, and operator CLI |
+| `@kouro/domain` | Immutable domain types and durable event contracts |
+| `@kouro/adw` | ADW authoring SDK, package loading, validation, and deterministic compilation |
+| `@kouro/runtime` | Pure reduction, transition selection, scheduling, simulation, and recovery decisions |
+| `@kouro/executors` | Application coordination and execution ports |
+| `@kouro/persistence-sqlite` | Transactional event history and query projections |
+| `@kouro/sandbox-worktree` | Git repository registration, worktree isolation, artifacts, and delivery branches |
+| `@kouro/harnesses` | Claude Code, Codex, OpenCode, and Pi adapters |
+| `@kouro/api-contracts` | Transport DTOs and shared API contracts |
+| `@kouro/api` | Elysia application boundary and use cases |
+| `@kouro/web` | Read-only execution console and approval controls |
+| `@kouro/cli` | Local composition root, worker, HTTP host, and operator CLI |
 
 ## Dependency direction
 
-Kairo maintains this dependency direction:
+Kouro maintains this dependency direction:
 
 ```text
 Transport
@@ -110,7 +110,7 @@ Domain and runtime
 Declared ports
 ```
 
-Infrastructure implements ports and is composed by `@kairo/cli`.
+Infrastructure implements ports and is composed by `@kouro/cli`.
 
 - Domain and runtime code does not import Elysia, React, SQLite adapters, Git
   adapters, concrete harnesses, or filesystem APIs.
@@ -125,12 +125,12 @@ See [AGENTS.md](../AGENTS.md) for the complete engineering rules.
 
 ## Determinism contract
 
-Kairo's runtime guarantee is:
+Kouro's runtime guarantee is:
 
-> Given the same compiled workflow and ordered durable event history, Kairo
+> Given the same compiled workflow and ordered durable event history, Kouro
 > reconstructs the same state and emits the same next orchestration decisions.
 
-Kairo does not claim that agents, shell commands, Git, filesystems, or networks
+Kouro does not claim that agents, shell commands, Git, filesystems, or networks
 are deterministic. Their outcomes are recorded durably; orchestration decisions
 over those outcomes are deterministic.
 
@@ -154,7 +154,7 @@ The installed CLI templates use dependency-free data definitions so they work
 outside this monorepo. Package consumers can use the typed authoring SDK:
 
 ```typescript
-import { WorkflowBuilder } from '@kairo/adw';
+import { WorkflowBuilder } from '@kouro/adw';
 
 const workflow = new WorkflowBuilder({
   id: 'feature-work',
@@ -202,7 +202,8 @@ An ADW package contains:
 ```text
 my-workflow/
   manifest.json
-  kairo.adw.ts
+  kouro.adw.ts
+  kouro-sdk.ts
   prompts/
   schemas/
 ```
@@ -213,16 +214,16 @@ selection.
 
 For a complete implementation, see the built-in
 [`feature-development`](../packages/cli/assets/adws/feature-development)
-workflow and the [`@kairo/adw` package guide](../packages/adw/README.md).
+workflow and the [`@kouro/adw` package guide](../packages/adw/README.md).
 
 ## Local composition
 
-`@kairo/cli` owns the single-process local application:
+`@kouro/cli` owns the single-process local application:
 
 ```text
 CLI and HTTP
     ↓
-LocalKairoHost
+LocalKouroHost
     ├── SqliteEventStore
     ├── WorktreeSandboxProvider
     ├── HarnessRegistry
@@ -234,7 +235,7 @@ LocalKairoHost
 Initialization creates the XDG data directories, opens SQLite, initializes the
 worktree provider, and recovers interrupted runs. The local worker advances
 runs to stable boundaries. Successful terminal runs capture Git artifacts,
-create a controlled commit, and expose a `kairo/<run-id>` delivery branch.
+create a controlled commit, and expose a `kouro/<run-id>` delivery branch.
 
 The local MVP is intentionally single-process. Separate workers, PostgreSQL,
 remote isolation, automatic merge, and deployment remain deferred.

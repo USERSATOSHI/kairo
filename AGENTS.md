@@ -2,10 +2,10 @@
 
 ## Purpose
 
-These instructions apply to every human or coding agent modifying Kairo.
+These instructions apply to every human or coding agent modifying Kouro.
 
-Kairo follows the Google TypeScript Style Guide where it is compatible with
-the project's runtime, architecture, and tooling. Kairo-specific rules in this
+Kouro follows the Google TypeScript Style Guide where it is compatible with
+the project's runtime, architecture, and tooling. Kouro-specific rules in this
 file take precedence. Deliberate exceptions must be documented in
 `docs/engineering/google-typescript-exceptions.md`.
 
@@ -103,7 +103,7 @@ Use a class when the object:
 - Implements a long-lived infrastructure port with injected dependencies.
 - Represents a stateful coordinator, adapter, store, worker, or sandbox.
 
-Typical Kairo classes include:
+Typical Kouro classes include:
 
 - `SqliteEventStore`
 - `RunCoordinator`
@@ -233,7 +233,7 @@ Rules:
 - Return `Result` from application, domain, executor, and persistence
   boundaries.
 - Unexpected programming defects may throw.
-- Do not use one global `KairoError` union.
+- Do not use one global `KouroError` union.
 - Persist only serializable errors.
 - Numeric error kinds that cross a process, API, plugin, or persistence
   boundary must have explicit stable values.
@@ -243,9 +243,9 @@ Rules:
 
 ## Deterministic runtime rules
 
-Kairo's determinism contract is:
+Kouro's determinism contract is:
 
-> Given the same compiled workflow and ordered durable event history, Kairo
+> Given the same compiled workflow and ordered durable event history, Kouro
 > reconstructs the same state and emits the same next orchestration decisions.
 
 Maintain these distinctions:

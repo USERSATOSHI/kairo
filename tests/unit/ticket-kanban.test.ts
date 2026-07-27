@@ -5,7 +5,7 @@ import {
   derivePlanningColumn,
   type Ticket,
   type TicketStatus,
-} from '@kairo/tickets';
+} from '@kouro/tickets';
 
 function ticket(status: TicketStatus): Ticket {
   return {

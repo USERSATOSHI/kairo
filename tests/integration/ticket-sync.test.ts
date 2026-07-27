@@ -10,8 +10,8 @@ import {
   TicketSyncService,
   type TicketClock,
   type TicketIdGenerator,
-} from '@kairo/tickets';
-import { GitHubTicketProvider, type TicketFetch } from '@kairo/ticket-provider-github';
+} from '@kouro/tickets';
+import { GitHubTicketProvider, type TicketFetch } from '@kouro/ticket-provider-github';
 
 function issue(title = 'Imported issue'): Record<string, unknown> {
   return {
@@ -20,7 +20,7 @@ function issue(title = 'Imported issue'): Record<string, unknown> {
     title,
     body: 'Synced body',
     state: 'open',
-    html_url: 'https://github.test/acme/kairo/issues/1',
+    html_url: 'https://github.test/acme/kouro/issues/1',
     updated_at: title === 'Imported issue' ? 'revision-1' : 'revision-2',
     labels: [{ name: 'sync' }],
     assignees: [],
@@ -44,8 +44,8 @@ class Ids implements TicketIdGenerator {
 
 describe('T3 ticket synchronization', () => {
   test('imports, polls, deduplicates webhooks, and emits idempotent run comments', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'kairo-ticket-sync-'));
-    const path = join(directory, 'kairo.sqlite');
+    const directory = mkdtempSync(join(tmpdir(), 'kouro-ticket-sync-'));
+    const path = join(directory, 'kouro.sqlite');
     const tickets = new SqliteTicketRepository(path);
     const sync = new SqliteTicketSyncStore(path);
     let current = issue();
@@ -56,8 +56,8 @@ describe('T3 ticket synchronization', () => {
         comments += 1;
         return Response.json({
           id: comments,
-          body: 'run started for Kairo run run-1',
-          user: { login: 'kairo' },
+          body: 'run started for Kouro run run-1',
+          user: { login: 'kouro' },
           created_at: '2026-07-26T12:00:00Z',
         });
       }
@@ -68,7 +68,7 @@ describe('T3 ticket synchronization', () => {
     };
     const github = new GitHubTicketProvider({
       owner: 'acme',
-      repository: 'kairo',
+      repository: 'kouro',
       projectId: 'project-1',
       token: 'token',
       apiUrl: 'https://api.github.test',

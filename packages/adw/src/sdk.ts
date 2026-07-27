@@ -4,7 +4,7 @@ import type {
   JsonValue,
   RecoveryPolicy,
   SourceTransition,
-} from '@kairo/domain';
+} from '@kouro/domain';
 
 export interface AgentNodeAuthoring {
   readonly type: 'agent';

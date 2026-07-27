@@ -1,10 +1,10 @@
-# `@kairo/domain` — Immutable Domain Contracts
+# `@kouro/domain` — Immutable Domain Contracts
 
-The **foundational type system** of Kairo. Zero runtime code — pure TypeScript type definitions that serve as the shared vocabulary across the compiler, runtime, executors, persistence, API, and UI layers.
+The **foundational type system** of Kouro. Zero runtime code — pure TypeScript type definitions that serve as the shared vocabulary across the compiler, runtime, executors, persistence, API, and UI layers.
 
 ## Purpose
 
-`@kairo/domain` defines:
+`@kouro/domain` defines:
 
 - **Workflow structure** — source and compiled forms of workflow definitions
 - **Event stream format** — 20 event variants for the append-only event log
@@ -18,7 +18,7 @@ The **foundational type system** of Kairo. Zero runtime code — pure TypeScript
 ### Source (authored) vs Compiled
 
 ```typescript
-// As authored by the user (from @kairo/adw)
+// As authored by the user (from @kouro/adw)
 interface SourceNodeDefinition {
   id: string;
   type: 'agent' | 'approval' | 'command' | 'complete';

@@ -9,7 +9,7 @@ import {
   type PinnedRepository,
   type RegisteredRepository,
   type RunWorktree,
-} from '@kairo/sandbox-worktree';
+} from '@kouro/sandbox-worktree';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 
 async function git(cwd: string, ...args: readonly string[]): Promise<string> {
@@ -17,10 +17,10 @@ async function git(cwd: string, ...args: readonly string[]): Promise<string> {
     cwd,
     env: {
       ...process.env,
-      GIT_AUTHOR_NAME: 'Kairo Test',
-      GIT_AUTHOR_EMAIL: 'kairo@example.test',
-      GIT_COMMITTER_NAME: 'Kairo Test',
-      GIT_COMMITTER_EMAIL: 'kairo@example.test',
+      GIT_AUTHOR_NAME: 'Kouro Test',
+      GIT_AUTHOR_EMAIL: 'kouro@example.test',
+      GIT_COMMITTER_NAME: 'Kouro Test',
+      GIT_COMMITTER_EMAIL: 'kouro@example.test',
       GIT_AUTHOR_DATE: '2026-07-26T00:00:00.000Z',
       GIT_COMMITTER_DATE: '2026-07-26T00:00:00.000Z',
     },
@@ -45,7 +45,7 @@ describe('WorktreeSandboxProvider', () => {
   let pinned: PinnedRepository;
 
   beforeEach(async () => {
-    temporaryRoot = await mkdtemp(join(tmpdir(), 'kairo-worktree-test-'));
+    temporaryRoot = await mkdtemp(join(tmpdir(), 'kouro-worktree-test-'));
     repositoryPath = join(temporaryRoot, 'repository');
     managementRoot = join(temporaryRoot, 'management');
     await git(temporaryRoot, 'init', '--initial-branch=main', repositoryPath);
@@ -131,8 +131,8 @@ describe('WorktreeSandboxProvider', () => {
       expectedTree: prepared.tree,
       message: 'controlled change',
       identity: {
-        name: 'Kairo',
-        email: 'kairo@example.test',
+        name: 'Kouro',
+        email: 'kouro@example.test',
       },
       timestamp: '2026-07-26T01:02:03.000Z',
     } as const;
@@ -163,8 +163,8 @@ describe('WorktreeSandboxProvider', () => {
       expectedTree: prepared.tree,
       message: 'must not commit',
       identity: {
-        name: 'Kairo',
-        email: 'kairo@example.test',
+        name: 'Kouro',
+        email: 'kouro@example.test',
       },
       timestamp: '2026-07-26T01:02:03.000Z',
     });

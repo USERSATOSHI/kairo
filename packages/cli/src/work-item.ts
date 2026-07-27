@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 
-import type { JsonValue, WorkItemSnapshot } from '@kairo/domain';
-import type { ResolvedTicket, TicketProvider } from '@kairo/executors';
-import type { Ticket, TicketSnapshot } from '@kairo/tickets';
+import type { JsonValue, WorkItemSnapshot } from '@kouro/domain';
+import type { ResolvedTicket, TicketProvider } from '@kouro/executors';
+import type { Ticket, TicketSnapshot } from '@kouro/tickets';
 import { err, ok, type Result } from '@usersatoshi/results';
 
 export const enum WorkItemResolutionErrorKind {
@@ -88,7 +88,7 @@ export function createStoredTicketWorkItem(
 ): Result<WorkItemSnapshot, WorkItemResolutionError> {
   return snapshot({
     kind: 'ticket',
-    provider: 'kairo',
+    provider: 'kouro',
     reference: ticket.id,
     revision: stored.providerRevision,
     ...(ticket.binding.kind === 'local' ? {} : { url: ticket.binding.externalUrl }),

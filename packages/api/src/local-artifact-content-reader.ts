@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import type { ArtifactContent } from '@kairo/api-contracts';
-import type { ArtifactReference } from '@kairo/domain';
+import type { ArtifactContent } from '@kouro/api-contracts';
+import type { ArtifactReference } from '@kouro/domain';
 import { err, ok, type Result } from '@usersatoshi/results';
 
 import type { ArtifactContentReader, ArtifactContentReaderError } from './ports.ts';

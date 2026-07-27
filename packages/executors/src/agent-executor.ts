@@ -1,4 +1,4 @@
-import type { ArtifactReference, JsonValue } from '@kairo/domain';
+import type { ArtifactReference, JsonValue } from '@kouro/domain';
 import { err, ok, type Result } from '@usersatoshi/results';
 
 import type {
@@ -7,6 +7,8 @@ import type {
   ArtifactWriterError,
   HarnessError,
   HarnessExecutionRequest,
+  InvocationActivitySession,
+  InvocationActivitySink,
 } from './ports.ts';
 import { validateStructuredOutput, type StructuredOutputIssue } from './structured-output.ts';
 
@@ -60,6 +62,7 @@ export class AgentExecutor {
   constructor(
     private readonly registry: AgentHarnessRegistry,
     private readonly artifactWriter: ArtifactWriter,
+    private readonly activity?: InvocationActivitySink,
   ) {}
 
   async execute(
@@ -74,6 +77,15 @@ export class AgentExecutor {
       });
     }
     const harness = resolved.unwrap();
+    const activitySession: InvocationActivitySession = {
+      runId: input.runId,
+      invocationSequence: input.invocationSequence,
+      attemptNumber: input.attemptNumber,
+      harnessId: input.harnessId,
+      role: input.role,
+      prompt: input.prompt,
+    };
+    await this.observeActivity(() => this.activity?.start(activitySession));
     const request: HarnessExecutionRequest = {
       runId: input.runId,
       invocationSequence: input.invocationSequence,
@@ -84,10 +96,22 @@ export class AgentExecutor {
       capabilities: input.capabilities,
       ...(input.model === undefined ? {} : { model: input.model }),
       ...(input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema }),
+      ...(this.activity
+        ? {
+            onTranscriptChunk: (chunk: string) =>
+              this.observeActivity(() => this.activity?.append(activitySession, chunk)),
+          }
+        : {}),
     };
-    const execution = input.resumeToken
-      ? await harness.resume(request, input.resumeToken)
-      : await harness.execute(request);
+    const execution = await (async () => {
+      try {
+        return input.resumeToken
+          ? await harness.resume(request, input.resumeToken)
+          : await harness.execute(request);
+      } finally {
+        await this.observeActivity(() => this.activity?.finish(activitySession));
+      }
+    })();
     if (execution.isErr()) {
       return err({
         kind: AgentExecutorErrorKind.Harness,
@@ -138,5 +162,13 @@ export class AgentExecutor {
       ...(completed.resumeToken ? { resumeToken: completed.resumeToken } : {}),
       artifacts,
     });
+  }
+
+  private async observeActivity(operation: () => Promise<void> | undefined): Promise<void> {
+    try {
+      await operation();
+    } catch {
+      // Live activity is best-effort and must never change attempt execution.
+    }
   }
 }

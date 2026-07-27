@@ -48,7 +48,7 @@ compiler failures.
 
 Two conditions, `status == "failed"` and `exitCode != 0`, may both match the
 same output. Selecting whichever was written first hides a malformed workflow.
-Kairo fails the selection instead.
+Kouro fails the selection instead.
 
 ## Executable acceptance scenarios
 

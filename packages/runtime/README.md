@@ -1,6 +1,6 @@
-# `@kairo/runtime` — Pure Deterministic Runtime
+# `@kouro/runtime` — Pure Deterministic Runtime
 
-The **functional core** of the Kairo workflow engine. Pure, side-effect-free functions for event-sourcing state reconstruction, transition selection, and orchestration intent scheduling.
+The **functional core** of the Kouro workflow engine. Pure, side-effect-free functions for event-sourcing state reconstruction, transition selection, and orchestration intent scheduling.
 
 This package has **zero side effects** — no I/O, no database, no network, no logging, no clocks. Everything is deterministic: given the same compiled workflow artifact and the same ordered events, it produces the same state and the same intents.
 
@@ -32,7 +32,7 @@ Event Store → reduceRun() → RunState → scheduleRun() → Intent → RunCoo
 The primary public API — composes the full pipeline:
 
 ```typescript
-import { simulate } from '@kairo/runtime';
+import { simulate } from '@kouro/runtime';
 
 const result = simulate(artifact, events);
 if (result.isOk()) {
@@ -56,7 +56,7 @@ const canonical = canonicalJson({ state, intents });
 Replays an ordered sequence of events against a compiled artifact to produce the current state:
 
 ```typescript
-import { reduceRun } from '@kairo/runtime';
+import { reduceRun } from '@kouro/runtime';
 
 const stateResult = reduceRun(artifact, events);
 ```
@@ -90,7 +90,7 @@ The reducer is an **event-sourcing state machine** — it handles all 20 event t
 Given the current run state, determines what the engine should do next:
 
 ```typescript
-import { scheduleRun } from '@kairo/runtime';
+import { scheduleRun } from '@kouro/runtime';
 
 const intentsResult = scheduleRun(artifact, state);
 ```
@@ -111,7 +111,7 @@ Decision priority (first match wins):
 Determines which transition to follow after a node completes:
 
 ```typescript
-import { selectTransition } from '@kairo/runtime';
+import { selectTransition } from '@kouro/runtime';
 
 const transition = selectTransition(workflow, state, invocation);
 ```
@@ -123,7 +123,7 @@ Algorithm: filter transitions by `(nodeId, outcome)`, evaluate conditions, selec
 Evaluates the restricted expression language:
 
 ```typescript
-import { evaluateExpression } from '@kairo/runtime';
+import { evaluateExpression } from '@kouro/runtime';
 
 const result = evaluateExpression(expression, state, output);
 ```
@@ -198,6 +198,6 @@ The decision expression language is intentionally restricted — no arbitrary Ja
 
 | Package | Purpose |
 |---------|---------|
-| `@kairo/adw` | `canonicalJson` for canonical JSON serialization |
-| `@kairo/domain` | All domain types |
+| `@kouro/adw` | `canonicalJson` for canonical JSON serialization |
+| `@kouro/domain` | All domain types |
 | `@usersatoshi/results` | `Result<T, E>` type |

@@ -12,7 +12,7 @@ recovery, audit history, and UI state ambiguous.
 
 ## Decision
 
-Kairo uses three identities:
+Kouro uses three identities:
 
 - `NodeDefinition`: immutable compiled configuration;
 - `NodeInvocation`: one activation through the graph;

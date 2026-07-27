@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { link, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { link, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import { err, ok, type Result } from '@usersatoshi/results';
@@ -9,8 +9,8 @@ import {
   type ArtifactWriteRequest,
   type ArtifactWriter,
   type ArtifactWriterError,
-} from '@kairo/executors';
-import type { ArtifactReference } from '@kairo/domain';
+} from '@kouro/executors';
+import type { ArtifactReference } from '@kouro/domain';
 
 function sha256(content: string): `sha256:${string}` {
   return `sha256:${createHash('sha256').update(content).digest('hex')}`;
@@ -18,6 +18,20 @@ function sha256(content: string): `sha256:${string}` {
 
 export class LocalArtifactWriter implements ArtifactWriter {
   constructor(private readonly root: string) {}
+
+  /** Removes the Kouro-owned artifact tree for one run. The operation is idempotent. */
+  async deleteRunArtifacts(runId: string): Promise<Result<void, ArtifactWriterError>> {
+    const runDirectory = createHash('sha256').update(runId).digest('hex');
+    try {
+      await rm(resolve(this.root, runDirectory), { recursive: true, force: true });
+      return ok(undefined);
+    } catch (cause) {
+      return err({
+        kind: ArtifactWriterErrorKind.WriteFailure,
+        message: cause instanceof Error ? cause.message : 'Artifact deletion failed',
+      });
+    }
+  }
 
   async write(
     request: ArtifactWriteRequest,

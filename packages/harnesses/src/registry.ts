@@ -5,7 +5,7 @@ import {
   type AgentHarness,
   type AgentHarnessRegistry,
   type HarnessError,
-} from '@kairo/executors';
+} from '@kouro/executors';
 
 export class HarnessRegistry implements AgentHarnessRegistry {
   private readonly harnesses: ReadonlyMap<string, AgentHarness>;

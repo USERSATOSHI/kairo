@@ -5,7 +5,9 @@ import type {
   ArtifactView,
   CreateRunRequest,
   CreateRunResponse,
+  DeleteRunResponse,
   EventStreamMessage,
+  InvocationActivityView,
   LifecycleRequest,
   LifecycleResponse,
   RepositorySummary,
@@ -15,20 +17,22 @@ import type {
   WorkflowEdgeView,
   WorkflowNodeView,
   WorkflowSummary,
-} from '@kairo/api-contracts';
-import type { ArtifactReference, NodeInvocation } from '@kairo/domain';
+} from '@kouro/api-contracts';
+import type { ArtifactReference, NodeInvocation } from '@kouro/domain';
 import {
   RunStoreErrorKind,
   type RunAggregate,
   type RunCoordinator,
   type RunStoreError,
-} from '@kairo/executors';
+} from '@kouro/executors';
 import { ok, type Result } from '@usersatoshi/results';
 
 import { ApiErrorKind, apiErr, type ApiError } from './errors.ts';
 import type {
   ArtifactContentReader,
+  InvocationActivityReader,
   LocalRunCreator,
+  LocalRunDeleter,
   ObservableRunStore,
   RepositoryQuery,
   TicketProviderConfigurationQuery,
@@ -39,8 +43,10 @@ export interface ApiServices {
   readonly runs: ObservableRunStore;
   readonly coordinator: RunCoordinator;
   readonly artifacts?: ArtifactContentReader;
+  readonly activities?: InvocationActivityReader;
   readonly repositories?: RepositoryQuery;
   readonly runCreator?: LocalRunCreator;
+  readonly runDeleter?: LocalRunDeleter;
   readonly tickets?: TicketReadServices;
   readonly ticketProviders?: TicketProviderConfigurationQuery;
 }
@@ -61,8 +67,18 @@ function pendingApprovalCount(invocations: readonly NodeInvocation[]): number {
 }
 
 function summarizeRun(aggregate: RunAggregate): RunSummary {
+  const repositoryId =
+    typeof aggregate.state.configuration.repositoryId === 'string'
+      ? aggregate.state.configuration.repositoryId
+      : '';
+  const repositoryPath =
+    typeof aggregate.state.configuration.repositoryPath === 'string'
+      ? aggregate.state.configuration.repositoryPath
+      : '';
   return {
     id: aggregate.runId,
+    repositoryId,
+    repositoryPath,
     workflowId: aggregate.artifact.bundle.manifest.id,
     workflowVersion: aggregate.artifact.bundle.manifest.version,
     workflowChecksum: aggregate.artifact.checksum,
@@ -148,6 +164,7 @@ export function getRun(services: ApiServices, runId: string): Result<RunDetails,
   const aggregate = loaded.unwrap();
   return ok({
     ...summarizeRun(aggregate),
+    entryNodeId: aggregate.artifact.bundle.entryNodeId,
     repositoryHead: aggregate.state.repositoryHead,
     state: aggregate.state,
     nodes: workflowNodes(aggregate),
@@ -231,6 +248,63 @@ export async function getArtifact(
   return content.isErr()
     ? apiErr(ApiErrorKind.ArtifactRead, 'artifact_read_failed', content.error.message)
     : ok({ ...view, content: content.unwrap().content });
+}
+
+export async function getInvocationActivity(
+  services: ApiServices,
+  runId: string,
+  invocationSequence: number,
+): Promise<Result<InvocationActivityView, ApiError>> {
+  if (!Number.isSafeInteger(invocationSequence) || invocationSequence < 1) {
+    return apiErr(
+      ApiErrorKind.InvalidInput,
+      'invalid_invocation_sequence',
+      'invocationSequence must be a positive integer',
+    );
+  }
+  const loaded = fromStore(services.runs.loadRun(runId));
+  if (loaded.isErr()) return loaded;
+  const invocation = loaded
+    .unwrap()
+    .state.invocations.find(({ sequence }) => sequence === invocationSequence);
+  const attempt = invocation?.attempts.at(-1);
+  if (!invocation || !attempt) {
+    return apiErr(
+      ApiErrorKind.NotFound,
+      'invocation_activity_not_found',
+      `Invocation ${invocationSequence} has no attempt activity`,
+    );
+  }
+  if (!services.activities) {
+    return apiErr(
+      ApiErrorKind.NotFound,
+      'invocation_activity_unavailable',
+      'Invocation activity is not configured',
+    );
+  }
+  const activity = await services.activities.read(runId, invocationSequence, attempt.number);
+  if (activity.isErr()) {
+    return apiErr(
+      ApiErrorKind.ArtifactRead,
+      'invocation_activity_read_failed',
+      'Invocation activity could not be read',
+    );
+  }
+  if (!activity.value) {
+    return apiErr(
+      ApiErrorKind.NotFound,
+      'invocation_activity_not_found',
+      `Invocation ${invocationSequence} has no observed activity`,
+    );
+  }
+  return ok({
+    runId,
+    nodeId: invocation.nodeId,
+    invocationSequence,
+    attemptNumber: attempt.number,
+    state: invocation.state,
+    ...activity.value,
+  });
 }
 
 export function listApprovals(
@@ -332,6 +406,25 @@ export async function createRun(
     : created;
 }
 
+export async function deleteRun(
+  services: ApiServices,
+  runId: string,
+): Promise<Result<DeleteRunResponse, ApiError>> {
+  const loaded = fromStore(services.runs.loadRun(runId));
+  if (loaded.isErr()) return loaded;
+  if (!services.runDeleter) {
+    return apiErr(
+      ApiErrorKind.InvalidInput,
+      'run_deletion_unavailable',
+      'Run deletion is disabled',
+    );
+  }
+  const deleted = await services.runDeleter.delete(runId);
+  return deleted.isErr()
+    ? apiErr(ApiErrorKind.Conflict, 'run_deletion_failed', deleted.error.message)
+    : deleted;
+}
+
 export function controlRun(
   services: ApiServices,
   runId: string,
@@ -345,6 +438,8 @@ export function controlRun(
       'actor and idempotencyKey are required',
     );
   }
+  const loaded = fromStore(services.runs.loadRun(runId));
+  if (loaded.isErr()) return loaded;
   const result =
     action === 'pause'
       ? services.coordinator.pauseRun(runId, request.actor, request.idempotencyKey)
@@ -375,6 +470,8 @@ export function controlInvocation(
       'actor, reason, and idempotencyKey are required',
     );
   }
+  const loaded = fromStore(services.runs.loadRun(runId));
+  if (loaded.isErr()) return loaded;
   const result =
     action === 'interrupt'
       ? services.coordinator.interruptInvocation(

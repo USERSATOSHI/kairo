@@ -394,12 +394,12 @@ export class WorktreeSandboxProvider {
   ): Promise<Result<void, SandboxError>> {
     const ready = this.validateReady();
     if (ready.isErr()) return ready;
-    if (!/^kairo\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(branchName)) {
+    if (!/^kouro\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(branchName)) {
       return err(
         toErr(SandboxErrorKind.WorktreeConflict, {
           runId: worktree.runId,
           path: worktree.path,
-          reason: 'delivery branch must use the kairo/<name> namespace',
+          reason: 'delivery branch must use the kouro/<name> namespace',
         }),
       );
     }

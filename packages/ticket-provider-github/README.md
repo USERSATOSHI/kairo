@@ -1,4 +1,4 @@
-# `@kairo/ticket-provider-github`
+# `@kouro/ticket-provider-github`
 
-GitHub Issues adapter for Kairo tickets. Credentials are constructor inputs and
+GitHub Issues adapter for Kouro tickets. Credentials are constructor inputs and
 are never persisted by this package.

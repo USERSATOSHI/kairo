@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite';
 
-import { canonicalJson, sha256 } from '@kairo/adw';
+import { canonicalJson, sha256 } from '@kouro/adw';
 import type {
   ApprovalBinding,
   ArtifactReference,
@@ -13,7 +13,7 @@ import type {
   RunEvent,
   RunState,
   SkipBinding,
-} from '@kairo/domain';
+} from '@kouro/domain';
 import {
   RunStoreErrorKind,
   type AppendRunEventInput,
@@ -21,8 +21,8 @@ import {
   type RunAggregate,
   type RunStore,
   type RunStoreError,
-} from '@kairo/executors';
-import { reduceRun } from '@kairo/runtime';
+} from '@kouro/executors';
+import { reduceRun } from '@kouro/runtime';
 import { err, ok, safeCall, type Result } from '@usersatoshi/results';
 
 interface RunRow {
@@ -46,6 +46,10 @@ interface IdempotencyRow {
 
 interface ColumnRow {
   readonly name: string;
+}
+
+interface WorkerLeaseRow {
+  readonly owner_id: string;
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -326,6 +330,7 @@ export class SqliteEventStore implements RunStore {
       () => {
         this.database.exec('PRAGMA foreign_keys = ON');
         this.database.exec('PRAGMA journal_mode = WAL');
+        this.database.exec('PRAGMA busy_timeout = 5000');
         this.database.exec(`
           CREATE TABLE IF NOT EXISTS runs (
             run_id TEXT PRIMARY KEY,
@@ -415,6 +420,11 @@ export class SqliteEventStore implements RunStore {
             size INTEGER NOT NULL,
             PRIMARY KEY (run_id, artifact_id),
             FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+          );
+          CREATE TABLE IF NOT EXISTS worker_leases (
+            lease_name TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            expires_at_ms INTEGER NOT NULL
           );
         `);
         const attemptColumns = new Set(
@@ -540,6 +550,61 @@ export class SqliteEventStore implements RunStore {
       aggregates.push(aggregate.unwrap());
     }
     return ok(aggregates);
+  }
+
+  /**
+   * Acquires or renews the single local-worker lease when it is available.
+   *
+   * Lease timestamps are supplied by the infrastructure caller so this
+   * coordination state never becomes a hidden workflow decision input.
+   */
+  tryAcquireWorkerLease(
+    ownerId: string,
+    nowMs: number,
+    expiresAtMs: number,
+  ): Result<boolean, RunStoreError> {
+    return this.executeTransaction('tryAcquireWorkerLease', () => {
+      this.database
+        .query(
+          `INSERT INTO worker_leases (lease_name, owner_id, expires_at_ms)
+           VALUES ('local-worker', ?, ?)
+           ON CONFLICT(lease_name) DO UPDATE SET
+             owner_id = excluded.owner_id,
+             expires_at_ms = excluded.expires_at_ms
+           WHERE worker_leases.owner_id = excluded.owner_id
+              OR worker_leases.expires_at_ms <= ?`,
+        )
+        .run(ownerId, expiresAtMs, nowMs);
+      const lease = this.database
+        .query<WorkerLeaseRow, []>(
+          `SELECT owner_id FROM worker_leases WHERE lease_name = 'local-worker'`,
+        )
+        .get();
+      return ok(lease?.owner_id === ownerId);
+    });
+  }
+
+  /** Releases the local-worker lease only when this caller still owns it. */
+  releaseWorkerLease(ownerId: string): Result<void, RunStoreError> {
+    return safeCall(
+      () => {
+        this.database
+          .query(`DELETE FROM worker_leases WHERE lease_name = 'local-worker' AND owner_id = ?`)
+          .run(ownerId);
+      },
+      (error) => databaseError('releaseWorkerLease', error),
+    );
+  }
+
+  /** Permanently removes one run and all SQLite-owned dependent records. */
+  deleteRun(runId: string): Result<void, RunStoreError> {
+    return this.executeTransaction('deleteRun', () => {
+      if (!this.readRunRow(runId)) {
+        return err({ kind: RunStoreErrorKind.RunNotFound, runId });
+      }
+      this.database.query('DELETE FROM runs WHERE run_id = ?').run(runId);
+      return ok(undefined);
+    });
   }
 
   appendEvent(input: AppendRunEventInput): Result<RunAggregate, RunStoreError> {

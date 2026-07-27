@@ -1,6 +1,6 @@
-# `@kairo/adw` — Authoring SDK and deterministic compiler
+# `@kouro/adw` — Authoring SDK and deterministic compiler
 
-`@kairo/adw` provides the class-based TypeScript SDK for authoring Agent
+`@kouro/adw` provides the class-based TypeScript SDK for authoring Agent
 Development Workflows and the deterministic compiler that turns their plain
 definitions into canonical, checksummed runtime bundles.
 
@@ -21,7 +21,7 @@ instances never cross into the compiler or runtime.
 ## Authoring a workflow
 
 ```typescript
-import { all, output, WorkflowBuilder } from '@kairo/adw';
+import { all, output, WorkflowBuilder } from '@kouro/adw';
 
 const workflow = new WorkflowBuilder({
   id: 'feature-development',
@@ -114,12 +114,12 @@ and receive the durable source-node output as workflow feedback. Add
 invocation.
 
 Set `harness: 'codex'` when a workflow intentionally pins an agent node to one
-harness. If `harness` is omitted, Kairo uses the node-specific CLI route and
+harness. If `harness` is omitted, Kouro uses the node-specific CLI route and
 then the CLI's default `--harness` policy. A workflow pin is included in the
 compiled checksum and does not inherit CLI fallbacks.
 
 Use `models` to select a model for each harness that may execute the node.
-Kairo resolves the entry after selecting the harness, so fallback harnesses can
+Kouro resolves the entry after selecting the harness, so fallback harnesses can
 use different provider-specific model identifiers. The map is included in the
 compiled checksum. If the selected harness has no entry, the harness uses its
 configured default.
@@ -167,7 +167,7 @@ deterministic compiler.
 ```text
 my-workflow/
   manifest.json
-  kairo.adw.ts
+  kouro.adw.ts
   prompts/
     implement.md
   schemas/
@@ -181,8 +181,8 @@ Example manifest:
   "id": "my-workflow",
   "name": "My Workflow",
   "version": "1.0.0",
-  "kairo": "0.1.0",
-  "entrypoint": "kairo.adw.ts",
+  "kouro": "0.1.0",
+  "entrypoint": "kouro.adw.ts",
   "permissions": ["repository.read", "repository.write"]
 }
 ```
@@ -195,7 +195,7 @@ version checks.
 ## Compilation
 
 ```typescript
-import { compileAdwPackage } from '@kairo/adw';
+import { compileAdwPackage } from '@kouro/adw';
 
 const result = await compileAdwPackage('./path/to/my-workflow');
 if (result.isOk()) {

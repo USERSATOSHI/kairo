@@ -17,7 +17,7 @@ import {
   type TicketRunQuery,
   type TicketRunView,
   type TicketSnapshot,
-} from '@kairo/tickets';
+} from '@kouro/tickets';
 import { ok, type Result } from '@usersatoshi/results';
 
 class FixedClock implements TicketClock {
@@ -59,8 +59,8 @@ class FakeRunQuery implements TicketRunQuery {
 
 describe('T2 ticket-to-run integration', () => {
   test('captures an immutable snapshot, links history, and prevents parallel implementation', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'kairo-ticket-runs-'));
-    const path = join(directory, 'kairo.sqlite');
+    const directory = mkdtempSync(join(tmpdir(), 'kouro-ticket-runs-'));
+    const path = join(directory, 'kouro.sqlite');
     const tickets = new SqliteTicketRepository(path);
     const runs = new SqliteTicketRunStore(path);
     try {

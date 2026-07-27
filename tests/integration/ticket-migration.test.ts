@@ -27,7 +27,7 @@ import {
   type TicketMigrationStore,
   type TicketProvider,
   type TicketProviderError,
-} from '@kairo/tickets';
+} from '@kouro/tickets';
 import { err, ok, type Result } from '@usersatoshi/results';
 
 type RemoteKind = 'github' | 'forgejo';
@@ -53,18 +53,18 @@ function remoteBinding(kind: RemoteKind): TicketBinding {
     ? {
         kind,
         owner: 'acme',
-        repository: 'kairo',
+        repository: 'kouro',
         issueNumber: 41,
-        externalUrl: 'https://github.test/acme/kairo/issues/41',
+        externalUrl: 'https://github.test/acme/kouro/issues/41',
         lastSyncedRevision: 'remote-1',
       }
     : {
         kind,
         instanceUrl: 'https://forgejo.test',
         owner: 'acme',
-        repository: 'kairo',
+        repository: 'kouro',
         issueNumber: 41,
-        externalUrl: 'https://forgejo.test/acme/kairo/issues/41',
+        externalUrl: 'https://forgejo.test/acme/kouro/issues/41',
         lastSyncedRevision: 'remote-1',
       };
 }
@@ -173,11 +173,11 @@ class FailAfterRemoteCreateStore implements TicketMigrationStore {
 
   getMigration(
     ticketId: string,
-  ): Result<TicketMigration | undefined, import('@kairo/tickets').TicketError> {
+  ): Result<TicketMigration | undefined, import('@kouro/tickets').TicketError> {
     return this.store.getMigration(ticketId);
   }
 
-  saveMigration(migration: TicketMigration): Result<void, import('@kairo/tickets').TicketError> {
+  saveMigration(migration: TicketMigration): Result<void, import('@kouro/tickets').TicketError> {
     if (this.shouldFail && migration.stage === 'remote_created') {
       this.shouldFail = false;
       return toTicketError(TicketErrorKind.DatabaseFailure, {
@@ -214,8 +214,8 @@ function createLocalTicket(repository: SqliteTicketRepository): Ticket {
 describe('T5 ticket migration', () => {
   for (const kind of ['github', 'forgejo'] as const) {
     test(`migrates local authority to ${kind} only after verified read-back`, async () => {
-      const directory = mkdtempSync(join(tmpdir(), `kairo-ticket-migration-${kind}-`));
-      const path = join(directory, 'kairo.sqlite');
+      const directory = mkdtempSync(join(tmpdir(), `kouro-ticket-migration-${kind}-`));
+      const path = join(directory, 'kouro.sqlite');
       const tickets = new SqliteTicketRepository(path);
       const migrations = new SqliteTicketSyncStore(path);
       const provider = new MigrationProvider(kind);
@@ -247,8 +247,8 @@ describe('T5 ticket migration', () => {
   }
 
   test('keeps local authority when remote verification fails', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'kairo-ticket-migration-verification-'));
-    const path = join(directory, 'kairo.sqlite');
+    const directory = mkdtempSync(join(tmpdir(), 'kouro-ticket-migration-verification-'));
+    const path = join(directory, 'kouro.sqlite');
     const tickets = new SqliteTicketRepository(path);
     const migrations = new SqliteTicketSyncStore(path);
     const provider = new MigrationProvider('github');
@@ -286,8 +286,8 @@ describe('T5 ticket migration', () => {
   });
 
   test('resumes after restart without creating a duplicate remote issue', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'kairo-ticket-migration-resume-'));
-    const path = join(directory, 'kairo.sqlite');
+    const directory = mkdtempSync(join(tmpdir(), 'kouro-ticket-migration-resume-'));
+    const path = join(directory, 'kouro.sqlite');
     const provider = new MigrationProvider('forgejo');
     let tickets = new SqliteTicketRepository(path);
     let migrations = new SqliteTicketSyncStore(path);

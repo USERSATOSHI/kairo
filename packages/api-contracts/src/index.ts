@@ -4,7 +4,7 @@ import type {
   CompiledWorkflowBundle,
   RunEvent,
   RunState,
-} from '@kairo/domain';
+} from '@kouro/domain';
 import type {
   Ticket,
   TicketBoardCard,
@@ -16,7 +16,7 @@ import type {
   TicketSnapshot,
   TicketSyncOperation,
   TicketSyncState,
-} from '@kairo/tickets';
+} from '@kouro/tickets';
 
 export interface ApiErrorResponse {
   readonly error: {
@@ -27,6 +27,8 @@ export interface ApiErrorResponse {
 
 export interface RunSummary {
   readonly id: string;
+  readonly repositoryId: string;
+  readonly repositoryPath: string;
   readonly workflowId: string;
   readonly workflowVersion: string;
   readonly workflowChecksum: string;
@@ -38,6 +40,7 @@ export interface RunSummary {
 }
 
 export interface RunDetails extends RunSummary {
+  readonly entryNodeId: string;
   readonly repositoryHead: string;
   readonly state: RunState;
   readonly nodes: readonly WorkflowNodeView[];
@@ -84,6 +87,19 @@ export interface ArtifactView extends ArtifactReference {
   readonly content?: string;
 }
 
+export interface InvocationActivityView {
+  readonly runId: string;
+  readonly nodeId: string;
+  readonly invocationSequence: number;
+  readonly attemptNumber: number;
+  readonly state: RunState['invocations'][number]['state'];
+  readonly harnessId: string;
+  readonly role: string;
+  readonly prompt: string;
+  readonly transcript: string;
+  readonly complete: boolean;
+}
+
 export interface ApprovalView {
   readonly runId: string;
   readonly nodeId: string;
@@ -118,6 +134,11 @@ export interface CreateRunRequest {
 export interface CreateRunResponse {
   readonly runId: string;
   readonly status: RunState['status'];
+}
+
+export interface DeleteRunResponse {
+  readonly runId: string;
+  readonly deleted: true;
 }
 
 export interface LifecycleRequest {

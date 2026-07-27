@@ -3,7 +3,7 @@
   "name": "{{name}}",
   "version": "1.0.0",
   "description": "Focused maintenance and repository chore workflow.",
-  "kairo": ">=0.1.0",
-  "entrypoint": "./kairo.adw.ts",
+  "kouro": ">=0.1.0",
+  "entrypoint": "./kouro.adw.ts",
   "permissions": ["repository.read", "repository.write", "terminal.execute"]
 }

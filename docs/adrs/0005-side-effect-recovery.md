@@ -6,7 +6,7 @@
 ## Context
 
 A process can crash after an external effect completes but before its completion
-event commits. Kairo cannot generally determine whether replaying an arbitrary
+event commits. Kouro cannot generally determine whether replaying an arbitrary
 operation is safe and therefore cannot promise universal exactly-once effects.
 
 ## Decision

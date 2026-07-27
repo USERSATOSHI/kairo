@@ -5,13 +5,13 @@
 
 ## Context
 
-Kairo can already start a run from an immutable `WorkItemSnapshot`. That
+Kouro can already start a run from an immutable `WorkItemSnapshot`. That
 snapshot deliberately prevents an external ticket edit from silently changing
-an active run. Kairo does not yet own durable planning tickets, comments,
+an active run. Kouro does not yet own durable planning tickets, comments,
 relationships, or a Kanban projection.
 
 Local greenfield planning must work before a Git repository exists. Later
-provider integrations must preserve Kairo ticket identity without moving
+provider integrations must preserve Kouro ticket identity without moving
 provider behavior into the deterministic runtime.
 
 ## Decision
@@ -39,9 +39,9 @@ ticket rows.
 
 For T1:
 
-- `@kairo/tickets` contains the ticket domain, application services, repository
+- `@kouro/tickets` contains the ticket domain, application services, repository
   port, SQLite adapter, and pure planning-board projection.
-- `@kairo/ticket-provider-local` implements the provider-facing local adapter
+- `@kouro/ticket-provider-local` implements the provider-facing local adapter
   without Git, network, remote repository, or credential dependencies.
 - SQLite is authoritative for local tickets.
 - ticket changes use optimistic revisions so stale writes fail explicitly.
@@ -56,7 +56,7 @@ and UI are separate milestones.
 ## Consequences
 
 - Local tickets and planning Kanban work in an empty directory.
-- Stable Kairo ticket IDs are independent of provider bindings.
+- Stable Kouro ticket IDs are independent of provider bindings.
 - Planning status cannot bypass runtime approvals or transitions.
 - Provider adapters can be added without changing the ticket aggregate.
 - T1 introduces a SQLite adapter in the ticket package to keep the first

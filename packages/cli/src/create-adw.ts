@@ -35,7 +35,10 @@ function displayName(name: string): string {
 }
 
 function render(content: string, name: string): string {
-  return content.replaceAll('{{id}}', name).replaceAll('{{name}}', displayName(name));
+  return content
+    .replaceAll('{{id}}', name)
+    .replaceAll('{{name}}', displayName(name))
+    .replaceAll("from '../kouro-sdk.ts'", "from './kouro-sdk.ts'");
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -96,6 +99,8 @@ export async function createAdw(request: CreateAdwRequest): Promise<Result<Creat
       const temporary = await mkdtemp(resolve(dirname(target), `.${basename(target)}.tmp-`));
       try {
         await renderTemplate(source, temporary, request.name);
+        const sdkSource = resolve(import.meta.dir, '..', 'assets', 'adw-templates', 'kouro-sdk.ts');
+        await writeFile(resolve(temporary, 'kouro-sdk.ts'), await readFile(sdkSource, 'utf8'));
         await rename(temporary, target);
       } catch (cause) {
         await rm(temporary, { recursive: true, force: true });

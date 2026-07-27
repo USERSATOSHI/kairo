@@ -3,6 +3,7 @@ import '@xyflow/react/dist/style.css';
 import type {
   ApprovalView,
   ArtifactView,
+  InvocationActivityView,
   RunDetails,
   RunSummary,
   TicketDetails,
@@ -10,22 +11,28 @@ import type {
   TicketProjectView,
   TicketProviderConfigurationView,
   WorkflowNodeView,
-} from '@kairo/api-contracts';
+} from '@kouro/api-contracts';
 import {
   Background,
   Controls,
   type Edge,
+  Handle,
+  MarkerType,
   MiniMap,
   type Node,
+  type NodeProps,
+  Position,
   ReactFlow,
 } from '@xyflow/react';
-import { useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   decideApproval,
+  deleteRun,
   fetchApprovals,
   fetchArtifact,
   fetchArtifacts,
+  fetchInvocationActivity,
   fetchRun,
   fetchRuns,
   fetchTicket,
@@ -35,6 +42,16 @@ import {
   reconnectEvents,
   type ReplayedEvent,
 } from './api.ts';
+import {
+  formatByteSize,
+  invocationDisplayState,
+  invocationFailure,
+} from './execution-presentation.ts';
+import {
+  groupTranscript,
+  parseTranscript,
+  type TranscriptEntry,
+} from './transcript.ts';
 
 type Tab = 'details' | 'events' | 'artifacts' | 'approval';
 
@@ -49,6 +66,81 @@ interface WorkItemView {
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+const syntaxJsonRe =
+  /("(?:[^"\\]|\\.)*")(\s*:\s*)?|(\btrue\b|\bfalse\b|\bnull\b)|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|([{}[\],])/g;
+
+function highlightJson(text: string) {
+  const parts = [];
+  let last = 0;
+  let key = 0;
+  let match: RegExpExecArray | null;
+  while ((match = syntaxJsonRe.exec(text)) !== null) {
+    if (match.index > last) parts.push(text.slice(last, match.index));
+    if (match[1]) {
+      if (match[2]) {
+        parts.push(
+          <span className="syntax-key" key={key++}>
+            {match[1]}
+          </span>,
+        );
+        parts.push(match[2]);
+      } else {
+        parts.push(
+          <span className="syntax-string" key={key++}>
+            {match[1]}
+          </span>,
+        );
+      }
+    } else if (match[3]) {
+      const cls = match[3] === 'null' ? 'syntax-null' : 'syntax-bool';
+      parts.push(
+        <span className={cls} key={key++}>
+          {match[3]}
+        </span>,
+      );
+    } else if (match[4]) {
+      parts.push(
+        <span className="syntax-number" key={key++}>
+          {match[4]}
+        </span>,
+      );
+    } else if (match[5]) {
+      parts.push(match[5]);
+    }
+    last = syntaxJsonRe.lastIndex;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
+
+function highlightDiff(text: string) {
+  const lines = text.split('\n');
+  return lines.map((line, index) => {
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      return (
+        <span className="diff-add" key={index}>
+          {line}
+          {index < lines.length - 1 ? '\n' : ''}
+        </span>
+      );
+    }
+    if (line.startsWith('-') && !line.startsWith('---')) {
+      return (
+        <span className="diff-remove" key={index}>
+          {line}
+          {index < lines.length - 1 ? '\n' : ''}
+        </span>
+      );
+    }
+    return (
+      <span key={index}>
+        {line}
+        {index < lines.length - 1 ? '\n' : ''}
+      </span>
+    );
+  });
 }
 
 function workItemFor(run: RunDetails): WorkItemView | undefined {
@@ -79,42 +171,136 @@ function stateClass(state: string): string {
   return `state state-${state.replaceAll('_', '-')}`;
 }
 
-function graphNodes(run: RunDetails): Node[] {
-  return run.nodes.map((node, index) => ({
-    id: node.id,
-    position: {
-      x: (index % 4) * 230,
-      y: Math.floor(index / 4) * 140,
-    },
-    data: {
-      label: (
-        <div className="graph-node">
-          <small>{node.type}</small>
-          <strong>{node.title}</strong>
-          <span className={stateClass(node.latestState ?? 'pending')}>
-            {node.latestState ?? 'not started'}
-          </span>
-        </div>
-      ),
-    },
-    style: {
-      borderColor: node.latestState === 'failed' ? '#e86f51' : '#273a57',
-      background: '#101a2b',
-      color: '#eef5ff',
-      width: 190,
-    },
-  }));
+function isTerminalRun(run: RunSummary): boolean {
+  return ['succeeded', 'failed', 'cancelled'].includes(run.status);
+}
+
+function repositoryName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+}
+
+interface WorkflowNodeData extends Record<string, unknown> {
+  readonly title: string;
+  readonly nodeType: WorkflowNodeView['type'];
+  readonly state: string;
+}
+
+type WorkflowFlowNode = Node<WorkflowNodeData, 'workflow'>;
+
+function WorkflowGraphNode({ data }: NodeProps<WorkflowFlowNode>) {
+  return (
+    <div className={`flow-node flow-node-${data.nodeType}`}>
+      <Handle position={Position.Top} type="target" />
+      <small>{data.nodeType}</small>
+      <strong>{data.title}</strong>
+      <span className={stateClass(data.state)}>{data.state}</span>
+      <Handle position={Position.Bottom} type="source" />
+    </div>
+  );
+}
+
+const workflowNodeTypes = { workflow: WorkflowGraphNode };
+
+function graphDepths(run: RunDetails): ReadonlyMap<string, number> {
+  const outgoing = new Map<string, string[]>();
+  for (const edge of run.edges) {
+    const targets = outgoing.get(edge.source) ?? [];
+    targets.push(edge.target);
+    outgoing.set(edge.source, targets);
+  }
+  const depths = new Map<string, number>([[run.entryNodeId, 0]]);
+  const queue = [run.entryNodeId];
+  for (let index = 0; index < queue.length; index += 1) {
+    const source = queue[index];
+    if (source === undefined) continue;
+    const depth = depths.get(source) ?? 0;
+    for (const target of outgoing.get(source) ?? []) {
+      if (depths.has(target)) continue;
+      depths.set(target, depth + 1);
+      queue.push(target);
+    }
+  }
+  const fallbackDepth = Math.max(0, ...depths.values()) + 1;
+  for (const node of run.nodes) {
+    if (!depths.has(node.id)) depths.set(node.id, fallbackDepth);
+  }
+  return depths;
+}
+
+function graphNodes(run: RunDetails): WorkflowFlowNode[] {
+  const depths = graphDepths(run);
+  const layers = new Map<number, WorkflowNodeView[]>();
+  for (const node of run.nodes) {
+    const depth = depths.get(node.id) ?? 0;
+    const layer = layers.get(depth) ?? [];
+    layer.push(node);
+    layers.set(depth, layer);
+  }
+  const widestLayer = Math.max(1, ...[...layers.values()].map((layer) => layer.length));
+  const horizontalGap = 260;
+  return [...layers.entries()].flatMap(([depth, layer]) => {
+    const sorted = layer.toSorted((left, right) => left.ordinal - right.ordinal);
+    const offset = ((widestLayer - sorted.length) * horizontalGap) / 2;
+    return sorted.map((node, index) => ({
+      id: node.id,
+      type: 'workflow',
+      position: { x: offset + index * horizontalGap, y: depth * 180 },
+      data: {
+        title: node.title,
+        nodeType: node.type,
+        state: nodeState(run, node),
+      },
+    }));
+  });
+}
+
+function nodeState(run: RunDetails, node: WorkflowNodeView): string {
+  const latest = run.state.invocations.filter(({ nodeId }) => nodeId === node.id).at(-1);
+  if (!latest) return 'pending';
+  return displayedInvocationState(run, node, latest);
+}
+
+function displayedInvocationState(
+  run: RunDetails,
+  node: WorkflowNodeView,
+  invocation: RunDetails['state']['invocations'][number],
+): string {
+  if (node.type === 'complete' && invocation.state === 'pending' && isTerminalRun(run)) {
+    return run.status;
+  }
+  return invocationDisplayState(invocation);
 }
 
 function graphEdges(run: RunDetails): Edge[] {
+  const selectedTransitions = new Set(
+    run.state.invocations.flatMap(({ selectedTransitionId }) =>
+      selectedTransitionId ? [selectedTransitionId] : [],
+    ),
+  );
+  const activeNodes = new Set(
+    run.nodes
+      .filter(({ latestState }) => ['active', 'waiting_for_approval'].includes(latestState ?? ''))
+      .map(({ id }) => id),
+  );
   return run.edges.map((edge) => ({
     id: edge.id,
     source: edge.source,
     target: edge.target,
     label: edge.outcome,
-    animated: true,
-    style: { stroke: '#5f789d' },
-    labelStyle: { fill: '#9fb1cb', fontSize: 11 },
+    type: 'smoothstep',
+    animated: activeNodes.has(edge.source),
+    markerEnd: {
+      type: MarkerType.ArrowClosed,
+      color: selectedTransitions.has(edge.id) ? '#73d6c5' : '#607da5',
+    },
+    style: {
+      stroke: selectedTransitions.has(edge.id) ? '#73d6c5' : '#607da5',
+      strokeWidth: selectedTransitions.has(edge.id) ? 2.5 : 1.5,
+    },
+    labelStyle: { fill: '#c0cee0', fontSize: 11, fontWeight: 650 },
+    labelBgStyle: { fill: '#0b1422', fillOpacity: 0.92 },
+    labelBgPadding: [6, 4],
+    labelBgBorderRadius: 4,
   }));
 }
 
@@ -131,7 +317,7 @@ function RunList({
     <aside className="run-list">
       <header>
         <p className="eyebrow">Execution console</p>
-        <h1>Kairo</h1>
+        <h1>Kouro</h1>
       </header>
       <div className="run-list-heading">
         <span>Runs</span>
@@ -146,7 +332,9 @@ function RunList({
             type="button"
           >
             <span className="run-name">{run.id}</span>
-            <span className="run-meta">{run.workflowId}</span>
+            <span className="run-meta">
+              {repositoryName(run.repositoryPath)} · {run.workflowId}
+            </span>
             <span className={stateClass(run.status)}>{run.status}</span>
           </button>
         ))}
@@ -158,9 +346,17 @@ function RunList({
 function NodeDetails({
   node,
   run,
+  artifacts,
+  activities,
+  onOpenActivity,
+  onOpenArtifact,
 }: {
   readonly node: WorkflowNodeView | null;
   readonly run: RunDetails;
+  readonly artifacts: readonly ArtifactView[];
+  readonly activities: Readonly<Record<number, InvocationActivityView>>;
+  readonly onOpenActivity: (invocationSequence: number) => void;
+  readonly onOpenArtifact: (artifact: ArtifactView) => void;
 }) {
   if (!node) return <p className="empty">Select a node to inspect its durable execution state.</p>;
   const invocations = run.state.invocations.filter(({ nodeId }) => nodeId === node.id);
@@ -193,17 +389,65 @@ function NodeDetails({
         <article className="invocation" key={invocation.sequence}>
           <div>
             <strong>Invocation {invocation.sequence}</strong>
-            <span className={stateClass(invocation.state)}>{invocation.state}</span>
+            <span className={stateClass(displayedInvocationState(run, node, invocation))}>
+              {displayedInvocationState(run, node, invocation)}
+            </span>
           </div>
-          <p>Outcome: {invocation.outcome ?? 'pending'}</p>
+          <p>
+            Outcome:{' '}
+            {node.type === 'complete' && isTerminalRun(run)
+              ? run.status
+              : (invocation.outcome ?? 'pending')}
+          </p>
           {invocation.attempts.map((attempt) => (
-            <p key={attempt.number}>
-              Attempt {attempt.number} · {attempt.harnessId ?? 'native'}
-              {attempt.model ? ` · ${attempt.model}` : ''} · {attempt.state}
-            </p>
+            <div className="attempt" key={attempt.number}>
+              <p>
+                Attempt {attempt.number} · {attempt.harnessId ?? 'native'}
+                {attempt.model ? ` · ${attempt.model}` : ''} ·{' '}
+                {invocation.outcome === 'failure' ? 'failed' : attempt.state}
+              </p>
+              {attempt.failure ? (
+                <div className="invocation-failure">
+                  <strong>{attempt.failure.kind.replaceAll('_', ' ')}</strong>
+                  <p>{attempt.failure.message}</p>
+                </div>
+              ) : null}
+            </div>
           ))}
+          <InvocationFailureDetails invocation={invocation} />
+          {activities[invocation.sequence] ? (
+            <button
+              className="activity-button"
+              onClick={() => onOpenActivity(invocation.sequence)}
+              type="button"
+            >
+              <span className={invocation.state === 'active' ? 'live-dot' : ''} />
+              {invocation.state === 'active' ? 'Watch live activity' : 'View activity'}
+            </button>
+          ) : null}
+          <InvocationOutputSection
+            artifacts={artifacts}
+            invocationSequence={invocation.sequence}
+            onOpen={onOpenArtifact}
+          />
         </article>
       ))}
+    </div>
+  );
+}
+
+function InvocationFailureDetails({
+  invocation,
+}: {
+  readonly invocation: RunDetails['state']['invocations'][number];
+}) {
+  if (invocation.attempts.some(({ failure }) => failure !== undefined)) return null;
+  const failure = invocationFailure(invocation);
+  if (!failure) return null;
+  return (
+    <div className="invocation-failure">
+      <strong>{failure.kind}</strong>
+      <p>{failure.message}</p>
     </div>
   );
 }
@@ -223,13 +467,244 @@ function EventLog({ events }: { readonly events: readonly ReplayedEvent[] }) {
   );
 }
 
+function entryLabel(entry: TranscriptEntry): string {
+  switch (entry.kind) {
+    case 'user':
+      return 'User';
+    case 'agent':
+      return 'Agent';
+    case 'reasoning':
+      return 'Reasoning';
+    case 'tool_call':
+      return entry.toolName ? `Tool call · ${entry.toolName}` : 'Tool call';
+    case 'tool_result':
+      return entry.toolName ? `Tool result · ${entry.toolName}` : 'Tool result';
+  }
+  return 'Activity';
+}
+
+function TranscriptCard({
+  entry,
+  nested = false,
+}: {
+  readonly entry: TranscriptEntry;
+  readonly nested?: boolean;
+}) {
+  return (
+    <article className={`message message-${entry.kind}${nested ? ' message-nested' : ''}`}>
+      <header>
+        <span className="message-role">{entryLabel(entry)}</span>
+        {entry.callId ? <code className="call-id">{entry.callId}</code> : null}
+        {entry.status ? <span className="tool-status">{entry.status}</span> : null}
+      </header>
+      <div className="message-text">{entry.text}</div>
+    </article>
+  );
+}
+
+function TranscriptViewer({
+  content,
+  userPrompt,
+}: {
+  readonly content: string;
+  readonly userPrompt?: string;
+}) {
+  const groups = useMemo(
+    () => groupTranscript(parseTranscript(content, userPrompt)),
+    [content, userPrompt],
+  );
+  if (groups.length === 0) {
+    return <pre className="artifact-content">{highlightJson(content)}</pre>;
+  }
+  return (
+    <div className="transcript-viewer">
+      {groups.map(({ primary, results }) => (
+        <section className="transcript-group" key={primary.id}>
+          <TranscriptCard entry={primary} />
+          {results.length > 0 ? (
+            <div className="tool-results">
+              {results.map((result) => (
+                <TranscriptCard entry={result} key={result.id} nested />
+              ))}
+            </div>
+          ) : null}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function AgentOutputViewer({ content }: { readonly content: string }) {
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    const value = JSON.parse(content);
+    if (isRecord(value)) parsed = value;
+  } catch {
+    // fall through
+  }
+  if (!parsed) return <pre className="artifact-content">{highlightJson(content)}</pre>;
+  const result = typeof parsed.result === 'string' ? parsed.result : null;
+  const output = 'structured_output' in parsed ? parsed.structured_output : null;
+  return (
+    <div className="agent-output-viewer">
+      {result ? (
+        <div className="output-field">
+          <span className="field-label">Result</span>
+          <div className="field-value">{result}</div>
+        </div>
+      ) : null}
+      {output !== null && output !== undefined ? (
+        <details>
+          <summary>Structured output</summary>
+          <pre className="artifact-content">{highlightJson(JSON.stringify(output, null, 2))}</pre>
+        </details>
+      ) : null}
+      <details open={!result}>
+        <summary>Raw JSON</summary>
+        <pre className="artifact-content">{highlightJson(content)}</pre>
+      </details>
+    </div>
+  );
+}
+
+function ArtifactContent({
+  artifact,
+  userPrompt,
+}: {
+  readonly artifact: ArtifactView;
+  readonly userPrompt?: string;
+}) {
+  if (artifact.content === undefined) return <p className="empty">No content available.</p>;
+  switch (artifact.kind) {
+    case 'harness_transcript':
+      return <TranscriptViewer content={artifact.content} userPrompt={userPrompt} />;
+    case 'agent_output':
+      return <AgentOutputViewer content={artifact.content} />;
+    case 'command_output':
+      return <pre className="artifact-content">{highlightJson(artifact.content)}</pre>;
+    case 'git_diff':
+      return <pre className="artifact-content diff">{highlightDiff(artifact.content)}</pre>;
+    case 'git_status':
+      return <pre className="artifact-content">{artifact.content}</pre>;
+    default:
+      return <pre className="artifact-content">{artifact.content}</pre>;
+  }
+}
+
+function InvocationOutputSection({
+  invocationSequence,
+  artifacts,
+  onOpen,
+}: {
+  readonly invocationSequence: number;
+  readonly artifacts: readonly ArtifactView[];
+  readonly onOpen: (artifact: ArtifactView) => void;
+}) {
+  const invocationArtifacts = artifacts.filter((a) => a.invocationSequence === invocationSequence);
+  if (invocationArtifacts.length === 0) return null;
+  return (
+    <div className="invocation-output">
+      {invocationArtifacts.map((artifact) => (
+        <button key={artifact.id} onClick={() => onOpen(artifact)} type="button">
+          <span>{artifact.kind.replaceAll('_', ' ')}</span>
+          <small>{formatByteSize(artifact.size)} · open</small>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function InspectorModal({
+  title,
+  metadata,
+  onClose,
+  children,
+}: {
+  readonly title: string;
+  readonly metadata: string;
+  readonly onClose: () => void;
+  readonly children: ReactNode;
+}) {
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent): void {
+      if (event.key === 'Escape') onClose();
+    }
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [onClose]);
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) onClose();
+      }}
+      role="presentation"
+    >
+      <section aria-modal="true" className="inspector-modal" role="dialog">
+        <header className="modal-header">
+          <div>
+            <p className="eyebrow">{metadata}</p>
+            <h2>{title}</h2>
+          </div>
+          <button aria-label="Close" className="modal-close" onClick={onClose} type="button">
+            ×
+          </button>
+        </header>
+        <div className="modal-content">{children}</div>
+      </section>
+    </div>
+  );
+}
+
+function ActivityModal({
+  activity,
+  onClose,
+}: {
+  readonly activity: InvocationActivityView;
+  readonly onClose: () => void;
+}) {
+  return (
+    <InspectorModal
+      metadata={`${activity.harnessId} · invocation ${activity.invocationSequence} · attempt ${activity.attemptNumber}`}
+      onClose={onClose}
+      title={activity.complete ? 'Agent activity' : 'Agent activity · live'}
+    >
+      <TranscriptViewer content={activity.transcript} userPrompt={activity.prompt} />
+    </InspectorModal>
+  );
+}
+
+function ArtifactModal({
+  activity,
+  artifact,
+  onClose,
+}: {
+  readonly activity?: InvocationActivityView;
+  readonly artifact: ArtifactView;
+  readonly onClose: () => void;
+}) {
+  return (
+    <InspectorModal
+      metadata={[
+        artifact.kind.replaceAll('_', ' '),
+        artifact.invocationSequence ? `invocation ${artifact.invocationSequence}` : '',
+        formatByteSize(artifact.size),
+      ]
+        .filter(Boolean)
+        .join(' · ')}
+      onClose={onClose}
+      title={artifact.id}
+    >
+      <ArtifactContent artifact={artifact} userPrompt={activity?.prompt} />
+    </InspectorModal>
+  );
+}
+
 function Artifacts({
   artifacts,
-  active,
   onOpen,
 }: {
   readonly artifacts: readonly ArtifactView[];
-  readonly active: ArtifactView | null;
   readonly onOpen: (artifact: ArtifactView) => void;
 }) {
   return (
@@ -239,13 +714,15 @@ function Artifacts({
           <button key={artifact.id} onClick={() => onOpen(artifact)} type="button">
             <strong>{artifact.kind.replaceAll('_', ' ')}</strong>
             <span>{artifact.id}</span>
-            <small>{artifact.size} bytes</small>
+            <small>
+              {formatByteSize(artifact.size)}
+              {artifact.invocationSequence
+                ? ` · invocation ${artifact.invocationSequence}`
+                : ''}
+            </small>
           </button>
         ))}
       </div>
-      <pre className={active?.kind === 'git_diff' ? 'artifact-content diff' : 'artifact-content'}>
-        {active?.content ?? 'Select an artifact to inspect its content.'}
-      </pre>
     </div>
   );
 }
@@ -307,6 +784,18 @@ function ApprovalControl({
   );
 }
 
+const autoRefreshEvents = new Set([
+  'attempt.started',
+  'attempt.resumed',
+  'attempt.artifact_published',
+  'attempt.failed',
+  'invocation.completed',
+  'run.completed',
+  'run.paused',
+  'run.resumed',
+  'approval.requested',
+]);
+
 function ExecutionConsole() {
   const [runs, setRuns] = useState<readonly RunSummary[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string>();
@@ -316,6 +805,10 @@ function ExecutionConsole() {
   const [events, setEvents] = useState<readonly ReplayedEvent[]>([]);
   const [artifacts, setArtifacts] = useState<readonly ArtifactView[]>([]);
   const [activeArtifact, setActiveArtifact] = useState<ArtifactView | null>(null);
+  const [activities, setActivities] = useState<
+    Readonly<Record<number, InvocationActivityView>>
+  >({});
+  const [activeActivitySequence, setActiveActivitySequence] = useState<number | null>(null);
   const [approvals, setApprovals] = useState<readonly ApprovalView[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -329,10 +822,14 @@ function ExecutionConsole() {
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Load failed'));
   }, []);
 
+  const refreshTimerRef = useRef<number | undefined>(undefined);
+
   useEffect(() => {
     if (!selectedRunId) return undefined;
     setEvents([]);
     setActiveArtifact(null);
+    setActivities({});
+    setActiveActivitySequence(null);
     Promise.all([
       fetchRun(selectedRunId),
       fetchArtifacts(selectedRunId),
@@ -345,23 +842,106 @@ function ExecutionConsole() {
         setSelectedNode(nextRun.nodes[0]?.id ?? null);
       })
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Load failed'));
-    return reconnectEvents(selectedRunId, 0, (event) => {
+    const runId = selectedRunId;
+    const closeEvents = reconnectEvents(runId, 0, (event) => {
       setEvents((current) =>
         current.some(({ id }) => id === event.id) ? current : [...current, event],
       );
+      if (!autoRefreshEvents.has(event.event)) return;
+      if (refreshTimerRef.current !== undefined) window.clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = window.setTimeout(() => {
+        Promise.all([
+          fetchRun(runId),
+          fetchArtifacts(runId),
+          fetchApprovals(runId),
+          fetchRuns(),
+        ])
+          .then(([nextRun, nextArtifacts, nextApprovals, nextRuns]) => {
+            setRun(nextRun);
+            setArtifacts(nextArtifacts);
+            setApprovals(nextApprovals);
+            setRuns(nextRuns);
+          })
+          .catch(() => {});
+      }, 100);
     });
+    return () => {
+      closeEvents();
+      if (refreshTimerRef.current !== undefined) window.clearTimeout(refreshTimerRef.current);
+    };
   }, [selectedRunId]);
+
+  useEffect(() => {
+    if (!run) return undefined;
+    const sequences = run.state.invocations
+      .filter(
+        ({ state, attempts }) =>
+          state === 'active' && attempts.some((attempt) => attempt.state === 'running'),
+      )
+      .map(({ sequence }) => sequence);
+    if (sequences.length === 0) return undefined;
+    async function refreshActivities(): Promise<void> {
+      if (!run) return;
+      try {
+        const observed = await Promise.all(
+          sequences.map(async (sequence) => ({
+            sequence,
+            activity: await fetchInvocationActivity(run.id, sequence),
+          })),
+        );
+        setActivities((current) => {
+          const next = { ...current };
+          for (const { sequence, activity } of observed) {
+            if (activity) next[sequence] = activity;
+          }
+          return next;
+        });
+      } catch {
+        // The durable run stream remains usable if best-effort activity is unavailable.
+      }
+    }
+    void refreshActivities();
+    const timer = window.setInterval(() => void refreshActivities(), 750);
+    return () => window.clearInterval(timer);
+  }, [run]);
 
   const nodes = useMemo(() => (run ? graphNodes(run) : []), [run]);
   const edges = useMemo(() => (run ? graphEdges(run) : []), [run]);
   const node = run?.nodes.find(({ id }) => id === selectedNode) ?? null;
+  const activeActivity =
+    activeActivitySequence === null ? undefined : activities[activeActivitySequence];
 
   async function openArtifact(artifact: ArtifactView): Promise<void> {
     if (!run) return;
     try {
-      setActiveArtifact(await fetchArtifact(run.id, artifact.id));
+      const [loadedArtifact, activity] = await Promise.all([
+        fetchArtifact(run.id, artifact.id),
+        artifact.invocationSequence === undefined
+          ? Promise.resolve(undefined)
+          : fetchInvocationActivity(run.id, artifact.invocationSequence),
+      ]);
+      if (activity) {
+        setActivities((current) => ({
+          ...current,
+          [activity.invocationSequence]: activity,
+        }));
+      }
+      setActiveArtifact(loadedArtifact);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Artifact load failed');
+    }
+  }
+
+  async function openActivity(invocationSequence: number): Promise<void> {
+    if (!run) return;
+    setActiveActivitySequence(invocationSequence);
+    try {
+      const activity = await fetchInvocationActivity(run.id, invocationSequence);
+      if (activity) {
+        setActivities((current) => ({ ...current, [invocationSequence]: activity }));
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Activity load failed');
     }
   }
 
@@ -394,6 +974,33 @@ function ExecutionConsole() {
     }
   }
 
+  async function removeSelectedRun(): Promise<void> {
+    if (!run || !isTerminalRun(run)) return;
+    const confirmed = window.confirm(
+      `Permanently delete ${run.id} and its Kouro-owned worktree, artifacts, and history?`,
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    try {
+      await deleteRun(run.id);
+      const nextRuns = await fetchRuns();
+      setRuns(nextRuns);
+      setRun(undefined);
+      setEvents([]);
+      setArtifacts([]);
+      setApprovals([]);
+      setActiveArtifact(null);
+      setActivities({});
+      setActiveActivitySequence(null);
+      setSelectedNode(null);
+      setSelectedRunId(nextRuns[0]?.id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Run deletion failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="execution-layout">
       <RunList runs={runs} selected={selectedRunId} onSelect={setSelectedRunId} />
@@ -405,10 +1012,23 @@ function ExecutionConsole() {
               <div>
                 <p className="eyebrow">{run.workflowId}</p>
                 <h2>{run.id}</h2>
+                <small className="repository-path">{run.repositoryPath}</small>
               </div>
-              <div className="run-stat">
-                <span className={stateClass(run.status)}>{run.status}</span>
-                <small>{run.eventCount} durable events</small>
+              <div className="run-header-actions">
+                <div className="run-stat">
+                  <span className={stateClass(run.status)}>{run.status}</span>
+                  <small>{run.eventCount} durable events</small>
+                </div>
+                {isTerminalRun(run) ? (
+                  <button
+                    className="danger-button"
+                    disabled={busy}
+                    onClick={() => void removeSelectedRun()}
+                    type="button"
+                  >
+                    Delete run
+                  </button>
+                ) : null}
               </div>
             </header>
             <section className="graph">
@@ -416,6 +1036,7 @@ function ExecutionConsole() {
                 edges={edges}
                 fitView
                 nodes={nodes}
+                nodeTypes={workflowNodeTypes}
                 nodesConnectable={false}
                 nodesDraggable={false}
                 onNodeClick={(_, selected) => {
@@ -445,11 +1066,19 @@ function ExecutionConsole() {
                 ))}
               </nav>
               <div className="panel">
-                {tab === 'details' ? <NodeDetails node={node} run={run} /> : null}
+                {tab === 'details' ? (
+                  <NodeDetails
+                    activities={activities}
+                    artifacts={artifacts}
+                    node={node}
+                    onOpenActivity={(sequence) => void openActivity(sequence)}
+                    onOpenArtifact={(artifact) => void openArtifact(artifact)}
+                    run={run}
+                  />
+                ) : null}
                 {tab === 'events' ? <EventLog events={events} /> : null}
                 {tab === 'artifacts' ? (
                   <Artifacts
-                    active={activeArtifact}
                     artifacts={artifacts}
                     onOpen={(artifact) => void openArtifact(artifact)}
                   />
@@ -477,6 +1106,20 @@ function ExecutionConsole() {
           <div className="loading">Waiting for durable run state…</div>
         )}
       </section>
+      {activeArtifact ? (
+        <ArtifactModal
+          activity={
+            activeArtifact.invocationSequence === undefined
+              ? undefined
+              : activities[activeArtifact.invocationSequence]
+          }
+          artifact={activeArtifact}
+          onClose={() => setActiveArtifact(null)}
+        />
+      ) : null}
+      {activeActivity ? (
+        <ActivityModal activity={activeActivity} onClose={() => setActiveActivitySequence(null)} />
+      ) : null}
     </div>
   );
 }
@@ -617,9 +1260,7 @@ function ProviderConfigurations({
               {configuration.owner}/{configuration.repository}
             </small>
           ) : null}
-          <small>
-            Credentials: {configuration.credentialSource.replaceAll('_', ' ')}
-          </small>
+          <small>Credentials: {configuration.credentialSource.replaceAll('_', ' ')}</small>
         </article>
       ))}
     </section>
@@ -760,7 +1401,7 @@ export function App() {
   return (
     <main className="app-shell">
       <nav className="surface-nav">
-        <strong>Kairo</strong>
+        <strong>Kouro</strong>
         <button
           className={surface === 'tickets' ? 'active' : ''}
           onClick={() => setSurface('tickets')}

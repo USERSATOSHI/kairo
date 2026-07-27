@@ -1,4 +1,4 @@
-import type { JsonValue } from '@kairo/domain';
+import type { JsonValue } from '@kouro/domain';
 
 export interface StructuredOutputIssue {
   readonly path: string;

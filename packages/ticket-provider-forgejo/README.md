@@ -1,6 +1,6 @@
-# `@kairo/ticket-provider-forgejo`
+# `@kouro/ticket-provider-forgejo`
 
-Capability-aware Forgejo Issues adapter for Kairo tickets.
+Capability-aware Forgejo Issues adapter for Kouro tickets.
 
 Each connection is configured with an instance URL, repository identity, and
 credential. The adapter detects the instance version and advertised OpenAPI

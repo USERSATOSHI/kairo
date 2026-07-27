@@ -57,12 +57,12 @@ function bindingWithRevision(binding: TicketBinding, revision: string): TicketBi
 }
 
 const runEventLabels: Readonly<Record<RunTicketSyncEvent['type'], string>> = {
-  run_started: 'kairo:active',
-  approval_needed: 'kairo:approval-needed',
-  run_blocked: 'kairo:blocked',
-  run_failed: 'kairo:blocked',
-  run_succeeded: 'kairo:completed',
-  run_cancelled: 'kairo:cancelled',
+  run_started: 'kouro:active',
+  approval_needed: 'kouro:approval-needed',
+  run_blocked: 'kouro:blocked',
+  run_failed: 'kouro:blocked',
+  run_succeeded: 'kouro:completed',
+  run_cancelled: 'kouro:cancelled',
 };
 
 export class TicketSyncService {
@@ -248,7 +248,7 @@ export class TicketSyncService {
     const ticket = ticketFailure(this.tickets.get(ticketId));
     if (ticket.isErr()) return ticket;
     const value = ticket.unwrap();
-    const message = `${event.type.replaceAll('_', ' ')} for Kairo run ${event.runId}${
+    const message = `${event.type.replaceAll('_', ' ')} for Kouro run ${event.runId}${
       event.artifactUrl ? `\n${event.artifactUrl}` : ''
     }`;
     const key = `ticket:${ticketId}:provider-comment:${event.sequence}`;
@@ -267,11 +267,11 @@ export class TicketSyncService {
       return recorded.isErr() ? recorded : ok(undefined);
     }
     const commented = providerFailure(
-      await provider.addComment(value.binding, { author: 'kairo', body: message }),
+      await provider.addComment(value.binding, { author: 'kouro', body: message }),
     );
     if (commented.isErr()) return commented;
     const labels = [
-      ...value.labels.filter((label) => !label.startsWith('kairo:')),
+      ...value.labels.filter((label) => !label.startsWith('kouro:') && !label.startsWith('kairo:')),
       runEventLabels[event.type],
     ].toSorted();
     const labelled = providerFailure(

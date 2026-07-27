@@ -5,7 +5,7 @@
 
 ## Context
 
-Kairo can pin or route an agent node to Claude Code, Codex, OpenCode, or Pi, but
+Kouro can pin or route an agent node to Claude Code, Codex, OpenCode, or Pi, but
 the normalized harness request does not select a model. Each CLI therefore uses
 its ambient default, which may differ between machines or change over time.
 
@@ -28,7 +28,7 @@ models: {
 ```
 
 The map is part of the compiled workflow and its checksum. After resolving the
-harness for an attempt using ADR-0016 and ADR-0017, Kairo resolves the model as
+harness for an attempt using ADR-0016 and ADR-0017, Kouro resolves the model as
 `node.models[selectedHarness]`.
 
 The resolved model is recorded on `attempt.started`, projected with the

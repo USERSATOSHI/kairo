@@ -6,7 +6,7 @@ import type {
   NodeInvocation,
   OrchestrationIntent,
   RunState,
-} from '@kairo/domain';
+} from '@kouro/domain';
 import type { RuntimeError } from './errors.ts';
 import { selectTransition } from './transitions.ts';
 

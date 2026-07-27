@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import type { RunStore } from '@kairo/executors';
-import { RunStoreErrorKind } from '@kairo/executors';
+import type { RunStore } from '@kouro/executors';
+import { RunStoreErrorKind } from '@kouro/executors';
 import { compileOrThrow } from '../simulations/fixtures.ts';
 
 export interface RunStoreHarness {

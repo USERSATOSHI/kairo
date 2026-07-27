@@ -1,4 +1,4 @@
-import { all, output, WorkflowBuilder } from '@kairo/adw';
+import { all, output, WorkflowBuilder } from '@kouro/adw';
 
 const workflow = new WorkflowBuilder({
   id: 'feature-development',

@@ -5,7 +5,7 @@ import type {
   RunEvent,
   RunEventInput,
   RunState,
-} from '@kairo/domain';
+} from '@kouro/domain';
 import type { Result } from '@usersatoshi/results';
 
 export interface ResolvedTicket {
@@ -173,6 +173,7 @@ export interface HarnessExecutionRequest {
   readonly capabilities: readonly string[];
   readonly model?: string;
   readonly outputSchema?: JsonValue;
+  readonly onTranscriptChunk?: (chunk: string) => Promise<void>;
 }
 
 export interface HarnessExecution {
@@ -214,4 +215,19 @@ export interface ArtifactWriterError {
 
 export interface ArtifactWriter {
   write(request: ArtifactWriteRequest): Promise<Result<ArtifactReference, ArtifactWriterError>>;
+}
+
+export interface InvocationActivitySession {
+  readonly runId: string;
+  readonly invocationSequence: number;
+  readonly attemptNumber: number;
+  readonly harnessId: string;
+  readonly role: string;
+  readonly prompt: string;
+}
+
+export interface InvocationActivitySink {
+  start(session: InvocationActivitySession): Promise<void>;
+  append(session: InvocationActivitySession, chunk: string): Promise<void>;
+  finish(session: InvocationActivitySession): Promise<void>;
 }

@@ -1,13 +1,13 @@
-# `@kairo/executors` — Application Use Cases and Ports
+# `@kouro/executors` — Application Use Cases and Ports
 
-The **imperative shell** of Kairo's workflow engine. Interprets scheduler intents and executes them against real infrastructure — processes, AI harnesses, and databases. Implements application use cases for run lifecycle management, approval decisions, and artifact publishing.
+The **imperative shell** of Kouro's workflow engine. Interprets scheduler intents and executes them against real infrastructure — processes, AI harnesses, and databases. Implements application use cases for run lifecycle management, approval decisions, and artifact publishing.
 
 ## Architecture
 
 ```
-@kairo/runtime (pure scheduler)
+@kouro/runtime (pure scheduler)
     ↓ produces OrchestrationIntent[]
-@kairo/executors (imperative shell)
+@kouro/executors (imperative shell)
     ├── RunCoordinator — central orchestrator
     ├── AgentExecutor — AI agent execution
     ├── BunCommandRunner — shell command execution
@@ -21,7 +21,7 @@ Infrastructure (persistence-sqlite, harnesses, sandbox-worktree)
 The `RunCoordinator` is the central class that bridges the pure scheduler with side-effecting infrastructure.
 
 ```typescript
-import { RunCoordinator, BunCommandRunner, AgentExecutor } from '@kairo/executors';
+import { RunCoordinator, BunCommandRunner, AgentExecutor } from '@kouro/executors';
 
 const coordinator = new RunCoordinator(
   store,              // RunStore implementation
@@ -101,7 +101,7 @@ The `advance` method implements the main loop:
 
 1. **Load** the run aggregate from the store
 2. **Clock observation** — record time if `maxDurationMs` is set
-3. **Schedule** — call `scheduleRun()` from `@kairo/runtime` to get next intent
+3. **Schedule** — call `scheduleRun()` from `@kouro/runtime` to get next intent
 4. **Dispatch** — execute the first intent:
 
 ```
@@ -180,7 +180,7 @@ const result = await runner.execute('npm run build');
 The `validateStructuredOutput` function validates agent output against a JSON Schema-like declaration:
 
 ```typescript
-import { validateStructuredOutput } from '@kairo/executors';
+import { validateStructuredOutput } from '@kouro/executors';
 
 const result = validateStructuredOutput(value, schema);
 // Returns { output?: JsonValue, issue?: StructuredOutputIssue }
@@ -194,19 +194,19 @@ The `ports.ts` file declares the contracts that infrastructure must implement:
 
 | Port | Required Methods | Implemented By |
 |------|-----------------|----------------|
-| `RunStore` | `createRun`, `loadRun`, `appendEvent` | `@kairo/persistence-sqlite` |
+| `RunStore` | `createRun`, `loadRun`, `appendEvent` | `@kouro/persistence-sqlite` |
 | `CommandRunner` | `execute(command)` | `BunCommandRunner` (same package) |
 | `Clock` | `now()` | System clock (default) |
-| `AgentHarness` | `execute`, `resume` | `@kairo/harnesses` |
-| `AgentHarnessRegistry` | `get(harnessId)` | `@kairo/harnesses` |
-| `ArtifactWriter` | `write(request)` | `@kairo/harnesses` |
+| `AgentHarness` | `execute`, `resume` | `@kouro/harnesses` |
+| `AgentHarnessRegistry` | `get(harnessId)` | `@kouro/harnesses` |
+| `ArtifactWriter` | `write(request)` | `@kouro/harnesses` |
 
 ## Error Handling
 
 | Error Kind | Code | Meaning |
 |------------|------|---------|
 | `RunStore` | 0 | Persistence error |
-| `Runtime` | 1 | Pure runtime error (from `@kairo/runtime`) |
+| `Runtime` | 1 | Pure runtime error (from `@kouro/runtime`) |
 | `UnknownNode` | 2 | Node not in compiled bundle |
 | `UnsupportedNode` | 3 | Node type not supported by this executor |
 | `Command` | 4 | Shell command execution failure |
@@ -232,6 +232,6 @@ The `ports.ts` file declares the contracts that infrastructure must implement:
 
 | Package | Purpose |
 |---------|---------|
-| `@kairo/domain` | Domain types |
-| `@kairo/runtime` | `scheduleRun` — pure scheduler |
+| `@kouro/domain` | Domain types |
+| `@kouro/runtime` | `scheduleRun` — pure scheduler |
 | `@usersatoshi/results` | `Result<T, E>` type |

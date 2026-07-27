@@ -4,8 +4,8 @@ import { join } from 'node:path';
 
 import { describe, expect, test } from 'bun:test';
 
-import { LocalTicketProvider } from '@kairo/ticket-provider-local';
-import { TicketErrorKind, type TicketClock, type TicketIdGenerator } from '@kairo/tickets';
+import { LocalTicketProvider } from '@kouro/ticket-provider-local';
+import { TicketErrorKind, type TicketClock, type TicketIdGenerator } from '@kouro/tickets';
 
 class SteppingClock implements TicketClock {
   private sequence = 0;
@@ -32,7 +32,7 @@ class ScriptedIds implements TicketIdGenerator {
 }
 
 function databasePath(): { readonly directory: string; readonly path: string } {
-  const directory = mkdtempSync(join(tmpdir(), 'kairo-tickets-'));
+  const directory = mkdtempSync(join(tmpdir(), 'kouro-tickets-'));
   return {
     directory,
     path: join(directory, 'tickets.sqlite'),

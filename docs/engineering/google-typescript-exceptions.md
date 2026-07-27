@@ -1,11 +1,11 @@
-# Kairo exceptions to the Google TypeScript Style Guide
+# Kouro exceptions to the Google TypeScript Style Guide
 
-Kairo follows the Google TypeScript Style Guide as a baseline, not as an
+Kouro follows the Google TypeScript Style Guide as a baseline, not as an
 unmodified external dependency.
 
 ## `const enum`
 
-Kairo permits `const enum` for internal discriminants compiled and versioned
+Kouro permits `const enum` for internal discriminants compiled and versioned
 together.
 
 Do not expose a `const enum` as a runtime value or rely on it across separately
@@ -26,7 +26,7 @@ convention, including:
 
 ## Result-based expected failures
 
-Kairo uses `@usersatoshi/results` and package-owned discriminated error unions
+Kouro uses `@usersatoshi/results` and package-owned discriminated error unions
 for expected failures. This convention takes precedence over examples that use
 exceptions for ordinary operational failures.
 
@@ -42,5 +42,5 @@ site must state the invariant or testing reason next to the suppression.
 
 ## Formatting width
 
-Kairo uses a 100-column formatter target to avoid excessive wrapping in typed
+Kouro uses a 100-column formatter target to avoid excessive wrapping in typed
 workflow definitions and error unions.

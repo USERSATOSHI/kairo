@@ -1,4 +1,4 @@
-# `@kairo/tickets`
+# `@kouro/tickets`
 
 Ticket planning domain, application services, declared persistence port, local
 SQLite repository, and pure planning Kanban projection.

@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { readFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import { compileAdwPackage } from '@kairo/adw';
+import { compileAdwPackage } from '@kouro/adw';
 
 const featurePackage = resolve(import.meta.dir, '../fixtures/adws/feature');
 const goldenBundle = resolve(import.meta.dir, '../fixtures/golden/feature-simulation.bundle.json');
@@ -61,6 +61,29 @@ describe('M1 content-addressed TypeScript ADW compiler', () => {
     if (first.isOk() && second.isOk()) {
       expect(first.unwrap().canonical).toBe(second.unwrap().canonical);
       expect(first.unwrap().checksum).toBe(second.unwrap().checksum);
+    }
+  });
+
+  test('normalizes the legacy Kairo manifest field to Kouro metadata', async () => {
+    const directory = await mkdtemp(resolve(import.meta.dir, '.kouro-legacy-manifest-'));
+    try {
+      await cp(resolve(featurePackage, '..'), directory, { recursive: true });
+      const packageDirectory = resolve(directory, 'feature');
+      const manifestPath = resolve(packageDirectory, 'manifest.json');
+      const manifest = await readFile(manifestPath, 'utf8');
+      await writeFile(manifestPath, manifest.replace('"kouro":', '"kairo":'));
+
+      const compiled = await compileAdwPackage(packageDirectory);
+
+      expect(compiled.isOk()).toBe(true);
+      if (compiled.isOk()) {
+        expect(compiled.unwrap().bundle.manifest.metadata).toEqual(
+          expect.objectContaining({ kouro: '>=0.1.0' }),
+        );
+        expect(compiled.unwrap().bundle.manifest.metadata).not.toHaveProperty('kairo');
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
     }
   });
 });

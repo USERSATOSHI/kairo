@@ -152,7 +152,7 @@ export class TicketMigrationService {
       ticketId: ticket.id,
       targetProvider: provider.kind,
       projectId,
-      marker: `kairo-ticket:${ticket.id}`,
+      marker: `kouro-ticket:${ticket.id}`,
       stage: 'prepared',
       snapshot: snapshotOf(ticket),
       createdAt: now,

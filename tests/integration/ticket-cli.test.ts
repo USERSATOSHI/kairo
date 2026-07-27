@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
-import { LocalKairoHost, type LocalPaths } from '@kairo/cli';
-import { ScriptedFakeHarness } from '@kairo/harnesses';
+import { LocalKouroHost, type LocalPaths } from '@kouro/cli';
+import { ScriptedFakeHarness } from '@kouro/harnesses';
 
 interface ProcessResult {
   readonly exitCode: number;
@@ -54,7 +54,7 @@ function localPaths(root: string): LocalPaths {
   return {
     dataDirectory,
     configDirectory: resolve(root, 'config'),
-    databasePath: resolve(dataDirectory, 'kairo.sqlite'),
+    databasePath: resolve(dataDirectory, 'kouro.sqlite'),
     artifactDirectory: resolve(dataDirectory, 'artifacts'),
     worktreeDirectory: resolve(dataDirectory, 'worktrees'),
   };
@@ -68,13 +68,13 @@ describe('ticket CLI composition', () => {
   });
 
   test('creates, lists, moves, comments on, and reads local tickets', async () => {
-    const root = await mkdtemp(resolve(tmpdir(), 'kairo-ticket-cli-'));
+    const root = await mkdtemp(resolve(tmpdir(), 'kouro-ticket-cli-'));
     roots.push(root);
     const repositoryRoot = resolve(import.meta.dir, '..', '..');
     const cli = resolve(repositoryRoot, 'packages', 'cli', 'src', 'main.ts');
     const environment = {
-      KAIRO_DATA_DIR: resolve(root, 'data'),
-      KAIRO_CONFIG_DIR: resolve(root, 'config'),
+      KOURO_DATA_DIR: resolve(root, 'data'),
+      KOURO_CONFIG_DIR: resolve(root, 'config'),
     };
     const command = ['bun', 'run', cli, 'ticket'];
     const created = await runProcess(
@@ -131,20 +131,20 @@ describe('ticket CLI composition', () => {
   });
 
   test('reports environment-composed providers without exposing tokens', async () => {
-    const root = await mkdtemp(resolve(tmpdir(), 'kairo-ticket-providers-'));
+    const root = await mkdtemp(resolve(tmpdir(), 'kouro-ticket-providers-'));
     roots.push(root);
     const previous = {
-      owner: process.env.KAIRO_GITHUB_OWNER,
-      repository: process.env.KAIRO_GITHUB_REPOSITORY,
-      project: process.env.KAIRO_GITHUB_PROJECT,
-      token: process.env.KAIRO_GITHUB_TOKEN,
+      owner: process.env.KOURO_GITHUB_OWNER,
+      repository: process.env.KOURO_GITHUB_REPOSITORY,
+      project: process.env.KOURO_GITHUB_PROJECT,
+      token: process.env.KOURO_GITHUB_TOKEN,
     };
-    process.env.KAIRO_GITHUB_OWNER = 'usersatoshi';
-    process.env.KAIRO_GITHUB_REPOSITORY = 'kairo';
-    process.env.KAIRO_GITHUB_PROJECT = 'kairo';
-    process.env.KAIRO_GITHUB_TOKEN = 'must-not-be-returned';
+    process.env.KOURO_GITHUB_OWNER = 'usersatoshi';
+    process.env.KOURO_GITHUB_REPOSITORY = 'kouro';
+    process.env.KOURO_GITHUB_PROJECT = 'kouro';
+    process.env.KOURO_GITHUB_TOKEN = 'must-not-be-returned';
     try {
-      const host = new LocalKairoHost(localPaths(root), []);
+      const host = new LocalKouroHost(localPaths(root), []);
       try {
         expect((await host.initialize()).isOk()).toBe(true);
         expect(host.ticketProviderConfigurations()).toContainEqual({
@@ -153,8 +153,8 @@ describe('ticket CLI composition', () => {
           configured: true,
           credentialSource: 'server_environment',
           owner: 'usersatoshi',
-          repository: 'kairo',
-          message: 'Configured from the KAIRO_GITHUB_* environment variables.',
+          repository: 'kouro',
+          message: 'Configured from the KOURO_GITHUB_* environment variables.',
         });
         expect(JSON.stringify(host.ticketProviderConfigurations())).not.toContain(
           'must-not-be-returned',
@@ -164,19 +164,19 @@ describe('ticket CLI composition', () => {
       }
     } finally {
       for (const [key, value] of Object.entries(previous)) {
-        const name = `KAIRO_GITHUB_${key.toUpperCase()}`;
+        const name = `KOURO_GITHUB_${key.toUpperCase()}`;
         if (value === undefined) delete process.env[name];
         else process.env[name] = value;
       }
     }
   });
 
-  test('launches a durable Kairo ticket and records its immutable run link', async () => {
-    const root = await mkdtemp(resolve(tmpdir(), 'kairo-ticket-run-'));
+  test('launches a durable Kouro ticket and records its immutable run link', async () => {
+    const root = await mkdtemp(resolve(tmpdir(), 'kouro-ticket-run-'));
     roots.push(root);
     const repository = resolve(root, 'repository');
     await createRepository(repository);
-    const host = new LocalKairoHost(localPaths(root), [
+    const host = new LocalKouroHost(localPaths(root), [
       new ScriptedFakeHarness('fake', [
         {
           output: { summary: 'Plan from stored ticket', steps: ['Implement', 'Test'] },
@@ -196,14 +196,14 @@ describe('ticket CLI composition', () => {
       const created = await host.create({
         adw: 'feature-development',
         repositoryPath: repository,
-        ticket: `kairo:${ticket.id}`,
+        ticket: `kouro:${ticket.id}`,
         harnesses: ['fake'],
         actor: 'operator',
       });
       expect(created.isOk()).toBe(true);
       const details = await host
         .app()
-        .handle(new Request(`http://kairo.test/tickets/${ticket.id}`));
+        .handle(new Request(`http://kouro.test/tickets/${ticket.id}`));
       const body: {
         readonly runs: readonly {
           readonly ticketId: string;

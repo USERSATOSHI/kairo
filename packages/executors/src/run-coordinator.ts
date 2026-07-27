@@ -7,8 +7,8 @@ import type {
   OrchestrationIntent,
   RunEventInput,
   SkipBinding,
-} from '@kairo/domain';
-import { agentHarnessesForNode, scheduleRun } from '@kairo/runtime';
+} from '@kouro/domain';
+import { agentHarnessesForNode, scheduleRun } from '@kouro/runtime';
 import { ok, type Result } from '@usersatoshi/results';
 
 import { ExecutorErrorKind, toExecutorError, type ExecutorError } from './errors.ts';

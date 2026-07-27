@@ -11,7 +11,7 @@ sessions, so they lose the implementation agent's reasoning context. The
 implementation agent also did not receive the durable command or review output
 that caused the repair traversal.
 
-Harnesses already return durable resume tokens, but Kairo previously used them
+Harnesses already return durable resume tokens, but Kouro previously used them
 only to recover an interrupted attempt within one node invocation.
 
 ## Decision

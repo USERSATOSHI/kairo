@@ -1,4 +1,4 @@
-import type { ApiErrorResponse, EventStreamMessage } from '@kairo/api-contracts';
+import type { ApiErrorResponse, EventStreamMessage } from '@kouro/api-contracts';
 import { Elysia, t } from 'elysia';
 
 import { ApiErrorKind, type ApiError } from './errors.ts';
@@ -6,8 +6,10 @@ import {
   controlInvocation,
   controlRun,
   createRun,
+  deleteRun,
   decideApproval,
   getArtifact,
+  getInvocationActivity,
   getRepository,
   getRun,
   getWorkflow,
@@ -59,8 +61,8 @@ function encodeEventStream(messages: readonly EventStreamMessage[]): string {
 }
 
 /** Creates an in-process-testable Elysia application around application use cases. */
-export function createKairoApp(services: ApiServices) {
-  return new Elysia({ name: 'kairo-api' })
+export function createKouroApp(services: ApiServices) {
+  return new Elysia({ name: 'kouro-api' })
     .get('/health', () => ({ status: 'ok' as const }))
     .get('/runs', ({ set }) => {
       const result = listRuns(services);
@@ -93,6 +95,10 @@ export function createKairoApp(services: ApiServices) {
       const result = getRun(services, params.runId);
       return result.isErr() ? failure(result.error, set) : result.value;
     })
+    .delete('/runs/:runId', async ({ params, set }) => {
+      const result = await deleteRun(services, params.runId);
+      return result.isErr() ? failure(result.error, set) : result.value;
+    })
     .get('/runs/:runId/events', ({ params, query, request, set }) => {
       const result = listEvents(services, params.runId, afterSequence(request, query.after));
       if (result.isErr()) return failure(result.error, set);
@@ -109,6 +115,14 @@ export function createKairoApp(services: ApiServices) {
     })
     .get('/runs/:runId/artifacts/:artifactId', async ({ params, set }) => {
       const result = await getArtifact(services, params.runId, params.artifactId);
+      return result.isErr() ? failure(result.error, set) : result.value;
+    })
+    .get('/runs/:runId/invocations/:invocationSequence/activity', async ({ params, set }) => {
+      const result = await getInvocationActivity(
+        services,
+        params.runId,
+        Number(params.invocationSequence),
+      );
       return result.isErr() ? failure(result.error, set) : result.value;
     })
     .get('/runs/:runId/approvals', ({ params, set }) => {
@@ -219,4 +233,4 @@ export function createKairoApp(services: ApiServices) {
     });
 }
 
-export type KairoApp = ReturnType<typeof createKairoApp>;
+export type KouroApp = ReturnType<typeof createKouroApp>;

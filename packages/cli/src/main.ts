@@ -4,42 +4,115 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import { listRuns, getRun } from '@kairo/api';
+import { listRuns, getRun } from '@kouro/api';
 
 import { ADW_TEMPLATES, createAdw, isAdwTemplate } from './create-adw.ts';
-import { LocalKairoHost } from './local-host.ts';
+import { LocalKouroHost } from './local-host.ts';
 import { executeTicketCommand } from './ticket-command.ts';
 
 const VERSION = '0.1.0';
-const HELP = `Kairo ${VERSION}
+const HELP = `Kouro ${VERSION}
 
 Usage:
-  kairo create adw <name> [--template <template>] [--output <directory>]
-  kairo run <adw> --repo <path> (--ticket <provider:reference> | --task <text> | --task-file <path>) [--harness <id|node=id>]...
-  kairo ticket create --project <id> --title <text> (--description <text> | --description-file <path>) [--priority <value>] [--label <value>]...
-  kairo ticket list --project <id>
-  kairo ticket show <ticket-id>
-  kairo ticket update <ticket-id> --revision <number> [--title <text>] [--description <text>] [--priority <value>] [--label <value>]...
-  kairo ticket move <ticket-id> --revision <number> --status <status>
-  kairo ticket close|cancel|reopen <ticket-id> --revision <number>
-  kairo ticket comment <ticket-id> --body <text> [--author <name>]
-  kairo ticket providers
-  kairo ticket import <github|forgejo> --project <id>
-  kairo ticket pull|push <ticket-id>
-  kairo ticket migrate <ticket-id> --to <github|forgejo> --project <id>
-  kairo runs
-  kairo status <run-id>
-  kairo approve <run-id> <invocation> --reason <text>
-  kairo reject <run-id> <invocation> --reason <text>
-  kairo pause|resume|cancel <run-id>
-  kairo interrupt|retry|skip <run-id> <invocation> --reason <text>
-  kairo diagnostics
-  kairo serve [--port <number>]
-  kairo --help
-  kairo --version
+  kouro <command> [options]
 
-ADW templates:
-  ${ADW_TEMPLATES.join(', ')}`;
+Common usage:
+  kouro create adw <name> [--template <template>] [--output <directory>]
+  kouro run <adw> --repo <path> (--ticket <provider:reference> | --task <text> | --task-file <path>)
+  kouro pause|resume|cancel <run-id>
+  kouro serve [--repo <path>]
+
+Workflow:
+  create adw      Create an ADW package from a starter template
+  run             Compile and execute an ADW
+
+Runs:
+  runs            List runs for the current repository
+  status          Show one run
+  delete          Permanently delete one terminal run
+  approve         Grant a pending approval
+  reject          Reject a pending approval
+  pause           Pause scheduling for a run
+  resume          Resume a paused run
+  cancel          Cancel a run
+  interrupt       Interrupt an active invocation
+  retry           Retry an interrupted invocation
+  skip            Skip a policy-eligible invocation
+
+Planning:
+  ticket          Create, inspect, move, sync, and migrate tickets
+
+Host:
+  serve           Serve the current repository dashboard and API
+  diagnostics     Report available agent harnesses
+
+Global options:
+  -h, --help      Show help
+  -v, --version   Show version
+
+Run "kouro help <command>" for command-specific usage.
+
+ADW templates: ${ADW_TEMPLATES.join(', ')}`;
+
+const COMMAND_HELP: Readonly<Record<string, string>> = {
+  create: `Usage:
+  kouro create adw <name> [--template <template>] [--output <directory>]
+
+Creates .kouro/<name> by default.
+Templates: ${ADW_TEMPLATES.join(', ')}`,
+  run: `Usage:
+  kouro run <adw> --repo <path> (--ticket <provider:reference> | --task <text> | --task-file <path>) [--harness <id|node=id>]...
+
+Examples:
+  kouro run feature-development --repo . --task "Add CSV export" --harness codex
+  kouro run feature-development --repo . --ticket kouro:<ticket-id> --harness plan=codex`,
+  runs: `Usage:
+  kouro runs [--repo <path> | --all-repos]
+
+Lists the current repository by default.`,
+  status: `Usage:
+  kouro status <run-id> [--repo <path> | --all-repos]`,
+  delete: `Usage:
+  kouro delete <run-id> --yes [--repo <path> | --all-repos]
+
+Permanently removes a terminal run, its Kouro worktree, artifacts, events, and projections.
+The source repository and delivery branch are preserved.`,
+  approve: `Usage:
+  kouro approve <run-id> <invocation> --reason <text>`,
+  reject: `Usage:
+  kouro reject <run-id> <invocation> --reason <text>`,
+  pause: `Usage:
+  kouro pause|resume|cancel <run-id> [--reason <text>]`,
+  resume: `Usage:
+  kouro pause|resume|cancel <run-id> [--reason <text>]`,
+  cancel: `Usage:
+  kouro pause|resume|cancel <run-id> [--reason <text>]`,
+  interrupt: `Usage:
+  kouro interrupt|retry|skip <run-id> <invocation> --reason <text>`,
+  retry: `Usage:
+  kouro interrupt|retry|skip <run-id> <invocation> --reason <text>`,
+  skip: `Usage:
+  kouro interrupt|retry|skip <run-id> <invocation> --reason <text>`,
+  ticket: `Usage:
+  kouro ticket create --project <id> --title <text> (--description <text> | --description-file <path>) [options]
+  kouro ticket list --project <id>
+  kouro ticket show <ticket-id>
+  kouro ticket update <ticket-id> --revision <number> [options]
+  kouro ticket move <ticket-id> --revision <number> --status <status>
+  kouro ticket close|cancel|reopen <ticket-id> --revision <number>
+  kouro ticket comment <ticket-id> --body <text> [--author <name>]
+  kouro ticket providers
+  kouro ticket import <github|forgejo> --project <id>
+  kouro ticket pull|push <ticket-id>
+  kouro ticket migrate <ticket-id> --to <github|forgejo> --project <id>`,
+  serve: `Usage:
+  kouro serve [--port <number>] [--repo <path> | --all-repos]
+
+Serves only the current repository by default. It can monitor a CLI-owned run
+without interrupting it and takes over execution when the worker lease becomes available.`,
+  diagnostics: `Usage:
+  kouro diagnostics`,
+};
 
 function option(args: readonly string[], name: string): string | undefined {
   const index = args.indexOf(name);
@@ -83,8 +156,16 @@ async function main(): Promise<number> {
     process.stdout.write(`${HELP}\n`);
     return 0;
   }
+  if (command === 'help') {
+    process.stdout.write(`${COMMAND_HELP[args[1] ?? ''] ?? HELP}\n`);
+    return 0;
+  }
   if (command === '--version' || command === '-v') {
     process.stdout.write(`${VERSION}\n`);
+    return 0;
+  }
+  if (args.includes('--help') || args.includes('-h')) {
+    process.stdout.write(`${COMMAND_HELP[command] ?? HELP}\n`);
     return 0;
   }
 
@@ -99,14 +180,14 @@ async function main(): Promise<number> {
     const result = await createAdw({
       name: required(args[2], 'name'),
       template,
-      outputDirectory: resolve(option(args, '--output') ?? resolve(process.cwd(), '.kairo')),
+      outputDirectory: resolve(option(args, '--output') ?? resolve(process.cwd(), '.kouro')),
     });
     if (result.isErr()) throw new Error(`${result.error.code}: ${result.error.message}`);
     print(result.unwrap());
     return 0;
   }
 
-  const host = new LocalKairoHost();
+  const host = new LocalKouroHost();
   const initialized = await host.initialize();
   if (initialized.isErr())
     throw new Error(`${initialized.error.code}: ${initialized.error.message}`);
@@ -139,18 +220,36 @@ async function main(): Promise<number> {
       return 0;
     }
     if (command === 'runs') {
-      const result = listRuns({ runs: host.store, coordinator: host.coordinator() });
+      const runs = args.includes('--all-repos')
+        ? host.store
+        : host.runStoreForRepository(resolve(option(args, '--repo') ?? process.cwd()));
+      const result = listRuns({ runs, coordinator: host.coordinator() });
       if (result.isErr()) throw new Error(result.error.message);
       print(result.unwrap());
       return 0;
     }
     if (command === 'status') {
-      const result = getRun(
-        { runs: host.store, coordinator: host.coordinator() },
-        required(args[1], 'run-id'),
-      );
+      const runs = args.includes('--all-repos')
+        ? host.store
+        : host.runStoreForRepository(resolve(option(args, '--repo') ?? process.cwd()));
+      const result = getRun({ runs, coordinator: host.coordinator() }, required(args[1], 'run-id'));
       if (result.isErr()) throw new Error(result.error.message);
       print(result.unwrap());
+      return 0;
+    }
+    if (command === 'delete') {
+      if (!args.includes('--yes')) {
+        throw new Error('Run deletion is permanent; pass --yes to confirm');
+      }
+      const runId = required(args[1], 'run-id');
+      const runs = args.includes('--all-repos')
+        ? host.store
+        : host.runStoreForRepository(resolve(option(args, '--repo') ?? process.cwd()));
+      const visible = runs.loadRun(runId);
+      if (visible.isErr()) throw new Error(`Run ${runId} was not found in this repository`);
+      const deleted = await host.delete(runId);
+      if (deleted.isErr()) throw new Error(`${deleted.error.code}: ${deleted.error.message}`);
+      print(deleted.unwrap());
       return 0;
     }
     if (command === 'approve' || command === 'reject') {
@@ -224,9 +323,14 @@ async function main(): Promise<number> {
     }
     if (command === 'serve') {
       const port = Number(option(args, '--port') ?? 4317);
-      const served = await host.serve(port);
+      const repositoryPath = args.includes('--all-repos')
+        ? undefined
+        : resolve(option(args, '--repo') ?? process.cwd());
+      const served = await host.serve(port, repositoryPath);
       if (served.isErr()) throw new Error(served.error.message);
-      process.stdout.write(`Kairo listening on http://localhost:${port}\n`);
+      process.stdout.write(
+        `Kouro listening on http://localhost:${port} (${repositoryPath ?? 'all repositories'})\n`,
+      );
       await new Promise<void>((resolveSignal) => {
         const stop = (): void => {
           served.unwrap().stop();
@@ -246,6 +350,6 @@ async function main(): Promise<number> {
 try {
   process.exitCode = await main();
 } catch (cause) {
-  process.stderr.write(`${cause instanceof Error ? cause.message : 'Kairo failed'}\n`);
+  process.stderr.write(`${cause instanceof Error ? cause.message : 'Kouro failed'}\n`);
   process.exitCode = 1;
 }

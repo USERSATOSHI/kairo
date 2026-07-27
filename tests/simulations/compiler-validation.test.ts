@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import { compileWorkflow, CompilerErrorKind } from '@kairo/adw';
-import type { RecoveryPolicy } from '@kairo/domain';
+import { compileWorkflow, CompilerErrorKind } from '@kouro/adw';
+import type { RecoveryPolicy } from '@kouro/domain';
 import { workflowSource } from './fixtures.ts';
 
 describe('M1 compiler validation', () => {

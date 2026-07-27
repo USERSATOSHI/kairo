@@ -5,7 +5,7 @@ import type {
   HarnessError,
   HarnessExecution,
   HarnessExecutionRequest,
-} from '@kairo/executors';
+} from '@kouro/executors';
 import { invalidResponse, processFailure } from './errors.ts';
 import { BunProcessRunner, type ProcessRunner } from './process-runner.ts';
 
@@ -112,7 +112,12 @@ export class OpenCodeHarness implements AgentHarness {
     request: HarnessExecutionRequest,
     args: readonly string[],
   ): Promise<Result<HarnessExecution, HarnessError>> {
-    const result = await this.runner.run('opencode', args, request.workingDirectory);
+    const result = await this.runner.run(
+      'opencode',
+      args,
+      request.workingDirectory,
+      request.onTranscriptChunk,
+    );
     if (result.isErr()) return result;
     const output = result.unwrap();
     if (output.exitCode !== 0) {

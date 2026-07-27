@@ -1,10 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import type { TicketPriority, TicketStatus, UpdateTicketInput } from '@kairo/tickets';
+import type { TicketPriority, TicketStatus, UpdateTicketInput } from '@kouro/tickets';
 import type { Result } from '@usersatoshi/results';
 
-import type { LocalKairoHost } from './local-host.ts';
+import type { LocalKouroHost } from './local-host.ts';
 
 const priorities: readonly TicketPriority[] = ['low', 'medium', 'high', 'critical'];
 const statuses: readonly TicketStatus[] = ['backlog', 'ready', 'blocked', 'done', 'cancelled'];
@@ -86,7 +86,7 @@ function unwrap<T, E extends { readonly kind: number }>(result: Result<T, E>): T
 function configured<T>(value: T | undefined, provider: string): T {
   if (value === undefined) {
     throw new Error(
-      `${provider} is not configured; run "kairo ticket providers" for required environment variables`,
+      `${provider} is not configured; run "kouro ticket providers" for required environment variables`,
     );
   }
   return value;
@@ -101,7 +101,7 @@ async function description(args: readonly string[]): Promise<string> {
 
 /** Executes the ticket CLI without leaking transport parsing into ticket services. */
 export async function executeTicketCommand(
-  host: LocalKairoHost,
+  host: LocalKouroHost,
   args: readonly string[],
   actor: string,
 ): Promise<unknown> {

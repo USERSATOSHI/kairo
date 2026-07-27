@@ -5,8 +5,8 @@
 
 ## Context
 
-Kairo runs may modify the same registered repository concurrently. A process can
-also stop after Git creates a worktree or commit but before Kairo records the
+Kouro runs may modify the same registered repository concurrently. A process can
+also stop after Git creates a worktree or commit but before Kouro records the
 result. Retrying either operation without observing Git state can conflict with
 another run or duplicate a commit.
 

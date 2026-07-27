@@ -5,7 +5,7 @@ import type {
   CompiledWorkflowBundle,
   NodeInvocation,
   RunState,
-} from '@kairo/domain';
+} from '@kouro/domain';
 import { RuntimeErrorKind, toRuntimeError, type RuntimeError } from './errors.ts';
 import { evaluateExpression } from './expression.ts';
 

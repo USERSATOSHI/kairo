@@ -1,4 +1,4 @@
-# Kairo Runtime Terminology
+# Kouro Runtime Terminology
 
 This document defines the terms used by the runtime contract. These definitions
 are normative for M1.
@@ -65,7 +65,7 @@ events.
 
 ### Orchestration intent
 
-A pure description of the next action Kairo wants committed, such as activating
+A pure description of the next action Kouro wants committed, such as activating
 a node, starting an attempt, requesting approval, or failing a run. An intent
 contains no generated ID, current timestamp, lease, or unrecorded observation.
 
@@ -99,12 +99,12 @@ A declared domain or operational failure represented as typed data and
 
 ### Programming defect
 
-An invariant violation caused by incorrect Kairo code. Programming defects may
+An invariant violation caused by incorrect Kouro code. Programming defects may
 throw and are not converted into ordinary workflow outcomes.
 
 ### Interruption
 
-Loss of an active attempt before Kairo durably records whether its expected
+Loss of an active attempt before Kouro durably records whether its expected
 effect completed.
 
 ### Recovery policy

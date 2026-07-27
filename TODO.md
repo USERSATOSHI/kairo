@@ -1,4 +1,4 @@
-# Kairo — Milestone TODO
+# Kouro — Milestone TODO
 
 > Auto-generated from `plan.md`. Update checkboxes as work progresses.
 
@@ -45,9 +45,9 @@ Status: **Complete** (accepted 2026-07-26)
 
 ### Packages delivered
 
-- [x] `@kairo/domain` — pure types
-- [x] `@kairo/adw` — ADW compilation
-- [x] `@kairo/runtime` — pure reduction, scheduling, transition
+- [x] `@kouro/domain` — pure types
+- [x] `@kouro/adw` — ADW compilation
+- [x] `@kouro/runtime` — pure reduction, scheduling, transition
 
 ---
 
@@ -218,7 +218,7 @@ Status: **Complete** (accepted 2026-07-26)
 
 ### Deliverables
 
-- [x] Distributable `kairo` binary with stable help, version, and typed errors
+- [x] Distributable `kouro` binary with stable help, version, and typed errors
 - [x] Predictable local data and configuration paths
 - [x] Local ADW run, run list, and run inspection commands
 - [x] Approval and rejection commands
@@ -236,18 +236,18 @@ Status: **Complete** (accepted 2026-07-26)
 
 ### CLI surface
 
-- [x] `kairo run <adw> --repo <path> [--harness <id>]`
-- [x] `kairo runs`
-- [x] `kairo status <run-id>`
-- [x] `kairo approve <run-id> <invocation> --reason <text>`
-- [x] `kairo reject <run-id> <invocation> --reason <text>`
-- [x] `kairo pause|resume|cancel <run-id>`
-- [x] `kairo interrupt|retry|skip <run-id> <invocation> --reason <text>`
-- [x] `kairo serve`
+- [x] `kouro run <adw> --repo <path> [--harness <id>]`
+- [x] `kouro runs`
+- [x] `kouro status <run-id>`
+- [x] `kouro approve <run-id> <invocation> --reason <text>`
+- [x] `kouro reject <run-id> <invocation> --reason <text>`
+- [x] `kouro pause|resume|cancel <run-id>`
+- [x] `kouro interrupt|retry|skip <run-id> <invocation> --reason <text>`
+- [x] `kouro serve`
 
 ### Exit criteria
 
-- [x] A fresh checkout can invoke `kairo --help` without a custom host script
+- [x] A fresh checkout can invoke `kouro --help` without a custom host script
 - [x] The built-in feature workflow reaches a named merge-ready branch
 - [x] CLI approvals stop and resume the same durable run
 - [x] Process termination and restart do not duplicate completed work or Git effects
@@ -291,9 +291,9 @@ silently refresh it during the run.
 
 ### CLI surface
 
-- [x] `kairo run <adw> --repo <path> --ticket <reference> [--harness <id>]`
-- [x] `kairo run <adw> --repo <path> --task <text> [--harness <id>]`
-- [x] `kairo run <adw> --repo <path> --task-file <path> [--harness <id>]`
+- [x] `kouro run <adw> --repo <path> --ticket <reference> [--harness <id>]`
+- [x] `kouro run <adw> --repo <path> --task <text> [--harness <id>]`
+- [x] `kouro run <adw> --repo <path> --task-file <path> [--harness <id>]`
 
 ### Exit criteria
 
@@ -314,7 +314,7 @@ silently refresh it during the run.
 
 Status: **Complete** (accepted 2026-07-26)
 
-- [x] Ticket domain and stable Kairo ticket IDs
+- [x] Ticket domain and stable Kouro ticket IDs
 - [x] Local SQLite persistence
 - [x] Comments, labels, assignees, priorities, and relationships
 - [x] Optimistic revisions and typed failures
@@ -323,7 +323,7 @@ Status: **Complete** (accepted 2026-07-26)
 - [x] Explicit planning move rules
 - [x] Unit and restart integration coverage
 
-### T2 — Kairo run integration
+### T2 — Kouro run integration
 
 Status: **Complete** (accepted 2026-07-26)
 

@@ -5,15 +5,15 @@
 
 ## Context
 
-External programs and coding agents are not reproducible. Defining Kairo as
+External programs and coding agents are not reproducible. Defining Kouro as
 deterministic only from workflow inputs and repository state would promise
-control over effects Kairo does not own.
+control over effects Kouro does not own.
 
 ## Decision
 
-Kairo's deterministic boundary is:
+Kouro's deterministic boundary is:
 
-> Given the same compiled workflow and ordered durable event history, Kairo
+> Given the same compiled workflow and ordered durable event history, Kouro
 > reconstructs the same state and emits the same next orchestration decisions.
 
 The compiled bundle contains every static decision input. Events contain every

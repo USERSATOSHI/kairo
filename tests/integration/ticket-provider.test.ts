@@ -1,4 +1,4 @@
-import { ScriptedFakeTicketProvider } from '@kairo/executors';
+import { ScriptedFakeTicketProvider } from '@kouro/executors';
 
 import { ticketProviderContract } from '../contracts/ticket-provider.contract.ts';
 

@@ -1,19 +1,19 @@
 import { treaty } from '@elysiajs/eden';
-import { BunCommandRunner, RunCoordinator } from '@kairo/executors';
-import { SqliteEventStore } from '@kairo/persistence-sqlite';
+import { BunCommandRunner, RunCoordinator } from '@kouro/executors';
+import { SqliteEventStore } from '@kouro/persistence-sqlite';
 import {
   SqliteTicketRepository,
   SqliteTicketRunStore,
   SqliteTicketSyncStore,
-} from '@kairo/tickets';
+} from '@kouro/tickets';
 import { err, ok, type Result } from '@usersatoshi/results';
 
-import { createKairoApp, type KairoApp } from './app.ts';
+import { createKouroApp, type KouroApp } from './app.ts';
 import { LocalArtifactContentReader } from './local-artifact-content-reader.ts';
-import { KairoTicketRunQuery } from './ticket-run-query.ts';
+import { KouroTicketRunQuery } from './ticket-run-query.ts';
 
-export interface ComposedKairoApp {
-  readonly app: KairoApp;
+export interface ComposedKouroApp {
+  readonly app: KouroApp;
   dispose(): void;
 }
 
@@ -23,10 +23,10 @@ export interface CompositionError {
 }
 
 /** Composes the single-process MVP with SQLite and a local command runner. */
-export function composeKairoApp(
+export function composeKouroApp(
   databasePath: string,
   artifactRoot?: string,
-): Result<ComposedKairoApp, CompositionError> {
+): Result<ComposedKouroApp, CompositionError> {
   const store = new SqliteEventStore(databasePath);
   const initialized = store.initialize();
   if (initialized.isErr()) {
@@ -51,14 +51,14 @@ export function composeKairoApp(
     }
   }
   return ok({
-    app: createKairoApp({
+    app: createKouroApp({
       runs: store,
       coordinator,
       ...(artifactRoot ? { artifacts: new LocalArtifactContentReader(artifactRoot) } : {}),
       tickets: {
         repository: tickets,
         runs: ticketRuns,
-        runQuery: new KairoTicketRunQuery(store),
+        runQuery: new KouroTicketRunQuery(store),
         sync: ticketSync,
       },
     }),
@@ -72,6 +72,6 @@ export function composeKairoApp(
 }
 
 /** Creates the typed Eden client consumed by the dashboard. */
-export function createKairoClient(baseUrl: string) {
-  return treaty<KairoApp>(baseUrl);
+export function createKouroClient(baseUrl: string) {
+  return treaty<KouroApp>(baseUrl);
 }

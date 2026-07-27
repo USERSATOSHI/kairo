@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import { compileWorkflow, CompilerErrorKind } from '@kairo/adw';
-import { RuntimeErrorKind, simulate } from '@kairo/runtime';
+import { compileWorkflow, CompilerErrorKind } from '@kouro/adw';
+import { RuntimeErrorKind, simulate } from '@kouro/runtime';
 import { compileOrThrow, workflowSource } from './fixtures.ts';
 
 describe('ADR-0001: deterministic replay', () => {

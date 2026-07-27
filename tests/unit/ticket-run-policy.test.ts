@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { decideActiveRunTicketChange, deriveTicketBoardColumn, type Ticket } from '@kairo/tickets';
+import { decideActiveRunTicketChange, deriveTicketBoardColumn, type Ticket } from '@kouro/tickets';
 
 const ticket: Ticket = {
   id: 'ticket-1',

@@ -1,4 +1,4 @@
-import { TicketProviderErrorKind, type TicketProviderError } from '@kairo/tickets';
+import { TicketProviderErrorKind, type TicketProviderError } from '@kouro/tickets';
 import { err } from '@usersatoshi/results';
 
 export function githubError(

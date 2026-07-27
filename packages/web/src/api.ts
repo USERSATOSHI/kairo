@@ -3,13 +3,15 @@ import type {
   ApprovalDecisionResponse,
   ApprovalView,
   ArtifactView,
+  DeleteRunResponse,
+  InvocationActivityView,
   RunDetails,
   RunSummary,
   TicketDetails,
   TicketListItem,
   TicketProjectView,
   TicketProviderConfigurationView,
-} from '@kairo/api-contracts';
+} from '@kouro/api-contracts';
 
 export interface ReplayedEvent {
   readonly id: number;
@@ -25,6 +27,8 @@ function isRunSummary(value: unknown): value is RunSummary {
   return (
     isRecord(value) &&
     typeof value.id === 'string' &&
+    typeof value.repositoryId === 'string' &&
+    typeof value.repositoryPath === 'string' &&
     typeof value.workflowId === 'string' &&
     typeof value.status === 'string' &&
     typeof value.eventCount === 'number'
@@ -59,6 +63,22 @@ function isArtifactView(value: unknown): value is ArtifactView {
     typeof value.kind === 'string' &&
     typeof value.checksum === 'string' &&
     typeof value.size === 'number'
+  );
+}
+
+function isInvocationActivityView(value: unknown): value is InvocationActivityView {
+  return (
+    isRecord(value) &&
+    typeof value.runId === 'string' &&
+    typeof value.nodeId === 'string' &&
+    typeof value.invocationSequence === 'number' &&
+    typeof value.attemptNumber === 'number' &&
+    typeof value.state === 'string' &&
+    typeof value.harnessId === 'string' &&
+    typeof value.role === 'string' &&
+    typeof value.prompt === 'string' &&
+    typeof value.transcript === 'string' &&
+    typeof value.complete === 'boolean'
   );
 }
 
@@ -113,14 +133,14 @@ function isTicketProviderConfiguration(value: unknown): value is TicketProviderC
 }
 
 async function json(response: Response): Promise<unknown> {
-  if (!response.ok) throw new Error(`Kairo API request failed (${response.status})`);
+  if (!response.ok) throw new Error(`Kouro API request failed (${response.status})`);
   return response.json();
 }
 
 export async function fetchRuns(): Promise<readonly RunSummary[]> {
   const value = await json(await fetch('/api/runs'));
   if (!Array.isArray(value) || !value.every(isRunSummary)) {
-    throw new Error('Kairo API returned malformed run summaries');
+    throw new Error('Kouro API returned malformed run summaries');
   }
   return value;
 }
@@ -128,7 +148,7 @@ export async function fetchRuns(): Promise<readonly RunSummary[]> {
 export async function fetchTicketProjects(): Promise<readonly TicketProjectView[]> {
   const value = await json(await fetch('/api/ticket-projects'));
   if (!Array.isArray(value) || !value.every(isTicketProject)) {
-    throw new Error('Kairo API returned malformed ticket projects');
+    throw new Error('Kouro API returned malformed ticket projects');
   }
   return value;
 }
@@ -136,14 +156,14 @@ export async function fetchTicketProjects(): Promise<readonly TicketProjectView[
 export async function fetchTickets(projectId: string): Promise<readonly TicketListItem[]> {
   const value = await json(await fetch(`/api/tickets?projectId=${encodeURIComponent(projectId)}`));
   if (!Array.isArray(value) || !value.every(isTicketListItem)) {
-    throw new Error('Kairo API returned malformed tickets');
+    throw new Error('Kouro API returned malformed tickets');
   }
   return value;
 }
 
 export async function fetchTicket(ticketId: string): Promise<TicketDetails> {
   const value = await json(await fetch(`/api/tickets/${encodeURIComponent(ticketId)}`));
-  if (!isTicketDetails(value)) throw new Error('Kairo API returned malformed ticket details');
+  if (!isTicketDetails(value)) throw new Error('Kouro API returned malformed ticket details');
   return value;
 }
 
@@ -152,21 +172,31 @@ export async function fetchTicketProviderConfigurations(): Promise<
 > {
   const value = await json(await fetch('/api/ticket-providers'));
   if (!Array.isArray(value) || !value.every(isTicketProviderConfiguration)) {
-    throw new Error('Kairo API returned malformed ticket provider configurations');
+    throw new Error('Kouro API returned malformed ticket provider configurations');
   }
   return value;
 }
 
 export async function fetchRun(runId: string): Promise<RunDetails> {
   const value = await json(await fetch(`/api/runs/${encodeURIComponent(runId)}`));
-  if (!isRunDetails(value)) throw new Error('Kairo API returned malformed run details');
+  if (!isRunDetails(value)) throw new Error('Kouro API returned malformed run details');
   return value;
+}
+
+export async function deleteRun(runId: string): Promise<DeleteRunResponse> {
+  const value = await json(
+    await fetch(`/api/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' }),
+  );
+  if (!isRecord(value) || value.runId !== runId || value.deleted !== true) {
+    throw new Error('Kouro API returned a malformed deletion response');
+  }
+  return { runId, deleted: true };
 }
 
 export async function fetchApprovals(runId: string): Promise<readonly ApprovalView[]> {
   const value = await json(await fetch(`/api/runs/${encodeURIComponent(runId)}/approvals`));
   if (!Array.isArray(value) || !value.every(isApprovalView)) {
-    throw new Error('Kairo API returned malformed approvals');
+    throw new Error('Kouro API returned malformed approvals');
   }
   return value;
 }
@@ -174,7 +204,7 @@ export async function fetchApprovals(runId: string): Promise<readonly ApprovalVi
 export async function fetchArtifacts(runId: string): Promise<readonly ArtifactView[]> {
   const value = await json(await fetch(`/api/runs/${encodeURIComponent(runId)}/artifacts`));
   if (!Array.isArray(value) || !value.every(isArtifactView)) {
-    throw new Error('Kairo API returned malformed artifacts');
+    throw new Error('Kouro API returned malformed artifacts');
   }
   return value;
 }
@@ -185,7 +215,22 @@ export async function fetchArtifact(runId: string, artifactId: string): Promise<
       `/api/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}`,
     ),
   );
-  if (!isArtifactView(value)) throw new Error('Kairo API returned a malformed artifact');
+  if (!isArtifactView(value)) throw new Error('Kouro API returned a malformed artifact');
+  return value;
+}
+
+export async function fetchInvocationActivity(
+  runId: string,
+  invocationSequence: number,
+): Promise<InvocationActivityView | undefined> {
+  const response = await fetch(
+    `/api/runs/${encodeURIComponent(runId)}/invocations/${invocationSequence}/activity`,
+  );
+  if (response.status === 404) return undefined;
+  const value = await json(response);
+  if (!isInvocationActivityView(value)) {
+    throw new Error('Kouro API returned malformed invocation activity');
+  }
   return value;
 }
 
@@ -202,7 +247,7 @@ export async function decideApproval(
     }),
   );
   if (!isApprovalDecisionResponse(value)) {
-    throw new Error('Kairo API returned a malformed approval response');
+    throw new Error('Kouro API returned a malformed approval response');
   }
   return value;
 }

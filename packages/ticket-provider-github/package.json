@@ -1,5 +1,5 @@
 {
-  "name": "@kairo/ticket-provider-github",
+  "name": "@kouro/ticket-provider-github",
   "version": "0.1.0",
   "private": true,
   "license": "Apache-2.0",
@@ -9,7 +9,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@kairo/tickets": "0.1.0",
+    "@kouro/tickets": "0.1.0",
     "@usersatoshi/results": "^1.0.0"
   }
 }

@@ -1,7 +1,7 @@
-import type { NodeDefinition, RunState } from '@kairo/domain';
+import type { NodeDefinition, RunState } from '@kouro/domain';
 import type { ObservableRunStore } from './ports.ts';
-import type { TicketError, TicketRunQuery, TicketRunView } from '@kairo/tickets';
-import { TicketErrorKind, toTicketError } from '@kairo/tickets';
+import type { TicketError, TicketRunQuery, TicketRunView } from '@kouro/tickets';
+import { TicketErrorKind, toTicketError } from '@kouro/tickets';
 import { ok, type Result } from '@usersatoshi/results';
 
 function runningColumn(
@@ -25,7 +25,7 @@ function runningColumn(
   return 'implementing';
 }
 
-export class KairoTicketRunQuery implements TicketRunQuery {
+export class KouroTicketRunQuery implements TicketRunQuery {
   constructor(private readonly runs: ObservableRunStore) {}
 
   get(runId: string): Result<TicketRunView | undefined, TicketError> {
@@ -34,7 +34,7 @@ export class KairoTicketRunQuery implements TicketRunQuery {
       if ('runId' in loaded.error && loaded.error.runId === runId) return ok(undefined);
       return toTicketError(TicketErrorKind.DatabaseFailure, {
         operation: 'getTicketRun',
-        message: 'Kairo run state could not be read',
+        message: 'Kouro run state could not be read',
       });
     }
     const aggregate = loaded.unwrap();

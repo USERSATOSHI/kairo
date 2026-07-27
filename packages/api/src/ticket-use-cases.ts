@@ -4,14 +4,14 @@ import type {
   TicketProviderConfigurationView,
   TicketProjectView,
   TicketRunHistoryView,
-} from '@kairo/api-contracts';
+} from '@kouro/api-contracts';
 import {
   deriveTicketBoardColumn,
   TicketErrorKind,
   type TicketError,
   type TicketRunLink,
   type TicketRunView,
-} from '@kairo/tickets';
+} from '@kouro/tickets';
 import { ok, type Result } from '@usersatoshi/results';
 
 import { ApiErrorKind, apiErr, type ApiError } from './errors.ts';

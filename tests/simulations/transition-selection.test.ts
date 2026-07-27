@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import type { NodeInvocation, RunState, SourceTransition } from '@kairo/domain';
-import { reduceRun, RuntimeErrorKind, selectTransition } from '@kairo/runtime';
+import type { NodeInvocation, RunState, SourceTransition } from '@kouro/domain';
+import { reduceRun, RuntimeErrorKind, selectTransition } from '@kouro/runtime';
 import { compileOrThrow, workflowSource } from './fixtures.ts';
 
 const invocation: NodeInvocation = {

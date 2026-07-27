@@ -1,8 +1,8 @@
-# Kairo — Product and Implementation Plan
+# Kouro — Product and Implementation Plan
 
 ## 1. Product definition
 
-Kairo is a programmable, deterministic execution engine for Agent Development
+Kouro is a programmable, deterministic execution engine for Agent Development
 Workflows (ADWs).
 
 It orchestrates software-development workflows that combine:
@@ -16,11 +16,11 @@ It orchestrates software-development workflows that combine:
 - bounded repair loops;
 - pause, resume, retry, and crash recovery.
 
-Kairo is separate from the surrounding products:
+Kouro is separate from the surrounding products:
 
 | Product | Responsibility |
 | --- | --- |
-| Kairo | Deterministic coding-workflow orchestration |
+| Kouro | Deterministic coding-workflow orchestration |
 | Yumi | Personal and home assistance |
 | Kyuki | Optional project-memory provider |
 | Vedh | Optional repository-intelligence provider |
@@ -30,9 +30,9 @@ initial release.
 
 ## 2. Determinism contract
 
-Kairo's core guarantee is:
+Kouro's core guarantee is:
 
-> Given the same compiled workflow and ordered durable event history, Kairo
+> Given the same compiled workflow and ordered durable event history, Kouro
 > reconstructs the same state and emits the same next orchestration decisions.
 
 This is divided into four independently testable guarantees:
@@ -42,7 +42,7 @@ This is divided into four independently testable guarantees:
 3. The same projected state produces the same ordered orchestration decisions.
 4. An interrupted effect produces the same declared recovery decision.
 
-Kairo does not guarantee deterministic shell commands, Git effects, filesystem
+Kouro does not guarantee deterministic shell commands, Git effects, filesystem
 behavior, provider behavior, or model output. Those outcomes are recorded as
 events. The runtime deterministically decides what to do with the recorded
 outcomes.
@@ -66,7 +66,7 @@ approvals, or select undeclared workflows.
 
 ## 3. Product boundaries
 
-Kairo is not:
+Kouro is not:
 
 - a general chat-agent framework;
 - a personal assistant;
@@ -181,7 +181,7 @@ A run pins:
 
 ## 7. Side-effect recovery
 
-Kairo does not claim universal exactly-once execution. Each side-effecting node
+Kouro does not claim universal exactly-once execution. Each side-effecting node
 operation declares a recovery policy:
 
 ```ts
@@ -320,7 +320,7 @@ Each bounded domain owns:
 - its domain-specific Result helper.
 
 Thrown infrastructure errors are mapped at the infrastructure boundary.
-Persisted and API-visible errors must be serializable. Kairo does not use one
+Persisted and API-visible errors must be serializable. Kouro does not use one
 global error union and does not depend on the patterns repository.
 
 ## 12. Revised implementation order
@@ -497,7 +497,7 @@ Status: Complete on 2026-07-26. See
 
 Deliver:
 
-- a `packages/cli/` package with a distributable `kairo` binary, stable help,
+- a `packages/cli/` package with a distributable `kouro` binary, stable help,
   version output, typed errors, and predictable local data/configuration paths;
 - commands to run a local ADW, list and inspect runs, approve or reject gates,
   pause and resume scheduling, interrupt active attempts, request policy-eligible
@@ -524,21 +524,21 @@ Deliver:
 CLI surface:
 
 ```text
-kairo run <adw> --repo <path> [--harness <id>]
-kairo runs
-kairo status <run-id>
-kairo approve <run-id> <invocation> --reason <text>
-kairo reject <run-id> <invocation> --reason <text>
-kairo pause|resume|cancel <run-id>
-kairo interrupt|retry|skip <run-id> <invocation> --reason <text>
-kairo serve
+kouro run <adw> --repo <path> [--harness <id>]
+kouro runs
+kouro status <run-id>
+kouro approve <run-id> <invocation> --reason <text>
+kouro reject <run-id> <invocation> --reason <text>
+kouro pause|resume|cancel <run-id>
+kouro interrupt|retry|skip <run-id> <invocation> --reason <text>
+kouro serve
 ```
 
 Exit criteria:
 
-- a fresh checkout can install dependencies and invoke `kairo --help` without
+- a fresh checkout can install dependencies and invoke `kouro --help` without
   writing a custom host script;
-- `kairo run feature-development --repo <fixture>` compiles the exact workflow,
+- `kouro run feature-development --repo <fixture>` compiles the exact workflow,
   creates an isolated worktree, stops at durable approvals, and produces a
   named merge-ready branch after approval without merging or deploying it;
 - terminating the process during an active run and restarting it recovers the
@@ -548,7 +548,7 @@ Exit criteria:
 - skip succeeds only when the compiled workflow allows it and records the actor,
   reason, invocation, selected result, workflow checksum, artifact checksums,
   and repository HEAD;
-- `kairo serve` hosts the API and production web assets in one process, and an
+- `kouro serve` hosts the API and production web assets in one process, and an
   approval completed through either CLI or web is immediately visible through
   the other surface;
 - capability policy and all decision-affecting CLI configuration are
@@ -562,7 +562,7 @@ The ticket system is a planning bounded domain beside the existing runtime:
 
 ```text
 Tickets describe what should be done.
-Kairo runs record how the work was executed.
+Kouro runs record how the work was executed.
 ```
 
 The implementation is split into six coherent milestones:
@@ -604,7 +604,7 @@ After the core is stable:
 
 ## 16. Foundational ADRs
 
-Before full implementation, Kairo must accept and test:
+Before full implementation, Kouro must accept and test:
 
 1. Event-history-based determinism
 2. Node definition, invocation, and attempt identity

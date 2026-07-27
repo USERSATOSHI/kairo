@@ -9,7 +9,7 @@ import type {
   RunEvent,
   RunState,
   SkipBinding,
-} from '@kairo/domain';
+} from '@kouro/domain';
 import { RuntimeErrorKind, toRuntimeError, type RuntimeError } from './errors.ts';
 import { agentHarnessesForNode } from './harness-routing.ts';
 import { selectTransition } from './transitions.ts';

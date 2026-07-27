@@ -1,5 +1,5 @@
-import type { CompiledWorkflowArtifact, RunEvent, WorkflowSourceBundle } from '@kairo/domain';
-import { compileWorkflow } from '@kairo/adw';
+import type { CompiledWorkflowArtifact, RunEvent, WorkflowSourceBundle } from '@kouro/domain';
+import { compileWorkflow } from '@kouro/adw';
 
 export function workflowSource(
   overrides: Partial<WorkflowSourceBundle> = {},

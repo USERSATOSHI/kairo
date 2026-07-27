@@ -1,7 +1,7 @@
-import type { TicketProviderConfigurationView } from '@kairo/api-contracts';
-import { ForgejoTicketProvider } from '@kairo/ticket-provider-forgejo';
-import { GitHubTicketProvider } from '@kairo/ticket-provider-github';
-import type { ForgejoMetadataStore, TicketProvider as RemoteTicketProvider } from '@kairo/tickets';
+import type { TicketProviderConfigurationView } from '@kouro/api-contracts';
+import { ForgejoTicketProvider } from '@kouro/ticket-provider-forgejo';
+import { GitHubTicketProvider } from '@kouro/ticket-provider-github';
+import type { ForgejoMetadataStore, TicketProvider as RemoteTicketProvider } from '@kouro/tickets';
 
 export interface TicketProviderComposition {
   readonly providers: ReadonlyMap<'github' | 'forgejo', RemoteTicketProvider>;
@@ -10,6 +10,13 @@ export interface TicketProviderComposition {
 
 function configured(values: readonly (string | undefined)[]): boolean {
   return values.every((value) => Boolean(value?.trim()));
+}
+
+function environmentValue(
+  environment: Readonly<Record<string, string | undefined>>,
+  name: string,
+): string | undefined {
+  return environment[name]?.trim() ?? environment[name.replace(/^KOURO_/, 'KAIRO_')]?.trim();
 }
 
 /**
@@ -21,11 +28,11 @@ export function composeTicketProviders(
   forgejoMetadata: ForgejoMetadataStore,
 ): TicketProviderComposition {
   const providers = new Map<'github' | 'forgejo', RemoteTicketProvider>();
-  const githubOwner = environment.KAIRO_GITHUB_OWNER?.trim();
-  const githubRepository = environment.KAIRO_GITHUB_REPOSITORY?.trim();
-  const githubProject = environment.KAIRO_GITHUB_PROJECT?.trim();
-  const githubToken = environment.KAIRO_GITHUB_TOKEN?.trim();
-  const githubApiUrl = environment.KAIRO_GITHUB_API_URL?.trim();
+  const githubOwner = environmentValue(environment, 'KOURO_GITHUB_OWNER');
+  const githubRepository = environmentValue(environment, 'KOURO_GITHUB_REPOSITORY');
+  const githubProject = environmentValue(environment, 'KOURO_GITHUB_PROJECT');
+  const githubToken = environmentValue(environment, 'KOURO_GITHUB_TOKEN');
+  const githubApiUrl = environmentValue(environment, 'KOURO_GITHUB_API_URL');
   const hasGitHub = configured([githubOwner, githubRepository, githubProject, githubToken]);
   if (hasGitHub && githubOwner && githubRepository && githubProject && githubToken) {
     providers.set(
@@ -40,11 +47,11 @@ export function composeTicketProviders(
     );
   }
 
-  const forgejoInstanceUrl = environment.KAIRO_FORGEJO_URL?.trim();
-  const forgejoOwner = environment.KAIRO_FORGEJO_OWNER?.trim();
-  const forgejoRepository = environment.KAIRO_FORGEJO_REPOSITORY?.trim();
-  const forgejoProject = environment.KAIRO_FORGEJO_PROJECT?.trim();
-  const forgejoToken = environment.KAIRO_FORGEJO_TOKEN?.trim();
+  const forgejoInstanceUrl = environmentValue(environment, 'KOURO_FORGEJO_URL');
+  const forgejoOwner = environmentValue(environment, 'KOURO_FORGEJO_OWNER');
+  const forgejoRepository = environmentValue(environment, 'KOURO_FORGEJO_REPOSITORY');
+  const forgejoProject = environmentValue(environment, 'KOURO_FORGEJO_PROJECT');
+  const forgejoToken = environmentValue(environment, 'KOURO_FORGEJO_TOKEN');
   const hasForgejo = configured([
     forgejoInstanceUrl,
     forgejoOwner,
@@ -92,8 +99,8 @@ export function composeTicketProviders(
         ...(githubOwner ? { owner: githubOwner } : {}),
         ...(githubRepository ? { repository: githubRepository } : {}),
         message: hasGitHub
-          ? 'Configured from the KAIRO_GITHUB_* environment variables.'
-          : 'Set KAIRO_GITHUB_OWNER, REPOSITORY, PROJECT, and TOKEN.',
+          ? 'Configured from the KOURO_GITHUB_* environment variables.'
+          : 'Set KOURO_GITHUB_OWNER, REPOSITORY, PROJECT, and TOKEN.',
       },
       {
         id: 'forgejo',
@@ -104,8 +111,8 @@ export function composeTicketProviders(
         ...(forgejoOwner ? { owner: forgejoOwner } : {}),
         ...(forgejoRepository ? { repository: forgejoRepository } : {}),
         message: hasForgejo
-          ? 'Configured from the KAIRO_FORGEJO_* environment variables.'
-          : 'Set KAIRO_FORGEJO_URL, OWNER, REPOSITORY, PROJECT, and TOKEN.',
+          ? 'Configured from the KOURO_FORGEJO_* environment variables.'
+          : 'Set KOURO_FORGEJO_URL, OWNER, REPOSITORY, PROJECT, and TOKEN.',
       },
     ],
   };

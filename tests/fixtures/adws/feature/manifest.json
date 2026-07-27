@@ -3,7 +3,7 @@
   "name": "Feature Simulation",
   "version": "1.0.0",
   "description": "Compiles resolved prompts, schemas, and subworkflows.",
-  "kairo": ">=0.1.0",
-  "entrypoint": "./kairo.adw.ts",
+  "kouro": ">=0.1.0",
+  "entrypoint": "./kouro.adw.ts",
   "permissions": ["repository.read", "terminal.execute"]
 }

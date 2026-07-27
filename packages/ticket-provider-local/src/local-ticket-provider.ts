@@ -11,7 +11,7 @@ import {
   type TicketRelationship,
   type TicketStatus,
   type UpdateTicketInput,
-} from '@kairo/tickets';
+} from '@kouro/tickets';
 import type { Result } from '@usersatoshi/results';
 
 const systemClock: TicketClock = {

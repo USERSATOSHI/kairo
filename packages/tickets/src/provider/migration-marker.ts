@@ -4,10 +4,10 @@ export interface NormalizedProviderDescription {
 }
 
 /**
- * Removes Kairo's durable migration marker from provider-visible issue text.
+ * Removes Kouro's durable migration marker from provider-visible issue text.
  */
 export function normalizeProviderDescription(body: string): NormalizedProviderDescription {
-  const match = /\n\n<!-- (kairo-ticket:[^\n]+) -->$/.exec(body);
+  const match = /\n\n<!-- ((?:kouro|kairo)-ticket:[^\n]+) -->$/.exec(body);
   return match?.[1]
     ? {
         description: body.slice(0, match.index),

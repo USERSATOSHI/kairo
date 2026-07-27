@@ -1,11 +1,11 @@
-import { canonicalJson } from '@kairo/adw';
+import { canonicalJson } from '@kouro/adw';
 import type {
   CompiledWorkflowArtifact,
   JsonValue,
   OrchestrationIntent,
   RunEvent,
   RunState,
-} from '@kairo/domain';
+} from '@kouro/domain';
 import { ok, type Result } from '@usersatoshi/results';
 import type { RuntimeError } from './errors.ts';
 import { reduceRun } from './reducer.ts';

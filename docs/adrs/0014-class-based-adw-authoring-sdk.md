@@ -19,7 +19,7 @@ workflow and runtime state do not share those characteristics.
 
 ## Decision
 
-`@kairo/adw` exposes a `WorkflowBuilder` that owns mutable authoring state.
+`@kouro/adw` exposes a `WorkflowBuilder` that owns mutable authoring state.
 Node and counter declarations return handles associated with that builder.
 Transitions are expressed through fluent handle operations, and `build()`
 returns the existing immutable, data-only `WorkflowAuthoringDefinition`.

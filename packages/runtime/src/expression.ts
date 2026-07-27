@@ -1,6 +1,6 @@
 import { ok, type Result } from '@usersatoshi/results';
 
-import type { Expression, JsonPrimitive, JsonValue, RunState } from '@kairo/domain';
+import type { Expression, JsonPrimitive, JsonValue, RunState } from '@kouro/domain';
 import { RuntimeErrorKind, toRuntimeError, type RuntimeError } from './errors.ts';
 
 function isJsonObject(value: JsonValue): value is Readonly<Record<string, JsonValue>> {

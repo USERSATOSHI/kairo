@@ -5233,9 +5233,9 @@ var require_dist = __commonJS((exports) => {
 });
 
 // packages/cli/src/main.ts
-import { randomUUID as randomUUID6 } from "crypto";
-import { readFile as readFile8 } from "fs/promises";
-import { resolve as resolve9 } from "path";
+import { randomUUID as randomUUID7 } from "crypto";
+import { readFile as readFile9 } from "fs/promises";
+import { resolve as resolve10 } from "path";
 
 // node_modules/.bun/memoirist@0.4.0/node_modules/memoirist/dist/bun/index.js
 var Y = (v, b) => {
@@ -19963,9 +19963,11 @@ function serializeJson(value) {
 class AgentExecutor {
   registry;
   artifactWriter;
-  constructor(registry, artifactWriter) {
+  activity;
+  constructor(registry, artifactWriter, activity) {
     this.registry = registry;
     this.artifactWriter = artifactWriter;
+    this.activity = activity;
   }
   async execute(input) {
     const resolved = this.registry.get(input.harnessId);
@@ -19977,6 +19979,15 @@ class AgentExecutor {
       });
     }
     const harness = resolved.unwrap();
+    const activitySession = {
+      runId: input.runId,
+      invocationSequence: input.invocationSequence,
+      attemptNumber: input.attemptNumber,
+      harnessId: input.harnessId,
+      role: input.role,
+      prompt: input.prompt
+    };
+    await this.observeActivity(() => this.activity?.start(activitySession));
     const request = {
       runId: input.runId,
       invocationSequence: input.invocationSequence,
@@ -19986,9 +19997,18 @@ class AgentExecutor {
       prompt: input.prompt,
       capabilities: input.capabilities,
       ...input.model === undefined ? {} : { model: input.model },
-      ...input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema }
+      ...input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema },
+      ...this.activity ? {
+        onTranscriptChunk: (chunk) => this.observeActivity(() => this.activity?.append(activitySession, chunk))
+      } : {}
     };
-    const execution = input.resumeToken ? await harness.resume(request, input.resumeToken) : await harness.execute(request);
+    const execution = await (async () => {
+      try {
+        return input.resumeToken ? await harness.resume(request, input.resumeToken) : await harness.execute(request);
+      } finally {
+        await this.observeActivity(() => this.activity?.finish(activitySession));
+      }
+    })();
     if (execution.isErr()) {
       return err({
         kind: 0 /* Harness */,
@@ -20037,6 +20057,11 @@ class AgentExecutor {
       ...completed.resumeToken ? { resumeToken: completed.resumeToken } : {},
       artifacts
     });
+  }
+  async observeActivity(operation) {
+    try {
+      await operation();
+    } catch {}
   }
 }
 // packages/executors/src/errors.ts
@@ -21336,13 +21361,20 @@ function validateManifest(value, file2) {
       reason: "manifest must be an object"
     });
   }
-  for (const field of ["id", "name", "version", "kairo", "entrypoint"]) {
+  for (const field of ["id", "name", "version", "entrypoint"]) {
     if (typeof value[field] !== "string" || !value[field]) {
       return toCompilerError(14 /* ManifestInvalid */, {
         file: file2,
         reason: `${field} must be a non-empty string`
       });
     }
+  }
+  const kouro = value.kouro ?? value.kairo;
+  if (typeof kouro !== "string" || !kouro) {
+    return toCompilerError(14 /* ManifestInvalid */, {
+      file: file2,
+      reason: "kouro must be a non-empty string"
+    });
   }
   if (!Array.isArray(value.permissions) || !value.permissions.every((permission) => typeof permission === "string")) {
     return toCompilerError(14 /* ManifestInvalid */, {
@@ -21356,7 +21388,15 @@ function validateManifest(value, file2) {
       reason: "description must be a string"
     });
   }
-  return ok(value);
+  return ok({
+    id: String(value.id),
+    name: String(value.name),
+    version: String(value.version),
+    ...typeof value.description === "string" ? { description: value.description } : {},
+    kouro,
+    entrypoint: String(value.entrypoint),
+    permissions: value.permissions
+  });
 }
 function validateDefinition(value, file2) {
   if (!isRecord3(value)) {
@@ -21428,7 +21468,7 @@ async function readResource(packageDirectory, resource) {
 }
 async function importDefault(file2, content, errorKind) {
   const url = pathToFileURL(file2);
-  url.searchParams.set("kairo", sha256(content).slice(7));
+  url.searchParams.set("kouro", sha256(content).slice(7));
   return fromAsync(async () => {
     const module = await import(url.href);
     return module.default;
@@ -21569,7 +21609,7 @@ async function compilePackage(packageDirectory, stack) {
       metadata: {
         name: manifest.name,
         description: manifest.description ?? "",
-        kairo: manifest.kairo,
+        kouro: manifest.kouro,
         entrypoint: manifest.entrypoint
       }
     },
@@ -22441,8 +22481,12 @@ function pendingApprovalCount(invocations) {
   return invocations.filter(({ state, approval }) => state === "waiting_for_approval" && approval !== undefined).length;
 }
 function summarizeRun(aggregate) {
+  const repositoryId = typeof aggregate.state.configuration.repositoryId === "string" ? aggregate.state.configuration.repositoryId : "";
+  const repositoryPath = typeof aggregate.state.configuration.repositoryPath === "string" ? aggregate.state.configuration.repositoryPath : "";
   return {
     id: aggregate.runId,
+    repositoryId,
+    repositoryPath,
     workflowId: aggregate.artifact.bundle.manifest.id,
     workflowVersion: aggregate.artifact.bundle.manifest.version,
     workflowChecksum: aggregate.artifact.checksum,
@@ -22512,6 +22556,7 @@ function getRun(services, runId) {
   const aggregate = loaded.unwrap();
   return ok({
     ...summarizeRun(aggregate),
+    entryNodeId: aggregate.artifact.bundle.entryNodeId,
     repositoryHead: aggregate.state.repositoryHead,
     state: aggregate.state,
     nodes: workflowNodes(aggregate),
@@ -22561,6 +22606,37 @@ async function getArtifact(services, runId, artifactId) {
   const content = await services.artifacts.read(runId, match.artifact, match.invocationSequence, match.attemptNumber);
   return content.isErr() ? apiErr(4 /* ArtifactRead */, "artifact_read_failed", content.error.message) : ok({ ...view, content: content.unwrap().content });
 }
+async function getInvocationActivity(services, runId, invocationSequence) {
+  if (!Number.isSafeInteger(invocationSequence) || invocationSequence < 1) {
+    return apiErr(1 /* InvalidInput */, "invalid_invocation_sequence", "invocationSequence must be a positive integer");
+  }
+  const loaded = fromStore2(services.runs.loadRun(runId));
+  if (loaded.isErr())
+    return loaded;
+  const invocation = loaded.unwrap().state.invocations.find(({ sequence }) => sequence === invocationSequence);
+  const attempt = invocation?.attempts.at(-1);
+  if (!invocation || !attempt) {
+    return apiErr(0 /* NotFound */, "invocation_activity_not_found", `Invocation ${invocationSequence} has no attempt activity`);
+  }
+  if (!services.activities) {
+    return apiErr(0 /* NotFound */, "invocation_activity_unavailable", "Invocation activity is not configured");
+  }
+  const activity = await services.activities.read(runId, invocationSequence, attempt.number);
+  if (activity.isErr()) {
+    return apiErr(4 /* ArtifactRead */, "invocation_activity_read_failed", "Invocation activity could not be read");
+  }
+  if (!activity.value) {
+    return apiErr(0 /* NotFound */, "invocation_activity_not_found", `Invocation ${invocationSequence} has no observed activity`);
+  }
+  return ok({
+    runId,
+    nodeId: invocation.nodeId,
+    invocationSequence,
+    attemptNumber: attempt.number,
+    state: invocation.state,
+    ...activity.value
+  });
+}
 function listApprovals(services, runId) {
   const loaded = fromStore2(services.runs.loadRun(runId));
   if (loaded.isErr())
@@ -22606,10 +22682,23 @@ async function createRun(services, request) {
   const created = await services.runCreator.create(request);
   return created.isErr() ? apiErr(2 /* Conflict */, "run_creation_failed", created.error.message) : created;
 }
+async function deleteRun(services, runId) {
+  const loaded = fromStore2(services.runs.loadRun(runId));
+  if (loaded.isErr())
+    return loaded;
+  if (!services.runDeleter) {
+    return apiErr(1 /* InvalidInput */, "run_deletion_unavailable", "Run deletion is disabled");
+  }
+  const deleted = await services.runDeleter.delete(runId);
+  return deleted.isErr() ? apiErr(2 /* Conflict */, "run_deletion_failed", deleted.error.message) : deleted;
+}
 function controlRun(services, runId, action, request) {
   if (!request.actor.trim() || !request.idempotencyKey.trim()) {
     return apiErr(1 /* InvalidInput */, "invalid_lifecycle_request", "actor and idempotencyKey are required");
   }
+  const loaded = fromStore2(services.runs.loadRun(runId));
+  if (loaded.isErr())
+    return loaded;
   const result = action === "pause" ? services.coordinator.pauseRun(runId, request.actor, request.idempotencyKey) : action === "resume" ? services.coordinator.resumeRun(runId, request.actor, request.idempotencyKey) : services.coordinator.cancelRun(runId, request.actor, request.reason ?? "cancelled by operator", request.idempotencyKey);
   return result.isErr() ? apiErr(2 /* Conflict */, "lifecycle_action_failed", `Run could not be ${action}d`) : ok({ runId, status: result.unwrap().state.status });
 }
@@ -22617,6 +22706,9 @@ function controlInvocation(services, runId, invocationSequence, action, request)
   if (!request.actor.trim() || !request.reason?.trim() || !request.idempotencyKey.trim()) {
     return apiErr(1 /* InvalidInput */, "invalid_lifecycle_request", "actor, reason, and idempotencyKey are required");
   }
+  const loaded = fromStore2(services.runs.loadRun(runId));
+  if (loaded.isErr())
+    return loaded;
   const result = action === "interrupt" ? services.coordinator.interruptInvocation(runId, invocationSequence, request.actor, request.reason, request.idempotencyKey) : action === "retry" ? services.coordinator.retryInvocation(runId, invocationSequence, request.actor, request.reason, request.idempotencyKey) : services.coordinator.skipInvocation(runId, invocationSequence, request.actor, request.reason, request.idempotencyKey);
   return result.isErr() ? apiErr(2 /* Conflict */, "invocation_action_failed", `Invocation could not be ${action}ed`) : ok({ runId, status: result.unwrap().state.status });
 }
@@ -23112,7 +23204,7 @@ class TicketMigrationService {
       ticketId: ticket.id,
       targetProvider: provider.kind,
       projectId,
-      marker: `kairo-ticket:${ticket.id}`,
+      marker: `kouro-ticket:${ticket.id}`,
       stage: "prepared",
       snapshot: snapshotOf(ticket),
       createdAt: now,
@@ -23269,7 +23361,7 @@ class TicketMigrationService {
 }
 // packages/tickets/src/provider/migration-marker.ts
 function normalizeProviderDescription(body) {
-  const match = /\n\n<!-- (kairo-ticket:[^\n]+) -->$/.exec(body);
+  const match = /\n\n<!-- ((?:kouro|kairo)-ticket:[^\n]+) -->$/.exec(body);
   return match?.[1] ? {
     description: body.slice(0, match.index),
     marker: match[1]
@@ -24217,12 +24309,12 @@ function bindingWithRevision(binding, revision) {
   return { ...binding, lastSyncedRevision: revision };
 }
 var runEventLabels = {
-  run_started: "kairo:active",
-  approval_needed: "kairo:approval-needed",
-  run_blocked: "kairo:blocked",
-  run_failed: "kairo:blocked",
-  run_succeeded: "kairo:completed",
-  run_cancelled: "kairo:cancelled"
+  run_started: "kouro:active",
+  approval_needed: "kouro:approval-needed",
+  run_blocked: "kouro:blocked",
+  run_failed: "kouro:blocked",
+  run_succeeded: "kouro:completed",
+  run_cancelled: "kouro:cancelled"
 };
 
 class TicketSyncService {
@@ -24379,7 +24471,7 @@ class TicketSyncService {
     if (ticket.isErr())
       return ticket;
     const value = ticket.unwrap();
-    const message = `${event.type.replaceAll("_", " ")} for Kairo run ${event.runId}${event.artifactUrl ? `
+    const message = `${event.type.replaceAll("_", " ")} for Kouro run ${event.runId}${event.artifactUrl ? `
 ${event.artifactUrl}` : ""}`;
     const key = `ticket:${ticketId}:provider-comment:${event.sequence}`;
     const recorded = ticketFailure2(this.sync.recordSyncOperation({
@@ -24394,11 +24486,11 @@ ${event.artifactUrl}` : ""}`;
     if (recorded.isErr() || !recorded.unwrap()) {
       return recorded.isErr() ? recorded : ok(undefined);
     }
-    const commented = providerFailure2(await provider.addComment(value.binding, { author: "kairo", body: message }));
+    const commented = providerFailure2(await provider.addComment(value.binding, { author: "kouro", body: message }));
     if (commented.isErr())
       return commented;
     const labels = [
-      ...value.labels.filter((label) => !label.startsWith("kairo:")),
+      ...value.labels.filter((label) => !label.startsWith("kouro:") && !label.startsWith("kairo:")),
       runEventLabels[event.type]
     ].toSorted();
     const labelled = providerFailure2(await provider.update(value.binding, {
@@ -24658,8 +24750,8 @@ data: ${JSON.stringify(data)}
 
 `).join("")}`;
 }
-function createKairoApp(services) {
-  return new Elysia({ name: "kairo-api" }).get("/health", () => ({ status: "ok" })).get("/runs", ({ set }) => {
+function createKouroApp(services) {
+  return new Elysia({ name: "kouro-api" }).get("/health", () => ({ status: "ok" })).get("/runs", ({ set }) => {
     const result = listRuns(services);
     return result.isErr() ? failure(result.error, set) : result.value;
   }).post("/runs", async ({ body, set }) => {
@@ -24678,6 +24770,9 @@ function createKairoApp(services) {
   }).get("/runs/:runId", ({ params, set }) => {
     const result = getRun(services, params.runId);
     return result.isErr() ? failure(result.error, set) : result.value;
+  }).delete("/runs/:runId", async ({ params, set }) => {
+    const result = await deleteRun(services, params.runId);
+    return result.isErr() ? failure(result.error, set) : result.value;
   }).get("/runs/:runId/events", ({ params, query, request, set }) => {
     const result = listEvents(services, params.runId, afterSequence(request, query.after));
     if (result.isErr())
@@ -24693,6 +24788,9 @@ function createKairoApp(services) {
     return result.isErr() ? failure(result.error, set) : result.value;
   }).get("/runs/:runId/artifacts/:artifactId", async ({ params, set }) => {
     const result = await getArtifact(services, params.runId, params.artifactId);
+    return result.isErr() ? failure(result.error, set) : result.value;
+  }).get("/runs/:runId/invocations/:invocationSequence/activity", async ({ params, set }) => {
+    const result = await getInvocationActivity(services, params.runId, Number(params.invocationSequence));
     return result.isErr() ? failure(result.error, set) : result.value;
   }).get("/runs/:runId/approvals", ({ params, set }) => {
     const result = listApprovals(services, params.runId);
@@ -24934,6 +25032,7 @@ class SqliteEventStore {
     return safeCall(() => {
       this.database.exec("PRAGMA foreign_keys = ON");
       this.database.exec("PRAGMA journal_mode = WAL");
+      this.database.exec("PRAGMA busy_timeout = 5000");
       this.database.exec(`
           CREATE TABLE IF NOT EXISTS runs (
             run_id TEXT PRIMARY KEY,
@@ -25024,6 +25123,11 @@ class SqliteEventStore {
             PRIMARY KEY (run_id, artifact_id),
             FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
           );
+          CREATE TABLE IF NOT EXISTS worker_leases (
+            lease_name TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            expires_at_ms INTEGER NOT NULL
+          );
         `);
       const attemptColumns = new Set(this.database.query('SELECT name FROM pragma_table_info("attempt_projections")').all().map(({ name }) => name));
       if (!attemptColumns.has("harness_id")) {
@@ -25111,6 +25215,33 @@ class SqliteEventStore {
       aggregates.push(aggregate.unwrap());
     }
     return ok(aggregates);
+  }
+  tryAcquireWorkerLease(ownerId, nowMs, expiresAtMs) {
+    return this.executeTransaction("tryAcquireWorkerLease", () => {
+      this.database.query(`INSERT INTO worker_leases (lease_name, owner_id, expires_at_ms)
+           VALUES ('local-worker', ?, ?)
+           ON CONFLICT(lease_name) DO UPDATE SET
+             owner_id = excluded.owner_id,
+             expires_at_ms = excluded.expires_at_ms
+           WHERE worker_leases.owner_id = excluded.owner_id
+              OR worker_leases.expires_at_ms <= ?`).run(ownerId, expiresAtMs, nowMs);
+      const lease = this.database.query(`SELECT owner_id FROM worker_leases WHERE lease_name = 'local-worker'`).get();
+      return ok(lease?.owner_id === ownerId);
+    });
+  }
+  releaseWorkerLease(ownerId) {
+    return safeCall(() => {
+      this.database.query(`DELETE FROM worker_leases WHERE lease_name = 'local-worker' AND owner_id = ?`).run(ownerId);
+    }, (error) => databaseError4("releaseWorkerLease", error));
+  }
+  deleteRun(runId) {
+    return this.executeTransaction("deleteRun", () => {
+      if (!this.readRunRow(runId)) {
+        return err({ kind: 1 /* RunNotFound */, runId });
+      }
+      this.database.query("DELETE FROM runs WHERE run_id = ?").run(runId);
+      return ok(undefined);
+    });
   }
   appendEvent(input) {
     return this.executeTransaction("appendEvent", () => {
@@ -25342,7 +25473,7 @@ function runningColumn(state, definitions) {
   return "implementing";
 }
 
-class KairoTicketRunQuery {
+class KouroTicketRunQuery {
   runs;
   constructor(runs) {
     this.runs = runs;
@@ -25354,7 +25485,7 @@ class KairoTicketRunQuery {
         return ok(undefined);
       return toTicketError(7 /* DatabaseFailure */, {
         operation: "getTicketRun",
-        message: "Kairo run state could not be read"
+        message: "Kouro run state could not be read"
       });
     }
     const aggregate = loaded.unwrap();
@@ -25385,7 +25516,7 @@ function displayName(name) {
   return name.split("-").map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`).join(" ");
 }
 function render(content, name) {
-  return content.replaceAll("{{id}}", name).replaceAll("{{name}}", displayName(name));
+  return content.replaceAll("{{id}}", name).replaceAll("{{name}}", displayName(name)).replaceAll("from '../kouro-sdk.ts'", "from './kouro-sdk.ts'");
 }
 async function pathExists(path) {
   try {
@@ -25430,6 +25561,8 @@ async function createAdw(request) {
     const temporary = await mkdtemp(resolve3(dirname(target), `.${basename(target)}.tmp-`));
     try {
       await renderTemplate(source, temporary, request.name);
+      const sdkSource = resolve3(import.meta.dir, "..", "assets", "adw-templates", "kouro-sdk.ts");
+      await writeFile(resolve3(temporary, "kouro-sdk.ts"), await readFile3(sdkSource, "utf8"));
       await rename(temporary, target);
     } catch (cause) {
       await rm(temporary, { recursive: true, force: true });
@@ -25448,10 +25581,10 @@ function isAdwTemplate(value) {
 }
 
 // packages/cli/src/local-host.ts
-import { createHash as createHash6, randomUUID as randomUUID5 } from "crypto";
+import { createHash as createHash7, randomUUID as randomUUID6 } from "crypto";
 import { mkdirSync } from "fs";
-import { mkdir as mkdir4, readFile as readFile6, readdir as readdir2 } from "fs/promises";
-import { resolve as resolve7 } from "path";
+import { mkdir as mkdir5, readFile as readFile7, readdir as readdir2, stat as stat4 } from "fs/promises";
+import { resolve as resolve8 } from "path";
 
 // packages/harnesses/src/claude-code-harness.ts
 import { randomUUID } from "crypto";
@@ -25472,8 +25605,30 @@ function invalidResponse(message, transcript) {
 }
 
 // packages/harnesses/src/process-runner.ts
+async function readOutput(stream, onChunk) {
+  if (!onChunk)
+    return new Response(stream).text();
+  const reader = stream.getReader();
+  const decoder = new TextDecoder;
+  let output = "";
+  for (;; ) {
+    const next = await reader.read();
+    if (next.done)
+      break;
+    const chunk = decoder.decode(next.value, { stream: true });
+    output += chunk;
+    if (chunk)
+      await onChunk(chunk);
+  }
+  const finalChunk = decoder.decode();
+  output += finalChunk;
+  if (finalChunk)
+    await onChunk(finalChunk);
+  return output;
+}
+
 class BunProcessRunner {
-  async run(command, args, workingDirectory) {
+  async run(command, args, workingDirectory, onStdout) {
     return fromAsync(async () => {
       const subprocess = Bun.spawn([command, ...args], {
         cwd: workingDirectory,
@@ -25482,7 +25637,7 @@ class BunProcessRunner {
       });
       const [exitCode, stdout, stderr] = await Promise.all([
         subprocess.exited,
-        new Response(subprocess.stdout).text(),
+        readOutput(subprocess.stdout, onStdout),
         new Response(subprocess.stderr).text()
       ]);
       return { exitCode, stdout, stderr };
@@ -25566,7 +25721,7 @@ class ClaudeCodeHarness {
   }
   async run(request, token, baseArgs) {
     const schemaArgs = request.outputSchema ? ["--json-schema", JSON.stringify(request.outputSchema)] : [];
-    const result = await this.runner.run("claude", [...baseArgs, ...schemaArgs, promptFor(request)], request.workingDirectory);
+    const result = await this.runner.run("claude", [...baseArgs, ...schemaArgs, promptFor(request)], request.workingDirectory, request.onTranscriptChunk);
     if (result.isErr())
       return result;
     const output = result.unwrap();
@@ -25627,13 +25782,13 @@ function parseEvents(output) {
 }
 async function runWithSchema(runner, request, args) {
   if (!request.outputSchema) {
-    return runner.run("codex", args, request.workingDirectory);
+    return runner.run("codex", args, request.workingDirectory, request.onTranscriptChunk);
   }
-  const directory = await mkdtemp2(join(tmpdir(), "kairo-codex-schema-"));
+  const directory = await mkdtemp2(join(tmpdir(), "kouro-codex-schema-"));
   const schemaPath = join(directory, "output.schema.json");
   try {
     await writeFile2(schemaPath, JSON.stringify(request.outputSchema), "utf8");
-    return await runner.run("codex", [...args.slice(0, -1), "--output-schema", schemaPath, args.at(-1) ?? ""], request.workingDirectory);
+    return await runner.run("codex", [...args.slice(0, -1), "--output-schema", schemaPath, args.at(-1) ?? ""], request.workingDirectory, request.onTranscriptChunk);
   } finally {
     await rm2(directory, { recursive: true, force: true });
   }
@@ -25681,7 +25836,7 @@ class CodexHarness {
 }
 // packages/harnesses/src/local-artifact-writer.ts
 import { createHash as createHash3, randomUUID as randomUUID2 } from "crypto";
-import { link, mkdir as mkdir2, readFile as readFile4, unlink, writeFile as writeFile3 } from "fs/promises";
+import { link, mkdir as mkdir2, readFile as readFile4, rm as rm3, unlink, writeFile as writeFile3 } from "fs/promises";
 import { resolve as resolve4 } from "path";
 function sha2562(content) {
   return `sha256:${createHash3("sha256").update(content).digest("hex")}`;
@@ -25691,6 +25846,18 @@ class LocalArtifactWriter {
   root;
   constructor(root) {
     this.root = root;
+  }
+  async deleteRunArtifacts(runId) {
+    const runDirectory = createHash3("sha256").update(runId).digest("hex");
+    try {
+      await rm3(resolve4(this.root, runDirectory), { recursive: true, force: true });
+      return ok(undefined);
+    } catch (cause) {
+      return err({
+        kind: 0 /* WriteFailure */,
+        message: cause instanceof Error ? cause.message : "Artifact deletion failed"
+      });
+    }
   }
   async write(request) {
     const runDirectory = createHash3("sha256").update(request.runId).digest("hex");
@@ -25734,8 +25901,89 @@ class LocalArtifactWriter {
     }
   }
 }
-// packages/harnesses/src/opencode-harness.ts
+// packages/harnesses/src/local-invocation-activity-store.ts
+import { createHash as createHash4 } from "crypto";
+import { appendFile, mkdir as mkdir3, readFile as readFile5, writeFile as writeFile4 } from "fs/promises";
+import { dirname as dirname2, resolve as resolve5 } from "path";
+function isNotFound(cause) {
+  return cause instanceof Error && "code" in cause && cause.code === "ENOENT";
+}
 function isRecord8(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function parseHeader(value) {
+  try {
+    const parsed = JSON.parse(value);
+    return isRecord8(parsed) && parsed.type === "kouro.activity.started" && typeof parsed.harnessId === "string" && typeof parsed.role === "string" && typeof parsed.prompt === "string" ? {
+      type: "kouro.activity.started",
+      harnessId: parsed.harnessId,
+      role: parsed.role,
+      prompt: parsed.prompt
+    } : undefined;
+  } catch {
+    return;
+  }
+}
+
+class LocalInvocationActivityStore {
+  root;
+  constructor(root) {
+    this.root = root;
+  }
+  async start(session) {
+    const path = this.pathFor(session);
+    await mkdir3(dirname2(path), { recursive: true });
+    const header = {
+      type: "kouro.activity.started",
+      harnessId: session.harnessId,
+      role: session.role,
+      prompt: session.prompt
+    };
+    await writeFile4(path, `${JSON.stringify(header)}
+`, "utf8");
+  }
+  async append(session, chunk) {
+    await appendFile(this.pathFor(session), chunk, "utf8");
+  }
+  async finish(session) {
+    await appendFile(this.pathFor(session), `
+${JSON.stringify({ type: "kouro.activity.finished" })}
+`, "utf8");
+  }
+  async read(runId, invocationSequence, attemptNumber) {
+    try {
+      const content = await readFile5(this.pathFor({ runId, invocationSequence, attemptNumber }), "utf8");
+      const headerEnd = content.indexOf(`
+`);
+      const header = headerEnd < 0 ? undefined : parseHeader(content.slice(0, headerEnd));
+      if (!header) {
+        return err({ kind: 0, message: "Invocation activity metadata is malformed" });
+      }
+      const marker = `
+${JSON.stringify({ type: "kouro.activity.finished" })}
+`;
+      const complete = content.endsWith(marker);
+      return ok({
+        harnessId: header.harnessId,
+        role: header.role,
+        prompt: header.prompt,
+        transcript: content.slice(headerEnd + 1, complete ? -marker.length : undefined),
+        complete
+      });
+    } catch (cause) {
+      return isNotFound(cause) ? ok(undefined) : err({
+        kind: 0,
+        message: cause instanceof Error ? cause.message : "Invocation activity could not be read"
+      });
+    }
+  }
+  pathFor(session) {
+    const runDirectory = createHash4("sha256").update(session.runId).digest("hex");
+    return resolve5(this.root, runDirectory, String(session.invocationSequence), String(session.attemptNumber), "activity.ndjson");
+  }
+}
+// packages/harnesses/src/opencode-harness.ts
+function isRecord9(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function parseJsonOrText3(value) {
@@ -25763,7 +26011,7 @@ function parseEvents2(output) {
     if (parsed.isErr())
       return parsed;
     const event = parsed.unwrap();
-    if (!isRecord8(event)) {
+    if (!isRecord9(event)) {
       return err(invalidResponse("OpenCode returned a non-object JSONL event", output));
     }
     if (typeof event.sessionID === "string")
@@ -25771,7 +26019,7 @@ function parseEvents2(output) {
     if (event.type === "error") {
       return err(processFailure2("OpenCode reported an execution error"));
     }
-    if (event.type === "text" && isRecord8(event.part) && typeof event.part.text === "string") {
+    if (event.type === "text" && isRecord9(event.part) && typeof event.part.text === "string") {
       finalText = event.part.text;
     }
   }
@@ -25818,7 +26066,7 @@ class OpenCodeHarness {
     ]);
   }
   async run(request, args) {
-    const result = await this.runner.run("opencode", args, request.workingDirectory);
+    const result = await this.runner.run("opencode", args, request.workingDirectory, request.onTranscriptChunk);
     if (result.isErr())
       return result;
     const output = result.unwrap();
@@ -25830,7 +26078,7 @@ class OpenCodeHarness {
 }
 // packages/harnesses/src/pi-harness.ts
 import { randomUUID as randomUUID3 } from "crypto";
-function isRecord9(value) {
+function isRecord10(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function parseJsonOrText4(value) {
@@ -25859,7 +26107,7 @@ function toolsFor2(capabilities) {
 function textFromAssistantMessage(value) {
   if (value.role !== "assistant" || !Array.isArray(value.content))
     return;
-  const text = value.content.filter(isRecord9).filter((content) => content.type === "text" && typeof content.text === "string").map((content) => content.text).join("");
+  const text = value.content.filter(isRecord10).filter((content) => content.type === "text" && typeof content.text === "string").map((content) => content.text).join("");
   return text || undefined;
 }
 function parseEvents3(output) {
@@ -25871,12 +26119,12 @@ function parseEvents3(output) {
     if (parsed.isErr())
       return parsed;
     const event = parsed.unwrap();
-    if (!isRecord9(event)) {
+    if (!isRecord10(event)) {
       return err(invalidResponse("Pi returned a non-object JSONL event", output));
     }
     if (event.type === "session" && typeof event.id === "string")
       token = event.id;
-    if (event.type !== "message_end" || !isRecord9(event.message))
+    if (event.type !== "message_end" || !isRecord10(event.message))
       continue;
     if (event.message.role === "assistant" && (event.message.stopReason === "error" || event.message.stopReason === "aborted")) {
       return err(processFailure2(typeof event.message.errorMessage === "string" ? event.message.errorMessage : `Pi request ${event.message.stopReason}`));
@@ -25920,7 +26168,7 @@ class PiHarness {
       toolsFor2(request.capabilities),
       ...request.model ? ["--model", request.model] : [],
       promptFor4(request)
-    ], request.workingDirectory);
+    ], request.workingDirectory, request.onTranscriptChunk);
     if (result.isErr())
       return result;
     const output = result.unwrap();
@@ -26001,15 +26249,15 @@ class GitCommandRunner {
   }
 }
 // packages/sandbox-worktree/src/worktree-sandbox-provider.ts
-import { createHash as createHash4, randomUUID as randomUUID4 } from "crypto";
-import { mkdir as mkdir3, open, readFile as readFile5, realpath, rename as rename2, stat as stat3, unlink as unlink2, writeFile as writeFile4 } from "fs/promises";
-import { dirname as dirname2, resolve as resolve5 } from "path";
+import { createHash as createHash5, randomUUID as randomUUID4 } from "crypto";
+import { mkdir as mkdir4, open, readFile as readFile6, realpath, rename as rename2, stat as stat3, unlink as unlink2, writeFile as writeFile5 } from "fs/promises";
+import { dirname as dirname3, resolve as resolve6 } from "path";
 var identifierPattern = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
-function isRecord10(value) {
+function isRecord11(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function errorCode(error) {
-  return isRecord10(error) && typeof error.code === "string" ? error.code : undefined;
+  return isRecord11(error) && typeof error.code === "string" ? error.code : undefined;
 }
 function messageFor4(error) {
   return error instanceof Error ? error.message : "Filesystem operation failed";
@@ -26028,19 +26276,19 @@ function validateIdentifier(field, value) {
   return identifierPattern.test(value) ? ok(undefined) : err(toErr5(1 /* InvalidIdentifier */, { field, value }));
 }
 function isRegisteredRepository(value) {
-  return isRecord10(value) && typeof value.repositoryId === "string" && typeof value.repositoryPath === "string" && typeof value.commonGitDirectory === "string";
+  return isRecord11(value) && typeof value.repositoryId === "string" && typeof value.repositoryPath === "string" && typeof value.commonGitDirectory === "string";
 }
 function isRunWorktree(value) {
-  return isRecord10(value) && typeof value.repositoryId === "string" && typeof value.runId === "string" && typeof value.repositoryPath === "string" && typeof value.path === "string" && typeof value.commonGitDirectory === "string" && typeof value.startingCommit === "string";
+  return isRecord11(value) && typeof value.repositoryId === "string" && typeof value.runId === "string" && typeof value.repositoryPath === "string" && typeof value.path === "string" && typeof value.commonGitDirectory === "string" && typeof value.startingCommit === "string";
 }
 function sameWorktree(left, right) {
   return left.repositoryId === right.repositoryId && left.runId === right.runId && left.repositoryPath === right.repositoryPath && left.path === right.path && left.commonGitDirectory === right.commonGitDirectory && left.startingCommit === right.startingCommit;
 }
 function isLockRecord(value) {
-  return isRecord10(value) && Number.isSafeInteger(value.processId) && typeof value.token === "string";
+  return isRecord11(value) && Number.isSafeInteger(value.processId) && typeof value.token === "string";
 }
 function sha2563(value) {
-  return createHash4("sha256").update(value).digest("hex");
+  return createHash5("sha256").update(value).digest("hex");
 }
 function delay(milliseconds) {
   return new Promise((resolveDelay) => {
@@ -26067,11 +26315,11 @@ class WorktreeSandboxProvider {
   async initialize() {
     const initialized = await fromAsync(async () => {
       await Promise.all([
-        mkdir3(resolve5(this.managementRoot, "artifacts"), { recursive: true }),
-        mkdir3(resolve5(this.managementRoot, "locks"), { recursive: true }),
-        mkdir3(resolve5(this.managementRoot, "repositories"), { recursive: true }),
-        mkdir3(resolve5(this.managementRoot, "runs"), { recursive: true }),
-        mkdir3(resolve5(this.managementRoot, "worktrees"), { recursive: true })
+        mkdir4(resolve6(this.managementRoot, "artifacts"), { recursive: true }),
+        mkdir4(resolve6(this.managementRoot, "locks"), { recursive: true }),
+        mkdir4(resolve6(this.managementRoot, "repositories"), { recursive: true }),
+        mkdir4(resolve6(this.managementRoot, "runs"), { recursive: true }),
+        mkdir4(resolve6(this.managementRoot, "worktrees"), { recursive: true })
       ]);
     }, (error) => filesystemError("initialize", error));
     if (initialized.isOk())
@@ -26103,7 +26351,7 @@ class WorktreeSandboxProvider {
     ]);
     if (common.isErr())
       return common;
-    const commonDirectory = await this.canonicalPath(resolve5(repositoryRoot.unwrap(), common.unwrap().stdout.trim()), "resolve common Git directory");
+    const commonDirectory = await this.canonicalPath(resolve6(repositoryRoot.unwrap(), common.unwrap().stdout.trim()), "resolve common Git directory");
     if (commonDirectory.isErr())
       return commonDirectory;
     const registration = {
@@ -26183,7 +26431,7 @@ class WorktreeSandboxProvider {
         if (reconciled.isErr())
           return reconciled;
       } else {
-        const parentCreated = await this.createDirectory(dirname2(expected.path));
+        const parentCreated = await this.createDirectory(dirname3(expected.path));
         if (parentCreated.isErr())
           return parentCreated;
         const created = await this.git.run(repository.repositoryPath, "create run worktree", [
@@ -26304,11 +26552,11 @@ class WorktreeSandboxProvider {
     const ready = this.validateReady();
     if (ready.isErr())
       return ready;
-    if (!/^kairo\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(branchName)) {
+    if (!/^kouro\/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(branchName)) {
       return err(toErr5(7 /* WorktreeConflict */, {
         runId: worktree.runId,
         path: worktree.path,
-        reason: "delivery branch must use the kairo/<name> namespace"
+        reason: "delivery branch must use the kouro/<name> namespace"
       }));
     }
     return this.withRepositoryLock(worktree, async () => {
@@ -26411,13 +26659,13 @@ class WorktreeSandboxProvider {
     return this.initialized ? ok(undefined) : err(toErr5(0 /* NotInitialized */, {}));
   }
   repositoryMetadataPath(repositoryId) {
-    return resolve5(this.managementRoot, "repositories", `${repositoryId}.json`);
+    return resolve6(this.managementRoot, "repositories", `${repositoryId}.json`);
   }
   runMetadataPath(repositoryId, runId) {
-    return resolve5(this.managementRoot, "runs", repositoryId, `${runId}.json`);
+    return resolve6(this.managementRoot, "runs", repositoryId, `${runId}.json`);
   }
   worktreePath(repositoryId, runId) {
-    return resolve5(this.managementRoot, "worktrees", repositoryId, runId);
+    return resolve6(this.managementRoot, "worktrees", repositoryId, runId);
   }
   repositoryPathFor(repository) {
     return repository.repositoryPath;
@@ -26471,7 +26719,7 @@ class WorktreeSandboxProvider {
       if (common.isErr())
         return common;
     }
-    const commonPath = await this.canonicalPath(resolve5(worktree.path, common.unwrap().stdout.trim()), "resolve run common Git directory");
+    const commonPath = await this.canonicalPath(resolve6(worktree.path, common.unwrap().stdout.trim()), "resolve run common Git directory");
     if (commonPath.isErr())
       return commonPath;
     if (commonPath.unwrap() !== worktree.commonGitDirectory) {
@@ -26503,7 +26751,7 @@ class WorktreeSandboxProvider {
     return ok(undefined);
   }
   async writeArtifact(worktree, kind, contents) {
-    const path = resolve5(this.managementRoot, "artifacts", worktree.repositoryId, worktree.runId, `${kind}.txt`);
+    const path = resolve6(this.managementRoot, "artifacts", worktree.repositoryId, worktree.runId, `${kind}.txt`);
     const written = await this.writeAtomic(path, contents);
     return written.isErr() ? written : ok({
       kind,
@@ -26531,7 +26779,7 @@ class WorktreeSandboxProvider {
     return result;
   }
   async acquireLock(repository) {
-    const path = resolve5(this.managementRoot, "locks", `${sha2563(repository.commonGitDirectory)}.lock`);
+    const path = resolve6(this.managementRoot, "locks", `${sha2563(repository.commonGitDirectory)}.lock`);
     const deadline = Date.now() + this.lockTimeoutMs;
     while (Date.now() <= deadline) {
       const token = randomUUID4();
@@ -26569,7 +26817,7 @@ class WorktreeSandboxProvider {
     }));
   }
   async reclaimStaleLock(path) {
-    const text = await fromAsync(() => readFile5(path, "utf8"), (error) => filesystemError("read repository lock", error));
+    const text = await fromAsync(() => readFile6(path, "utf8"), (error) => filesystemError("read repository lock", error));
     if (text.isErr()) {
       return filesystemCode(text.error) === "ENOENT" ? ok(true) : text;
     }
@@ -26599,7 +26847,7 @@ class WorktreeSandboxProvider {
     }
   }
   async releaseLock(lock) {
-    const text = await fromAsync(() => readFile5(lock.path, "utf8"), (error) => filesystemError("read owned repository lock", error));
+    const text = await fromAsync(() => readFile6(lock.path, "utf8"), (error) => filesystemError("read owned repository lock", error));
     if (text.isErr()) {
       return filesystemCode(text.error) === "ENOENT" ? ok(undefined) : text;
     }
@@ -26617,7 +26865,7 @@ class WorktreeSandboxProvider {
   }
   async createDirectory(path) {
     return fromAsync(async () => {
-      await mkdir3(path, { recursive: true });
+      await mkdir4(path, { recursive: true });
     }, (error) => filesystemError("create directory", error));
   }
   async pathExists(path) {
@@ -26627,7 +26875,7 @@ class WorktreeSandboxProvider {
     return filesystemCode(inspected.error) === "ENOENT" ? ok(false) : inspected;
   }
   async readJson(path, validate2) {
-    const text = await fromAsync(() => readFile5(path, "utf8"), (error) => filesystemError("read metadata", error));
+    const text = await fromAsync(() => readFile6(path, "utf8"), (error) => filesystemError("read metadata", error));
     if (text.isErr()) {
       return filesystemCode(text.error) === "ENOENT" ? ok(null) : text;
     }
@@ -26644,9 +26892,9 @@ class WorktreeSandboxProvider {
   async writeAtomic(path, contents) {
     const temporaryPath = `${path}.${randomUUID4()}.tmp`;
     return fromAsync(async () => {
-      await mkdir3(dirname2(path), { recursive: true });
+      await mkdir4(dirname3(path), { recursive: true });
       try {
-        await writeFile4(temporaryPath, contents, { flag: "wx" });
+        await writeFile5(temporaryPath, contents, { flag: "wx" });
         await rename2(temporaryPath, path);
       } catch (error) {
         await unlink2(temporaryPath).catch(() => {
@@ -26662,17 +26910,27 @@ class WorktreeSandboxProvider {
   }
 }
 // packages/cli/src/paths.ts
+import { existsSync } from "fs";
 import { homedir } from "os";
-import { resolve as resolve6 } from "path";
+import { resolve as resolve7 } from "path";
+function defaultDirectory(base, currentName, legacyName) {
+  const current = resolve7(base, currentName);
+  const legacy = resolve7(base, legacyName);
+  return !existsSync(current) && existsSync(legacy) ? { path: legacy, legacy: true } : { path: current, legacy: false };
+}
 function resolveLocalPaths(environment = process.env) {
-  const dataDirectory = resolve6(environment.KAIRO_DATA_DIR ?? resolve6(environment.XDG_DATA_HOME ?? resolve6(homedir(), ".local", "share"), "kairo"));
-  const configDirectory = resolve6(environment.KAIRO_CONFIG_DIR ?? resolve6(environment.XDG_CONFIG_HOME ?? resolve6(homedir(), ".config"), "kairo"));
+  const defaultData = defaultDirectory(environment.XDG_DATA_HOME ?? resolve7(homedir(), ".local", "share"), "kouro", "kairo");
+  const defaultConfig = defaultDirectory(environment.XDG_CONFIG_HOME ?? resolve7(homedir(), ".config"), "kouro", "kairo");
+  const legacyDataOverride = environment.KOURO_DATA_DIR === undefined && environment.KAIRO_DATA_DIR !== undefined;
+  const dataDirectory = resolve7(environment.KOURO_DATA_DIR ?? environment.KAIRO_DATA_DIR ?? defaultData.path);
+  const configDirectory = resolve7(environment.KOURO_CONFIG_DIR ?? environment.KAIRO_CONFIG_DIR ?? defaultConfig.path);
+  const legacyDatabase = legacyDataOverride || !environment.KOURO_DATA_DIR && defaultData.legacy;
   return {
     dataDirectory,
     configDirectory,
-    databasePath: resolve6(dataDirectory, "kairo.sqlite"),
-    artifactDirectory: resolve6(dataDirectory, "artifacts"),
-    worktreeDirectory: resolve6(dataDirectory, "worktrees")
+    databasePath: resolve7(dataDirectory, legacyDatabase ? "kairo.sqlite" : "kouro.sqlite"),
+    artifactDirectory: resolve7(dataDirectory, "artifacts"),
+    worktreeDirectory: resolve7(dataDirectory, "worktrees")
   };
 }
 
@@ -26690,7 +26948,7 @@ var unavailableCapabilities = {
   webhooks: false,
   projects: false
 };
-function isRecord11(value) {
+function isRecord12(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function normalizeInstanceUrl(value) {
@@ -26726,13 +26984,13 @@ function responseError(response) {
 function stringsFromObjects(value, key) {
   if (!Array.isArray(value))
     return [];
-  return value.flatMap((item) => isRecord11(item) && typeof item[key] === "string" ? [item[key]] : []);
+  return value.flatMap((item) => isRecord12(item) && typeof item[key] === "string" ? [item[key]] : []);
 }
 function forgejoIssue(value, instanceUrl, owner, repository) {
-  if (!isRecord11(value) || typeof value.number !== "number" || typeof value.title !== "string" || value.body !== null && typeof value.body !== "string" || value.state !== "open" && value.state !== "closed" || typeof value.html_url !== "string" || typeof value.updated_at !== "string") {
+  if (!isRecord12(value) || typeof value.number !== "number" || typeof value.title !== "string" || value.body !== null && typeof value.body !== "string" || value.state !== "open" && value.state !== "closed" || typeof value.html_url !== "string" || typeof value.updated_at !== "string") {
     return providerError(7 /* InvalidResponse */, "forgejo_invalid_issue", "Forgejo returned a malformed issue");
   }
-  const milestone = isRecord11(value.milestone) && typeof value.milestone.title === "string" ? value.milestone.title : undefined;
+  const milestone = isRecord12(value.milestone) && typeof value.milestone.title === "string" ? value.milestone.title : undefined;
   const normalized = normalizeProviderDescription(value.body ?? "");
   return ok({
     binding: {
@@ -26761,7 +27019,7 @@ function namedResources(value, resource, nameKey) {
   }
   const resources = [];
   for (const item of value) {
-    if (!isRecord11(item) || typeof item.id !== "number" || typeof item[nameKey] !== "string") {
+    if (!isRecord12(item) || typeof item.id !== "number" || typeof item[nameKey] !== "string") {
       return providerError(7 /* InvalidResponse */, `forgejo_invalid_${resource}`, `Forgejo returned a malformed ${resource}`);
     }
     resources.push({ id: item.id, name: item[nameKey] });
@@ -26784,7 +27042,7 @@ function hasPath(paths, expected) {
   return Object.keys(paths).some((path) => path === expected);
 }
 function capabilitiesFromOpenApi(value) {
-  if (!isRecord11(value) || !isRecord11(value.paths))
+  if (!isRecord12(value) || !isRecord12(value.paths))
     return;
   const paths = value.paths;
   return {
@@ -26835,7 +27093,7 @@ class ForgejoTicketProvider {
       }
       received += body.length;
       for (const issue of body) {
-        if (isRecord11(issue) && "pull_request" in issue)
+        if (isRecord12(issue) && "pull_request" in issue)
           continue;
         const normalized = forgejoIssue(issue, this.instanceUrl, this.options.owner, this.options.repository);
         if (normalized.isErr())
@@ -26914,10 +27172,10 @@ class ForgejoTicketProvider {
     if (response.isErr())
       return response;
     const value = response.unwrap().body;
-    if (!isRecord11(value) || typeof value.id !== "number" && typeof value.id !== "string" || typeof value.body !== "string" || typeof value.created_at !== "string") {
+    if (!isRecord12(value) || typeof value.id !== "number" && typeof value.id !== "string" || typeof value.body !== "string" || typeof value.created_at !== "string") {
       return providerError(7 /* InvalidResponse */, "forgejo_invalid_comment", "Forgejo returned a malformed issue comment");
     }
-    const author = isRecord11(value.user) && typeof value.user.login === "string" ? value.user.login : input.author;
+    const author = isRecord12(value.user) && typeof value.user.login === "string" ? value.user.login : input.author;
     return ok({
       externalId: String(value.id),
       author,
@@ -26941,7 +27199,7 @@ class ForgejoTicketProvider {
     if (versionResponse.isErr())
       return versionResponse;
     const versionBody = versionResponse.unwrap().body;
-    if (!isRecord11(versionBody) || typeof versionBody.version !== "string") {
+    if (!isRecord12(versionBody) || typeof versionBody.version !== "string") {
       return providerError(7 /* InvalidResponse */, "forgejo_invalid_version", "Forgejo returned a malformed version response");
     }
     const openApi = await this.requestAbsolute(`${this.instanceUrl}/swagger.v1.json`);
@@ -27025,7 +27283,7 @@ class ForgejoTicketProvider {
     headers.set("accept", "application/json");
     headers.set("authorization", `token ${this.options.token}`);
     headers.set("content-type", "application/json");
-    headers.set("user-agent", "kairo-ticket-provider");
+    headers.set("user-agent", "kouro-ticket-provider");
     const response = await fromAsync(() => this.requestFetch(url, { ...init, headers }), () => ({
       kind: 8 /* Unavailable */,
       code: "forgejo_unavailable",
@@ -27063,7 +27321,7 @@ function githubError(kind, code, message, retryAfter) {
   });
 }
 // packages/ticket-provider-github/src/github-ticket-provider.ts
-function isRecord12(value) {
+function isRecord13(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function responseError2(response) {
@@ -27088,16 +27346,16 @@ function responseError2(response) {
 function stringsFromObjects2(value, key) {
   if (!Array.isArray(value))
     return [];
-  return value.flatMap((item) => isRecord12(item) && typeof item[key] === "string" ? [item[key]] : []);
+  return value.flatMap((item) => isRecord13(item) && typeof item[key] === "string" ? [item[key]] : []);
 }
 function etagHeaders(revision) {
   return revision?.includes('"') ? { "if-match": revision } : undefined;
 }
 function githubIssue(value, owner, repository, revisionHeader) {
-  if (!isRecord12(value) || typeof value.number !== "number" || typeof value.title !== "string" || value.body !== null && typeof value.body !== "string" || value.state !== "open" && value.state !== "closed" || typeof value.html_url !== "string" || typeof value.updated_at !== "string") {
+  if (!isRecord13(value) || typeof value.number !== "number" || typeof value.title !== "string" || value.body !== null && typeof value.body !== "string" || value.state !== "open" && value.state !== "closed" || typeof value.html_url !== "string" || typeof value.updated_at !== "string") {
     return githubError(7 /* InvalidResponse */, "github_invalid_issue", "GitHub returned a malformed issue");
   }
-  const milestone = isRecord12(value.milestone) && typeof value.milestone.title === "string" ? value.milestone.title : undefined;
+  const milestone = isRecord13(value.milestone) && typeof value.milestone.title === "string" ? value.milestone.title : undefined;
   const normalized = normalizeProviderDescription(value.body ?? "");
   return ok({
     binding: {
@@ -27150,7 +27408,7 @@ class GitHubTicketProvider {
     }
     const tickets = [];
     for (const issue of body) {
-      if (isRecord12(issue) && "pull_request" in issue)
+      if (isRecord13(issue) && "pull_request" in issue)
         continue;
       const normalized = githubIssue(issue, this.options.owner, this.options.repository);
       if (normalized.isErr())
@@ -27201,10 +27459,10 @@ class GitHubTicketProvider {
     if (response.isErr())
       return response;
     const value = response.unwrap().body;
-    if (!isRecord12(value) || typeof value.id !== "number" && typeof value.id !== "string" || typeof value.body !== "string" || typeof value.created_at !== "string") {
+    if (!isRecord13(value) || typeof value.id !== "number" && typeof value.id !== "string" || typeof value.body !== "string" || typeof value.created_at !== "string") {
       return githubError(7 /* InvalidResponse */, "github_invalid_comment", "GitHub returned a malformed issue comment");
     }
-    const author = isRecord12(value.user) && typeof value.user.login === "string" ? value.user.login : input.author;
+    const author = isRecord13(value.user) && typeof value.user.login === "string" ? value.user.login : input.author;
     return ok({
       externalId: String(value.id),
       author,
@@ -27246,7 +27504,7 @@ class GitHubTicketProvider {
     headers.set("accept", "application/vnd.github+json");
     headers.set("authorization", `Bearer ${this.options.token}`);
     headers.set("content-type", "application/json");
-    headers.set("user-agent", "kairo-ticket-provider");
+    headers.set("user-agent", "kouro-ticket-provider");
     const response = await fromAsync(() => this.requestFetch(`${this.apiUrl}${path}`, {
       ...init,
       headers
@@ -27281,13 +27539,16 @@ class GitHubTicketProvider {
 function configured(values) {
   return values.every((value) => Boolean(value?.trim()));
 }
+function environmentValue(environment, name) {
+  return environment[name]?.trim() ?? environment[name.replace(/^KOURO_/, "KAIRO_")]?.trim();
+}
 function composeTicketProviders(environment, forgejoMetadata) {
   const providers = new Map;
-  const githubOwner = environment.KAIRO_GITHUB_OWNER?.trim();
-  const githubRepository = environment.KAIRO_GITHUB_REPOSITORY?.trim();
-  const githubProject = environment.KAIRO_GITHUB_PROJECT?.trim();
-  const githubToken = environment.KAIRO_GITHUB_TOKEN?.trim();
-  const githubApiUrl = environment.KAIRO_GITHUB_API_URL?.trim();
+  const githubOwner = environmentValue(environment, "KOURO_GITHUB_OWNER");
+  const githubRepository = environmentValue(environment, "KOURO_GITHUB_REPOSITORY");
+  const githubProject = environmentValue(environment, "KOURO_GITHUB_PROJECT");
+  const githubToken = environmentValue(environment, "KOURO_GITHUB_TOKEN");
+  const githubApiUrl = environmentValue(environment, "KOURO_GITHUB_API_URL");
   const hasGitHub = configured([githubOwner, githubRepository, githubProject, githubToken]);
   if (hasGitHub && githubOwner && githubRepository && githubProject && githubToken) {
     providers.set("github", new GitHubTicketProvider({
@@ -27298,11 +27559,11 @@ function composeTicketProviders(environment, forgejoMetadata) {
       ...githubApiUrl ? { apiUrl: githubApiUrl } : {}
     }));
   }
-  const forgejoInstanceUrl = environment.KAIRO_FORGEJO_URL?.trim();
-  const forgejoOwner = environment.KAIRO_FORGEJO_OWNER?.trim();
-  const forgejoRepository = environment.KAIRO_FORGEJO_REPOSITORY?.trim();
-  const forgejoProject = environment.KAIRO_FORGEJO_PROJECT?.trim();
-  const forgejoToken = environment.KAIRO_FORGEJO_TOKEN?.trim();
+  const forgejoInstanceUrl = environmentValue(environment, "KOURO_FORGEJO_URL");
+  const forgejoOwner = environmentValue(environment, "KOURO_FORGEJO_OWNER");
+  const forgejoRepository = environmentValue(environment, "KOURO_FORGEJO_REPOSITORY");
+  const forgejoProject = environmentValue(environment, "KOURO_FORGEJO_PROJECT");
+  const forgejoToken = environmentValue(environment, "KOURO_FORGEJO_TOKEN");
   const hasForgejo = configured([
     forgejoInstanceUrl,
     forgejoOwner,
@@ -27338,7 +27599,7 @@ function composeTicketProviders(environment, forgejoMetadata) {
         ...githubApiUrl ? { endpoint: githubApiUrl } : {},
         ...githubOwner ? { owner: githubOwner } : {},
         ...githubRepository ? { repository: githubRepository } : {},
-        message: hasGitHub ? "Configured from the KAIRO_GITHUB_* environment variables." : "Set KAIRO_GITHUB_OWNER, REPOSITORY, PROJECT, and TOKEN."
+        message: hasGitHub ? "Configured from the KOURO_GITHUB_* environment variables." : "Set KOURO_GITHUB_OWNER, REPOSITORY, PROJECT, and TOKEN."
       },
       {
         id: "forgejo",
@@ -27348,20 +27609,20 @@ function composeTicketProviders(environment, forgejoMetadata) {
         ...forgejoInstanceUrl ? { endpoint: forgejoInstanceUrl } : {},
         ...forgejoOwner ? { owner: forgejoOwner } : {},
         ...forgejoRepository ? { repository: forgejoRepository } : {},
-        message: hasForgejo ? "Configured from the KAIRO_FORGEJO_* environment variables." : "Set KAIRO_FORGEJO_URL, OWNER, REPOSITORY, PROJECT, and TOKEN."
+        message: hasForgejo ? "Configured from the KOURO_FORGEJO_* environment variables." : "Set KOURO_FORGEJO_URL, OWNER, REPOSITORY, PROJECT, and TOKEN."
       }
     ]
   };
 }
 
 // packages/cli/src/work-item.ts
-import { createHash as createHash5 } from "crypto";
+import { createHash as createHash6 } from "crypto";
 function normalizedStrings(values, sort) {
   const normalized = [...new Set(values.map((value) => value.trim()).filter(Boolean))];
   return sort ? normalized.toSorted() : normalized;
 }
 function checksum3(source) {
-  return `sha256:${createHash5("sha256").update(JSON.stringify(source)).digest("hex")}`;
+  return `sha256:${createHash6("sha256").update(JSON.stringify(source)).digest("hex")}`;
 }
 function snapshot(source) {
   if (!source.title.trim() || !source.description.trim()) {
@@ -27403,7 +27664,7 @@ function createInlineWorkItem(task) {
 function createStoredTicketWorkItem(ticket, stored) {
   return snapshot({
     kind: "ticket",
-    provider: "kairo",
+    provider: "kouro",
     reference: ticket.id,
     revision: stored.providerRevision,
     ...ticket.binding.kind === "local" ? {} : { url: ticket.binding.externalUrl },
@@ -27483,6 +27744,7 @@ function workItemConfiguration(workItem) {
 }
 
 // packages/cli/src/worker.ts
+import { randomUUID as randomUUID5 } from "crypto";
 function stableBoundary(aggregate) {
   return aggregate.state.status !== "running" || aggregate.state.invocations.some(({ state }) => state === "waiting_for_approval");
 }
@@ -27491,15 +27753,63 @@ class LocalWorker {
   store;
   services;
   intervalMs;
+  leaseDurationMs;
+  ownerId;
+  clock;
   timer;
   advancing = false;
+  ownsLease = false;
+  recoveredLease = false;
+  renewAfterMs = 0;
+  ownershipCheck;
   blockedAtSequence = new Map;
-  constructor(store, services, intervalMs = 250) {
+  constructor(store, services, intervalMs = 250, leaseDurationMs = 1e4, ownerId = randomUUID5(), clock = { nowMs: () => Date.now() }) {
     this.store = store;
     this.services = services;
     this.intervalMs = intervalMs;
+    this.leaseDurationMs = leaseDurationMs;
+    this.ownerId = ownerId;
+    this.clock = clock;
   }
   async recover() {
+    if (!await this.ensureOwnership())
+      return;
+  }
+  start() {
+    if (this.timer)
+      return;
+    this.timer = setInterval(() => void this.maintain(), this.intervalMs);
+    this.maintain();
+  }
+  async runUntilStable(runId) {
+    this.start();
+    for (;; ) {
+      const loaded = this.store.loadRun(runId);
+      if (loaded.isErr())
+        throw new Error(`Run ${runId} could not be loaded`);
+      if (stableBoundary(loaded.unwrap()))
+        return loaded.unwrap();
+      if (await this.ensureOwnership() && !this.advancing) {
+        this.advancing = true;
+        try {
+          return await this.advanceUntilStable(runId);
+        } finally {
+          this.advancing = false;
+        }
+      }
+      await new Promise((resolveWait) => setTimeout(resolveWait, this.intervalMs));
+    }
+  }
+  dispose() {
+    if (this.timer)
+      clearInterval(this.timer);
+    this.timer = undefined;
+    if (this.ownsLease)
+      this.store.releaseWorkerLease(this.ownerId);
+    this.ownsLease = false;
+    this.recoveredLease = false;
+  }
+  async recoverOwnedRuns() {
     const listed = this.store.listRuns();
     if (listed.isErr())
       throw new Error("Could not list runs during startup recovery");
@@ -27511,12 +27821,7 @@ class LocalWorker {
         throw new Error(`Could not recover run ${aggregate.runId}`);
     }
   }
-  start() {
-    if (this.timer)
-      return;
-    this.timer = setInterval(() => void this.tick(), this.intervalMs);
-  }
-  async runUntilStable(runId) {
+  async advanceUntilStable(runId) {
     for (;; ) {
       const loaded = this.store.loadRun(runId);
       if (loaded.isErr())
@@ -27539,13 +27844,8 @@ class LocalWorker {
         return aggregate;
     }
   }
-  dispose() {
-    if (this.timer)
-      clearInterval(this.timer);
-    this.timer = undefined;
-  }
-  async tick() {
-    if (this.advancing)
+  async maintain() {
+    if (!await this.ensureOwnership() || this.advancing)
       return;
     this.advancing = true;
     try {
@@ -27558,12 +27858,40 @@ class LocalWorker {
           continue;
         this.blockedAtSequence.delete(aggregate.runId);
         if (aggregate.state.status === "running") {
-          await this.runUntilStable(aggregate.runId);
+          await this.advanceUntilStable(aggregate.runId);
         }
       }
     } finally {
       this.advancing = false;
     }
+  }
+  async ensureOwnership() {
+    if (this.ownershipCheck)
+      return this.ownershipCheck;
+    this.ownershipCheck = this.checkOwnership();
+    try {
+      return await this.ownershipCheck;
+    } finally {
+      this.ownershipCheck = undefined;
+    }
+  }
+  async checkOwnership() {
+    const nowMs = this.clock.nowMs();
+    if (this.ownsLease && nowMs < this.renewAfterMs)
+      return true;
+    const acquired = this.store.tryAcquireWorkerLease(this.ownerId, nowMs, nowMs + this.leaseDurationMs);
+    if (acquired.isErr() || !acquired.unwrap()) {
+      this.ownsLease = false;
+      this.recoveredLease = false;
+      return false;
+    }
+    this.ownsLease = true;
+    this.renewAfterMs = nowMs + Math.floor(this.leaseDurationMs / 3);
+    if (!this.recoveredLease) {
+      await this.recoverOwnedRuns();
+      this.recoveredLease = true;
+    }
+    return true;
   }
 }
 
@@ -27581,14 +27909,37 @@ function runConfiguration(aggregate) {
 function message(error) {
   return error instanceof Error ? error.message : JSON.stringify(error);
 }
-function repositoryId(path) {
-  return `repo-${createHash6("sha256").update(resolve7(path)).digest("hex").slice(0, 16)}`;
+function isNotFoundError(error) {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
-function runId() {
-  return `run-${Date.now().toString(36)}-${randomUUID5().slice(0, 8)}`;
+function repositoryIdForPath(path) {
+  return `repo-${createHash7("sha256").update(resolve8(path)).digest("hex").slice(0, 16)}`;
 }
-function isRecord13(value) {
+function createRunId() {
+  return `run-${Date.now().toString(36)}-${randomUUID6().slice(0, 8)}`;
+}
+function isRecord14(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function belongsToRepository(aggregate, repositoryId) {
+  return aggregate.state.configuration.repositoryId === repositoryId;
+}
+
+class RepositoryScopedRunStore {
+  store;
+  repositoryId;
+  constructor(store, repositoryId) {
+    this.store = store;
+    this.repositoryId = repositoryId;
+  }
+  loadRun(runId) {
+    const loaded = this.store.loadRun(runId);
+    return loaded.isErr() || belongsToRepository(loaded.unwrap(), this.repositoryId) ? loaded : err({ kind: 1 /* RunNotFound */, runId });
+  }
+  listRuns() {
+    const listed = this.store.listRuns();
+    return listed.isErr() ? listed : ok(listed.unwrap().filter((run) => belongsToRepository(run, this.repositoryId)));
+  }
 }
 function harnessRouteError(nodeIds, routes) {
   if (!routes)
@@ -27614,14 +27965,14 @@ function createLocalRequestHandler(app2, webRoot) {
       return app2.fetch(request);
     }
     const relative2 = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
-    const file2 = Bun.file(resolve7(webRoot, relative2));
+    const file2 = Bun.file(resolve8(webRoot, relative2));
     if (await file2.exists())
       return new Response(file2);
-    return new Response(Bun.file(resolve7(webRoot, "index.html")));
+    return new Response(Bun.file(resolve8(webRoot, "index.html")));
   };
 }
 
-class LocalKairoHost {
+class LocalKouroHost {
   paths;
   store;
   sandbox;
@@ -27637,6 +27988,7 @@ class LocalKairoHost {
   registry;
   ticketProviders;
   artifactWriter;
+  activityStore;
   initialized = false;
   constructor(paths = resolveLocalPaths(), harnesses = [
     new CodexHarness,
@@ -27652,17 +28004,18 @@ class LocalKairoHost {
     this.ticketSync = new SqliteTicketSyncStore(paths.databasePath);
     const clock = { now: () => new Date().toISOString() };
     const ids = {
-      ticketId: () => `ticket-${randomUUID5()}`,
-      commentId: () => `comment-${randomUUID5()}`
+      ticketId: () => `ticket-${randomUUID6()}`,
+      commentId: () => `comment-${randomUUID6()}`
     };
     this.ticketService = new TicketService(this.tickets, clock, ids);
-    this.ticketSyncService = new TicketSyncService(this.tickets, this.ticketSync, clock, ids, this.ticketRuns, new KairoTicketRunQuery(this.store));
+    this.ticketSyncService = new TicketSyncService(this.tickets, this.ticketSync, clock, ids, this.ticketRuns, new KouroTicketRunQuery(this.store));
     this.ticketMigrationService = new TicketMigrationService(this.tickets, this.ticketSync, clock);
     const ticketComposition = composeTicketProviders(process.env, this.ticketSync);
     this.remoteTicketProviders = ticketComposition.providers;
     this.ticketProviderViews = ticketComposition.configurations;
     this.sandbox = new WorktreeSandboxProvider(paths.worktreeDirectory);
     this.artifactWriter = new LocalArtifactWriter(paths.artifactDirectory);
+    this.activityStore = new LocalInvocationActivityStore(paths.artifactDirectory);
     this.registry = new HarnessRegistry(harnesses);
     this.ticketProviders = new Map(ticketProviders.map((provider) => [provider.id, provider]));
     this.worker = new LocalWorker(this.store, {
@@ -27673,9 +28026,9 @@ class LocalKairoHost {
   async initialize() {
     try {
       await Promise.all([
-        mkdir4(this.paths.dataDirectory, { recursive: true }),
-        mkdir4(this.paths.configDirectory, { recursive: true }),
-        mkdir4(this.paths.artifactDirectory, { recursive: true })
+        mkdir5(this.paths.dataDirectory, { recursive: true }),
+        mkdir5(this.paths.configDirectory, { recursive: true }),
+        mkdir5(this.paths.artifactDirectory, { recursive: true })
       ]);
       const store = this.store.initialize();
       if (store.isErr()) {
@@ -27691,7 +28044,6 @@ class LocalKairoHost {
       if (sandbox.isErr()) {
         return cliErr(1 /* Initialization */, "worktree_initialization_failed", message(sandbox.error));
       }
-      await this.worker.recover();
       this.initialized = true;
       return ok(undefined);
     } catch (cause) {
@@ -27700,6 +28052,9 @@ class LocalKairoHost {
   }
   async create(request) {
     const ticket = request.ticket?.trim();
+    if (ticket?.startsWith("kouro:")) {
+      return this.createTicketRun(request, ticket.slice("kouro:".length).trim());
+    }
     if (ticket?.startsWith("kairo:")) {
       return this.createTicketRun(request, ticket.slice("kairo:".length).trim());
     }
@@ -27707,9 +28062,9 @@ class LocalKairoHost {
   }
   async createRun(request, suppliedWorkItem) {
     if (!this.initialized) {
-      return cliErr(1 /* Initialization */, "host_not_initialized", "Kairo is not initialized");
+      return cliErr(1 /* Initialization */, "host_not_initialized", "Kouro is not initialized");
     }
-    const packageDirectory = request.adw === "feature-development" ? resolve7(import.meta.dir, "..", "assets", "adws", "feature-development") : resolve7(request.adw);
+    const packageDirectory = request.adw === "feature-development" ? resolve8(import.meta.dir, "..", "assets", "adws", "feature-development") : resolve8(request.adw);
     const compiled = await compileAdwPackage(packageDirectory);
     if (compiled.isErr()) {
       return cliErr(2 /* Compilation */, "adw_compilation_failed", message(compiled.error));
@@ -27736,8 +28091,8 @@ class LocalKairoHost {
     if (workItem?.isErr()) {
       return cliErr(0 /* InvalidArguments */, workItem.error.code, workItem.error.message);
     }
-    const id = runId();
-    const repoId = repositoryId(request.repositoryPath);
+    const id = createRunId();
+    const repoId = repositoryIdForPath(request.repositoryPath);
     const registered = await this.sandbox.registerRepository(repoId, request.repositoryPath);
     if (registered.isErr()) {
       return cliErr(3 /* Repository */, "repository_registration_failed", message(registered.error));
@@ -27764,7 +28119,7 @@ class LocalKairoHost {
         repositoryId: repoId,
         repositoryPath: pinned.unwrap().repositoryPath,
         worktreePath: worktree.unwrap().path,
-        deliveryBranch: `kairo/${id}`,
+        deliveryBranch: `kouro/${id}`,
         operator: request.actor
       },
       idempotencyKey: `create:${id}`
@@ -27777,13 +28132,13 @@ class LocalKairoHost {
   }
   async createTicketRun(request, ticketId) {
     if (!ticketId) {
-      return cliErr(0 /* InvalidArguments */, "invalid_ticket_reference", "Kairo ticket references must use kairo:<ticket-id>");
+      return cliErr(0 /* InvalidArguments */, "invalid_ticket_reference", "Kouro ticket references must use kouro:<ticket-id>");
     }
     if (request.task !== undefined) {
       return cliErr(0 /* InvalidArguments */, "multiple_work_items", "Use exactly one of task or ticket");
     }
     let response;
-    const service = new TicketRunService(this.tickets, this.ticketRuns, new KairoTicketRunQuery(this.store), {
+    const service = new TicketRunService(this.tickets, this.ticketRuns, new KouroTicketRunQuery(this.store), {
       start: async ({ ticket, snapshot: snapshot2 }) => {
         const workItem = createStoredTicketWorkItem(ticket, snapshot2);
         if (workItem.isErr()) {
@@ -27803,9 +28158,9 @@ class LocalKairoHost {
         return ok({ runId: response.runId });
       }
     }, { now: () => new Date().toISOString() }, {
-      ticketId: () => `ticket-${randomUUID5()}`,
-      commentId: () => `comment-${randomUUID5()}`,
-      snapshotId: () => `snapshot-${randomUUID5()}`
+      ticketId: () => `ticket-${randomUUID6()}`,
+      commentId: () => `comment-${randomUUID6()}`,
+      snapshotId: () => `snapshot-${randomUUID6()}`
     });
     const started = await service.start({
       ticketId,
@@ -27824,23 +28179,94 @@ class LocalKairoHost {
     return this.coordinator(configuration?.worktreePath ?? process.cwd());
   }
   coordinator(workingDirectory = process.cwd()) {
-    return new RunCoordinator(this.store, new BunCommandRunner(workingDirectory), new AgentExecutor(this.registry, this.artifactWriter), workingDirectory);
+    return new RunCoordinator(this.store, new BunCommandRunner(workingDirectory), new AgentExecutor(this.registry, this.artifactWriter, this.activityStore), workingDirectory);
   }
-  app() {
-    return createKairoApp({
-      runs: this.store,
+  app(repositoryPath) {
+    const scopeId = repositoryPath ? repositoryIdForPath(repositoryPath) : undefined;
+    const runs = scopeId ? new RepositoryScopedRunStore(this.store, scopeId) : this.store;
+    return createKouroApp({
+      runs,
       coordinator: this.coordinator(),
       artifacts: new LocalArtifactContentReader(this.paths.artifactDirectory),
-      repositories: this,
-      runCreator: this,
+      activities: this.activityStore,
+      repositories: scopeId ? {
+        list: async () => (await this.list()).filter((repository) => repository.id === scopeId)
+      } : this,
+      runCreator: scopeId ? {
+        create: (request) => repositoryIdForPath(request.repositoryPath) === scopeId ? this.create(request) : Promise.resolve(cliErr(0 /* InvalidArguments */, "repository_scope_mismatch", "The requested repository is outside this server scope"))
+      } : this,
+      runDeleter: this,
       tickets: {
         repository: this.tickets,
         runs: this.ticketRuns,
-        runQuery: new KairoTicketRunQuery(this.store),
+        runQuery: new KouroTicketRunQuery(runs),
         sync: this.ticketSync
       },
       ticketProviders: { list: () => this.ticketProviderViews }
     });
+  }
+  runStoreForRepository(repositoryPath) {
+    return new RepositoryScopedRunStore(this.store, repositoryIdForPath(repositoryPath));
+  }
+  async delete(runId) {
+    const loaded = this.store.loadRun(runId);
+    if (loaded.isErr()) {
+      return cliErr(4 /* Persistence */, "run_not_found", `Run ${runId} was not found`);
+    }
+    const aggregate = loaded.unwrap();
+    if (!["succeeded", "failed", "cancelled"].includes(aggregate.state.status)) {
+      return cliErr(5 /* Lifecycle */, "run_not_terminal", `Run ${runId} must be terminal before it can be deleted`);
+    }
+    const configuration = runConfiguration(aggregate);
+    if (!configuration) {
+      return cliErr(4 /* Persistence */, "invalid_run_configuration", `Run ${runId} has invalid local configuration`);
+    }
+    const metadataPath = resolve8(this.paths.worktreeDirectory, "runs", configuration.repositoryId, `${runId}.json`);
+    try {
+      let commonGitDirectory;
+      try {
+        const recorded = JSON.parse(await readFile7(metadataPath, "utf8"));
+        if (!isRecord14(recorded) || typeof recorded.commonGitDirectory !== "string") {
+          return cliErr(4 /* Persistence */, "invalid_worktree_metadata", `Run ${runId} has invalid worktree metadata`);
+        }
+        commonGitDirectory = recorded.commonGitDirectory;
+      } catch (cause) {
+        if (!isNotFoundError(cause))
+          throw cause;
+        const worktreeExists = await stat4(configuration.worktreePath).then(() => true, (error) => {
+          if (isNotFoundError(error))
+            return false;
+          throw error;
+        });
+        if (worktreeExists) {
+          return cliErr(4 /* Persistence */, "missing_worktree_metadata", `Run ${runId} still has a worktree but its metadata is missing`);
+        }
+      }
+      if (commonGitDirectory) {
+        const cleaned = await this.sandbox.cleanupWorktree({
+          repositoryId: configuration.repositoryId,
+          runId,
+          repositoryPath: configuration.repositoryPath,
+          path: configuration.worktreePath,
+          commonGitDirectory,
+          startingCommit: aggregate.state.startingCommit
+        }, true);
+        if (cleaned.isErr()) {
+          return cliErr(3 /* Repository */, "worktree_deletion_failed", message(cleaned.error));
+        }
+      }
+      const artifacts = await this.artifactWriter.deleteRunArtifacts(runId);
+      if (artifacts.isErr()) {
+        return cliErr(4 /* Persistence */, "artifact_deletion_failed", artifacts.error.message);
+      }
+      const deleted = this.store.deleteRun(runId);
+      if (deleted.isErr()) {
+        return cliErr(4 /* Persistence */, "run_deletion_failed", `Run ${runId} could not be deleted`);
+      }
+      return ok({ runId, deleted: true });
+    } catch (cause) {
+      return cliErr(4 /* Persistence */, "run_deletion_failed", message(cause));
+    }
   }
   createTicket(input) {
     return this.ticketService.create(input);
@@ -27901,13 +28327,13 @@ class LocalKairoHost {
     return this.ticketProviderViews;
   }
   async list() {
-    const directory = resolve7(this.paths.worktreeDirectory, "repositories");
+    const directory = resolve8(this.paths.worktreeDirectory, "repositories");
     try {
       const files = (await readdir2(directory)).filter((file2) => file2.endsWith(".json")).toSorted();
       const repositories = [];
       for (const file2 of files) {
-        const parsed = JSON.parse(await readFile6(resolve7(directory, file2), "utf8"));
-        if (isRecord13(parsed) && typeof parsed.repositoryId === "string" && typeof parsed.repositoryPath === "string") {
+        const parsed = JSON.parse(await readFile7(resolve8(directory, file2), "utf8"));
+        if (isRecord14(parsed) && typeof parsed.repositoryId === "string" && typeof parsed.repositoryPath === "string") {
           repositories.push({ id: parsed.repositoryId, path: parsed.repositoryPath });
         }
       }
@@ -27924,12 +28350,12 @@ class LocalKairoHost {
       { id: "pi", available: Bun.which("pi") !== null }
     ];
   }
-  async serve(port = 4317) {
+  async serve(port = 4317, repositoryPath) {
     if (!this.initialized) {
-      return cliErr(1 /* Initialization */, "host_not_initialized", "Kairo is not initialized");
+      return cliErr(1 /* Initialization */, "host_not_initialized", "Kouro is not initialized");
     }
-    const app2 = this.app();
-    const webRoot = resolve7(import.meta.dir, "..", "..", "web", "dist");
+    const app2 = this.app(repositoryPath);
+    const webRoot = resolve8(import.meta.dir, "..", "..", "web", "dist");
     const fetch2 = createLocalRequestHandler(app2, webRoot);
     try {
       this.worker.start();
@@ -27968,12 +28394,12 @@ class LocalKairoHost {
       runId: aggregate.runId,
       repositoryPath: configuration.repositoryPath,
       path: configuration.worktreePath,
-      commonGitDirectory: resolve7(configuration.repositoryPath, ".git"),
+      commonGitDirectory: resolve8(configuration.repositoryPath, ".git"),
       startingCommit: aggregate.state.startingCommit
     };
-    const metadataPath = resolve7(this.paths.worktreeDirectory, "runs", configuration.repositoryId, `${aggregate.runId}.json`);
-    const recorded = JSON.parse(await readFile6(metadataPath, "utf8"));
-    if (!isRecord13(recorded) || typeof recorded.commonGitDirectory !== "string") {
+    const metadataPath = resolve8(this.paths.worktreeDirectory, "runs", configuration.repositoryId, `${aggregate.runId}.json`);
+    const recorded = JSON.parse(await readFile7(metadataPath, "utf8"));
+    if (!isRecord14(recorded) || typeof recorded.commonGitDirectory !== "string") {
       throw new Error("Run worktree metadata is corrupt");
     }
     const durableWorktree = { ...worktree, commonGitDirectory: recorded.commonGitDirectory };
@@ -27983,7 +28409,7 @@ class LocalKairoHost {
     let current = aggregate;
     for (const source of [captured.unwrap().status, captured.unwrap().diff]) {
       const kind = source.kind === "status" ? "git_status" : "git_diff";
-      const content = await readFile6(source.path, "utf8");
+      const content = await readFile7(source.path, "utf8");
       const written = await this.artifactWriter.write({
         runId: aggregate.runId,
         invocationSequence: 0,
@@ -28006,8 +28432,8 @@ class LocalKairoHost {
       worktree: durableWorktree,
       expectedHead: prepared.unwrap().head,
       expectedTree: prepared.unwrap().tree,
-      message: `Kairo delivery ${aggregate.runId}`,
-      identity: { name: "Kairo", email: "kairo@localhost" },
+      message: `Kouro delivery ${aggregate.runId}`,
+      identity: { name: "Kouro", email: "kouro@localhost" },
       timestamp: aggregate.state.startedAt ?? new Date(0).toISOString()
     });
     if (committed.isErr())
@@ -28019,8 +28445,8 @@ class LocalKairoHost {
 }
 
 // packages/cli/src/ticket-command.ts
-import { readFile as readFile7 } from "fs/promises";
-import { resolve as resolve8 } from "path";
+import { readFile as readFile8 } from "fs/promises";
+import { resolve as resolve9 } from "path";
 var priorities = ["low", "medium", "high", "critical"];
 var statuses = ["backlog", "ready", "blocked", "done", "cancelled"];
 function option(args, name) {
@@ -28089,7 +28515,7 @@ function unwrap(result) {
 }
 function configured2(value, provider) {
   if (value === undefined) {
-    throw new Error(`${provider} is not configured; run "kairo ticket providers" for required environment variables`);
+    throw new Error(`${provider} is not configured; run "kouro ticket providers" for required environment variables`);
   }
   return value;
 }
@@ -28098,7 +28524,7 @@ async function description(args) {
   const file2 = option(args, "--description-file");
   if (inline && file2)
     throw new Error("Use one of --description or --description-file");
-  return file2 ? readFile7(resolve8(file2), "utf8") : required(inline, "--description");
+  return file2 ? readFile8(resolve9(file2), "utf8") : required(inline, "--description");
 }
 async function executeTicketCommand(host, args, actor) {
   const command = required(args[0], "ticket command");
@@ -28171,35 +28597,107 @@ async function executeTicketCommand(host, args, actor) {
 
 // packages/cli/src/main.ts
 var VERSION = "0.1.0";
-var HELP = `Kairo ${VERSION}
+var HELP = `Kouro ${VERSION}
 
 Usage:
-  kairo create adw <name> [--template <template>] [--output <directory>]
-  kairo run <adw> --repo <path> (--ticket <provider:reference> | --task <text> | --task-file <path>) [--harness <id|node=id>]...
-  kairo ticket create --project <id> --title <text> (--description <text> | --description-file <path>) [--priority <value>] [--label <value>]...
-  kairo ticket list --project <id>
-  kairo ticket show <ticket-id>
-  kairo ticket update <ticket-id> --revision <number> [--title <text>] [--description <text>] [--priority <value>] [--label <value>]...
-  kairo ticket move <ticket-id> --revision <number> --status <status>
-  kairo ticket close|cancel|reopen <ticket-id> --revision <number>
-  kairo ticket comment <ticket-id> --body <text> [--author <name>]
-  kairo ticket providers
-  kairo ticket import <github|forgejo> --project <id>
-  kairo ticket pull|push <ticket-id>
-  kairo ticket migrate <ticket-id> --to <github|forgejo> --project <id>
-  kairo runs
-  kairo status <run-id>
-  kairo approve <run-id> <invocation> --reason <text>
-  kairo reject <run-id> <invocation> --reason <text>
-  kairo pause|resume|cancel <run-id>
-  kairo interrupt|retry|skip <run-id> <invocation> --reason <text>
-  kairo diagnostics
-  kairo serve [--port <number>]
-  kairo --help
-  kairo --version
+  kouro <command> [options]
 
-ADW templates:
-  ${ADW_TEMPLATES.join(", ")}`;
+Common usage:
+  kouro create adw <name> [--template <template>] [--output <directory>]
+  kouro run <adw> --repo <path> (--ticket <provider:reference> | --task <text> | --task-file <path>)
+  kouro pause|resume|cancel <run-id>
+  kouro serve [--repo <path>]
+
+Workflow:
+  create adw      Create an ADW package from a starter template
+  run             Compile and execute an ADW
+
+Runs:
+  runs            List runs for the current repository
+  status          Show one run
+  delete          Permanently delete one terminal run
+  approve         Grant a pending approval
+  reject          Reject a pending approval
+  pause           Pause scheduling for a run
+  resume          Resume a paused run
+  cancel          Cancel a run
+  interrupt       Interrupt an active invocation
+  retry           Retry an interrupted invocation
+  skip            Skip a policy-eligible invocation
+
+Planning:
+  ticket          Create, inspect, move, sync, and migrate tickets
+
+Host:
+  serve           Serve the current repository dashboard and API
+  diagnostics     Report available agent harnesses
+
+Global options:
+  -h, --help      Show help
+  -v, --version   Show version
+
+Run "kouro help <command>" for command-specific usage.
+
+ADW templates: ${ADW_TEMPLATES.join(", ")}`;
+var COMMAND_HELP = {
+  create: `Usage:
+  kouro create adw <name> [--template <template>] [--output <directory>]
+
+Creates .kouro/<name> by default.
+Templates: ${ADW_TEMPLATES.join(", ")}`,
+  run: `Usage:
+  kouro run <adw> --repo <path> (--ticket <provider:reference> | --task <text> | --task-file <path>) [--harness <id|node=id>]...
+
+Examples:
+  kouro run feature-development --repo . --task "Add CSV export" --harness codex
+  kouro run feature-development --repo . --ticket kouro:<ticket-id> --harness plan=codex`,
+  runs: `Usage:
+  kouro runs [--repo <path> | --all-repos]
+
+Lists the current repository by default.`,
+  status: `Usage:
+  kouro status <run-id> [--repo <path> | --all-repos]`,
+  delete: `Usage:
+  kouro delete <run-id> --yes [--repo <path> | --all-repos]
+
+Permanently removes a terminal run, its Kouro worktree, artifacts, events, and projections.
+The source repository and delivery branch are preserved.`,
+  approve: `Usage:
+  kouro approve <run-id> <invocation> --reason <text>`,
+  reject: `Usage:
+  kouro reject <run-id> <invocation> --reason <text>`,
+  pause: `Usage:
+  kouro pause|resume|cancel <run-id> [--reason <text>]`,
+  resume: `Usage:
+  kouro pause|resume|cancel <run-id> [--reason <text>]`,
+  cancel: `Usage:
+  kouro pause|resume|cancel <run-id> [--reason <text>]`,
+  interrupt: `Usage:
+  kouro interrupt|retry|skip <run-id> <invocation> --reason <text>`,
+  retry: `Usage:
+  kouro interrupt|retry|skip <run-id> <invocation> --reason <text>`,
+  skip: `Usage:
+  kouro interrupt|retry|skip <run-id> <invocation> --reason <text>`,
+  ticket: `Usage:
+  kouro ticket create --project <id> --title <text> (--description <text> | --description-file <path>) [options]
+  kouro ticket list --project <id>
+  kouro ticket show <ticket-id>
+  kouro ticket update <ticket-id> --revision <number> [options]
+  kouro ticket move <ticket-id> --revision <number> --status <status>
+  kouro ticket close|cancel|reopen <ticket-id> --revision <number>
+  kouro ticket comment <ticket-id> --body <text> [--author <name>]
+  kouro ticket providers
+  kouro ticket import <github|forgejo> --project <id>
+  kouro ticket pull|push <ticket-id>
+  kouro ticket migrate <ticket-id> --to <github|forgejo> --project <id>`,
+  serve: `Usage:
+  kouro serve [--port <number>] [--repo <path> | --all-repos]
+
+Serves only the current repository by default. It can monitor a CLI-owned run
+without interrupting it and takes over execution when the worker lease becomes available.`,
+  diagnostics: `Usage:
+  kouro diagnostics`
+};
 function option2(args, name) {
   const index = args.indexOf(name);
   return index < 0 ? undefined : args[index + 1];
@@ -28239,8 +28737,18 @@ async function main() {
 `);
     return 0;
   }
+  if (command === "help") {
+    process.stdout.write(`${COMMAND_HELP[args[1] ?? ""] ?? HELP}
+`);
+    return 0;
+  }
   if (command === "--version" || command === "-v") {
     process.stdout.write(`${VERSION}
+`);
+    return 0;
+  }
+  if (args.includes("--help") || args.includes("-h")) {
+    process.stdout.write(`${COMMAND_HELP[command] ?? HELP}
 `);
     return 0;
   }
@@ -28255,14 +28763,14 @@ async function main() {
     const result = await createAdw({
       name: required2(args[2], "name"),
       template,
-      outputDirectory: resolve9(option2(args, "--output") ?? resolve9(process.cwd(), ".kairo"))
+      outputDirectory: resolve10(option2(args, "--output") ?? resolve10(process.cwd(), ".kouro"))
     });
     if (result.isErr())
       throw new Error(`${result.error.code}: ${result.error.message}`);
     print(result.unwrap());
     return 0;
   }
-  const host = new LocalKairoHost;
+  const host = new LocalKouroHost;
   const initialized = await host.initialize();
   if (initialized.isErr())
     throw new Error(`${initialized.error.code}: ${initialized.error.message}`);
@@ -28279,7 +28787,7 @@ async function main() {
       if (taskFile && inlineTask) {
         throw new Error("Use exactly one of --task and --task-file");
       }
-      const task = taskFile ? await readFile8(resolve9(taskFile), "utf8") : inlineTask;
+      const task = taskFile ? await readFile9(resolve10(taskFile), "utf8") : inlineTask;
       const ticket = option2(args, "--ticket");
       const result = await host.create({
         adw: required2(args[1], "adw"),
@@ -28296,57 +28804,74 @@ async function main() {
       return 0;
     }
     if (command === "runs") {
-      const result = listRuns({ runs: host.store, coordinator: host.coordinator() });
+      const runs = args.includes("--all-repos") ? host.store : host.runStoreForRepository(resolve10(option2(args, "--repo") ?? process.cwd()));
+      const result = listRuns({ runs, coordinator: host.coordinator() });
       if (result.isErr())
         throw new Error(result.error.message);
       print(result.unwrap());
       return 0;
     }
     if (command === "status") {
-      const result = getRun({ runs: host.store, coordinator: host.coordinator() }, required2(args[1], "run-id"));
+      const runs = args.includes("--all-repos") ? host.store : host.runStoreForRepository(resolve10(option2(args, "--repo") ?? process.cwd()));
+      const result = getRun({ runs, coordinator: host.coordinator() }, required2(args[1], "run-id"));
       if (result.isErr())
         throw new Error(result.error.message);
       print(result.unwrap());
       return 0;
     }
+    if (command === "delete") {
+      if (!args.includes("--yes")) {
+        throw new Error("Run deletion is permanent; pass --yes to confirm");
+      }
+      const runId = required2(args[1], "run-id");
+      const runs = args.includes("--all-repos") ? host.store : host.runStoreForRepository(resolve10(option2(args, "--repo") ?? process.cwd()));
+      const visible = runs.loadRun(runId);
+      if (visible.isErr())
+        throw new Error(`Run ${runId} was not found in this repository`);
+      const deleted = await host.delete(runId);
+      if (deleted.isErr())
+        throw new Error(`${deleted.error.code}: ${deleted.error.message}`);
+      print(deleted.unwrap());
+      return 0;
+    }
     if (command === "approve" || command === "reject") {
-      const runId2 = required2(args[1], "run-id");
+      const runId = required2(args[1], "run-id");
       const invocation = Number(required2(args[2], "invocation"));
       const reason = required2(option2(args, "--reason"), "--reason");
-      const loaded = host.store.loadRun(runId2);
+      const loaded = host.store.loadRun(runId);
       if (loaded.isErr())
-        throw new Error(`Run ${runId2} was not found`);
+        throw new Error(`Run ${runId} was not found`);
       const binding = loaded.unwrap().state.invocations.find(({ sequence }) => sequence === invocation)?.approval;
       if (!binding)
         throw new Error(`Invocation ${invocation} is not awaiting approval`);
-      const decided = host.coordinatorFor(loaded.unwrap()).decideApproval(runId2, binding, command === "approve" ? "grant" : "reject", actor, reason, `${command}:${randomUUID6()}`);
+      const decided = host.coordinatorFor(loaded.unwrap()).decideApproval(runId, binding, command === "approve" ? "grant" : "reject", actor, reason, `${command}:${randomUUID7()}`);
       if (decided.isErr())
         throw new Error(`${command} failed`);
-      const stable = await host.worker.runUntilStable(runId2);
-      print({ runId: runId2, status: stable.state.status });
+      const stable = await host.worker.runUntilStable(runId);
+      print({ runId, status: stable.state.status });
       return 0;
     }
     if (["pause", "resume", "cancel"].includes(command)) {
-      const runId2 = required2(args[1], "run-id");
+      const runId = required2(args[1], "run-id");
       const coordinator = host.coordinator();
-      const result = command === "pause" ? coordinator.pauseRun(runId2, actor, `pause:${randomUUID6()}`) : command === "resume" ? coordinator.resumeRun(runId2, actor, `resume:${randomUUID6()}`) : coordinator.cancelRun(runId2, actor, option2(args, "--reason") ?? "cancelled by operator", `cancel:${randomUUID6()}`);
+      const result = command === "pause" ? coordinator.pauseRun(runId, actor, `pause:${randomUUID7()}`) : command === "resume" ? coordinator.resumeRun(runId, actor, `resume:${randomUUID7()}`) : coordinator.cancelRun(runId, actor, option2(args, "--reason") ?? "cancelled by operator", `cancel:${randomUUID7()}`);
       if (result.isErr())
         throw new Error(`${command} failed`);
-      const stable = command === "resume" ? await host.worker.runUntilStable(runId2) : result.unwrap();
-      print({ runId: runId2, status: stable.state.status });
+      const stable = command === "resume" ? await host.worker.runUntilStable(runId) : result.unwrap();
+      print({ runId, status: stable.state.status });
       return 0;
     }
     if (["interrupt", "retry", "skip"].includes(command)) {
-      const runId2 = required2(args[1], "run-id");
+      const runId = required2(args[1], "run-id");
       const invocation = Number(required2(args[2], "invocation"));
       const reason = required2(option2(args, "--reason"), "--reason");
       const coordinator = host.coordinator();
-      const key = `${command}:${randomUUID6()}`;
-      const result = command === "interrupt" ? coordinator.interruptInvocation(runId2, invocation, actor, reason, key) : command === "retry" ? coordinator.retryInvocation(runId2, invocation, actor, reason, key) : coordinator.skipInvocation(runId2, invocation, actor, reason, key);
+      const key = `${command}:${randomUUID7()}`;
+      const result = command === "interrupt" ? coordinator.interruptInvocation(runId, invocation, actor, reason, key) : command === "retry" ? coordinator.retryInvocation(runId, invocation, actor, reason, key) : coordinator.skipInvocation(runId, invocation, actor, reason, key);
       if (result.isErr())
         throw new Error(`${command} failed`);
-      const stable = command === "retry" || command === "skip" ? await host.worker.runUntilStable(runId2) : result.unwrap();
-      print({ runId: runId2, status: stable.state.status });
+      const stable = command === "retry" || command === "skip" ? await host.worker.runUntilStable(runId) : result.unwrap();
+      print({ runId, status: stable.state.status });
       return 0;
     }
     if (command === "diagnostics") {
@@ -28355,10 +28880,11 @@ async function main() {
     }
     if (command === "serve") {
       const port = Number(option2(args, "--port") ?? 4317);
-      const served = await host.serve(port);
+      const repositoryPath = args.includes("--all-repos") ? undefined : resolve10(option2(args, "--repo") ?? process.cwd());
+      const served = await host.serve(port, repositoryPath);
       if (served.isErr())
         throw new Error(served.error.message);
-      process.stdout.write(`Kairo listening on http://localhost:${port}
+      process.stdout.write(`Kouro listening on http://localhost:${port} (${repositoryPath ?? "all repositories"})
 `);
       await new Promise((resolveSignal) => {
         const stop = () => {
@@ -28378,7 +28904,7 @@ async function main() {
 try {
   process.exitCode = await main();
 } catch (cause) {
-  process.stderr.write(`${cause instanceof Error ? cause.message : "Kairo failed"}
+  process.stderr.write(`${cause instanceof Error ? cause.message : "Kouro failed"}
 `);
   process.exitCode = 1;
 }

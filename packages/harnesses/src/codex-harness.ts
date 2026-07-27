@@ -9,7 +9,7 @@ import type {
   HarnessError,
   HarnessExecution,
   HarnessExecutionRequest,
-} from '@kairo/executors';
+} from '@kouro/executors';
 import { invalidResponse, processFailure } from './errors.ts';
 import { BunProcessRunner, type ProcessOutput, type ProcessRunner } from './process-runner.ts';
 
@@ -77,9 +77,9 @@ async function runWithSchema(
   args: readonly string[],
 ): Promise<Result<ProcessOutput, HarnessError>> {
   if (!request.outputSchema) {
-    return runner.run('codex', args, request.workingDirectory);
+    return runner.run('codex', args, request.workingDirectory, request.onTranscriptChunk);
   }
-  const directory = await mkdtemp(join(tmpdir(), 'kairo-codex-schema-'));
+  const directory = await mkdtemp(join(tmpdir(), 'kouro-codex-schema-'));
   const schemaPath = join(directory, 'output.schema.json');
   try {
     await writeFile(schemaPath, JSON.stringify(request.outputSchema), 'utf8');
@@ -87,6 +87,7 @@ async function runWithSchema(
       'codex',
       [...args.slice(0, -1), '--output-schema', schemaPath, args.at(-1) ?? ''],
       request.workingDirectory,
+      request.onTranscriptChunk,
     );
   } finally {
     await rm(directory, { recursive: true, force: true });

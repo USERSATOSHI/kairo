@@ -1,6 +1,7 @@
 export * from './claude-code-harness.ts';
 export * from './codex-harness.ts';
 export * from './local-artifact-writer.ts';
+export * from './local-invocation-activity-store.ts';
 export * from './opencode-harness.ts';
 export * from './pi-harness.ts';
 export * from './process-runner.ts';

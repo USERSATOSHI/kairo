@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 
 import { describe, expect, test } from 'bun:test';
 
-import { compileAdwPackage } from '@kairo/adw';
+import { compileAdwPackage } from '@kouro/adw';
 import {
   AgentExecutor,
   BunCommandRunner,
@@ -18,15 +18,15 @@ import {
   type HarnessError,
   type HarnessExecution,
   type HarnessExecutionRequest,
-} from '@kairo/executors';
+} from '@kouro/executors';
 import {
   HarnessRegistry,
   LocalArtifactWriter,
   ScriptedFakeHarness,
   type ScriptedHarnessResult,
-} from '@kairo/harnesses';
-import { SqliteEventStore } from '@kairo/persistence-sqlite';
-import { WorktreeSandboxProvider } from '@kairo/sandbox-worktree';
+} from '@kouro/harnesses';
+import { SqliteEventStore } from '@kouro/persistence-sqlite';
+import { WorktreeSandboxProvider } from '@kouro/sandbox-worktree';
 import { ok, type Result } from '@usersatoshi/results';
 
 const fixedTime = '2026-07-26T00:00:00.000Z';
@@ -56,8 +56,8 @@ async function run(command: readonly string[], workingDirectory: string): Promis
 
 async function createFixtureRepository(path: string): Promise<void> {
   await run(['git', 'init', '--initial-branch=main'], path);
-  await run(['git', 'config', 'user.name', 'Kairo Test'], path);
-  await run(['git', 'config', 'user.email', 'kairo@example.test'], path);
+  await run(['git', 'config', 'user.name', 'Kouro Test'], path);
+  await run(['git', 'config', 'user.email', 'kouro@example.test'], path);
   await writeFile(
     resolve(path, 'package.json'),
     `${JSON.stringify(
@@ -81,7 +81,7 @@ async function createFixtureRepository(path: string): Promise<void> {
   );
   await writeFile(
     resolve(path, 'feature.test.ts'),
-    "import {expect, test} from 'bun:test';\nimport {greeting} from './feature.ts';\n\ntest('greets Kairo', () => {\n  expect(greeting()).toBe('hello Kairo');\n});\n",
+    "import {expect, test} from 'bun:test';\nimport {greeting} from './feature.ts';\n\ntest('greets Kouro', () => {\n  expect(greeting()).toBe('hello Kouro');\n});\n",
   );
   await run(['git', 'add', '--all'], path);
   await run(['git', 'commit', '-m', 'Initial fixture'], path);
@@ -129,12 +129,12 @@ class FeatureHarness implements AgentHarness {
         } else if (this.implementationCount === 2) {
           await writeFile(
             resolve(request.workingDirectory, 'feature.ts'),
-            "export function greeting(): string {\n  return 'hello Kairo';\n}\n",
+            "export function greeting(): string {\n  return 'hello Kouro';\n}\n",
           );
         } else {
           await writeFile(
             resolve(request.workingDirectory, 'README.md'),
-            '# Greeting\n\nReturns the Kairo greeting.\n',
+            '# Greeting\n\nReturns the Kouro greeting.\n',
           );
         }
         return ok({
@@ -255,7 +255,7 @@ function harnessResult(value: HarnessExecution): ScriptedHarnessResult {
 
 describe('M5 feature-development vertical slice', () => {
   test('a restarted run produces an artifact-bound merge-ready branch', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'kairo-m5-'));
+    const root = mkdtempSync(join(tmpdir(), 'kouro-m5-'));
     const repositoryPath = resolve(root, 'repository');
     const managementPath = resolve(root, 'management');
     const databasePath = resolve(root, 'runs.sqlite');
@@ -465,12 +465,12 @@ describe('M5 feature-development vertical slice', () => {
           expectedHead: prepared.head,
           expectedTree: prepared.tree,
           message: 'Implement fixture greeting',
-          identity: { name: 'Kairo', email: 'kairo@example.test' },
+          identity: { name: 'Kouro', email: 'kouro@example.test' },
           timestamp: fixedTime,
         })
       ).unwrap();
-      await run(['git', 'branch', 'kairo/m5-run', committed.commit], repositoryPath);
-      expect(await run(['git', 'rev-parse', 'kairo/m5-run'], repositoryPath)).toBe(
+      await run(['git', 'branch', 'kouro/m5-run', committed.commit], repositoryPath);
+      expect(await run(['git', 'rev-parse', 'kouro/m5-run'], repositoryPath)).toBe(
         committed.commit,
       );
       expect(
@@ -486,7 +486,7 @@ describe('M5 feature-development vertical slice', () => {
   });
 
   test('validation and review feedback loops stop at exactly their declared bounds', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'kairo-m5-bounds-'));
+    const root = mkdtempSync(join(tmpdir(), 'kouro-m5-bounds-'));
     try {
       const change = (summary: string): ScriptedHarnessResult =>
         harnessResult({

@@ -1,4 +1,4 @@
-import type { RuntimeError } from '@kairo/runtime';
+import type { RuntimeError } from '@kouro/runtime';
 import { err } from '@usersatoshi/results';
 
 import type { AgentExecutorError } from './agent-executor.ts';

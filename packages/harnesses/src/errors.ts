@@ -1,5 +1,5 @@
-import type { HarnessError } from '@kairo/executors';
-import { HarnessErrorKind } from '@kairo/executors';
+import type { HarnessError } from '@kouro/executors';
+import { HarnessErrorKind } from '@kouro/executors';
 
 export function processFailure(message: string): HarnessError {
   return {

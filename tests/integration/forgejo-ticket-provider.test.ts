@@ -10,8 +10,8 @@ import {
   normalizeForgejoIssueWebhook,
   type TicketFetch,
   validateForgejoWebhookSignature,
-} from '@kairo/ticket-provider-forgejo';
-import { SqliteTicketSyncStore, TicketProviderErrorKind } from '@kairo/tickets';
+} from '@kouro/ticket-provider-forgejo';
+import { SqliteTicketSyncStore, TicketProviderErrorKind } from '@kouro/tickets';
 
 interface FakeForgejo {
   readonly fetch: TicketFetch;
@@ -31,7 +31,7 @@ function issue(
     title: 'Forgejo ticket',
     body: description,
     state,
-    html_url: 'https://forgejo.test/acme/kairo/issues/7',
+    html_url: 'https://forgejo.test/acme/kouro/issues/7',
     updated_at: updatedAt,
     labels: [{ id: 1, name: 'ticket' }],
     assignees: [{ login: 'satoshi' }],
@@ -88,7 +88,7 @@ function fakeForgejo(): FakeForgejo {
         return Response.json({
           id: 55,
           body: isRecord(body) && typeof body.body === 'string' ? body.body : '',
-          user: { login: 'kairo' },
+          user: { login: 'kouro' },
           created_at: '2026-07-26T15:00:00Z',
         });
       }
@@ -116,7 +116,7 @@ function provider(
   return new ForgejoTicketProvider({
     instanceUrl: options.instanceUrl ?? 'https://forgejo.test/',
     owner: 'acme',
-    repository: 'kairo',
+    repository: 'kouro',
     projectId: 'project-1',
     token: 'secret-reference-value',
     fetch: server.fetch,
@@ -137,12 +137,12 @@ describe('T4 Forgejo ticket provider', () => {
       labels: ['ticket'],
       assignees: ['satoshi'],
       milestone: 'T4',
-      marker: 'kairo-ticket:ticket-1',
+      marker: 'kouro-ticket:ticket-1',
     });
     expect(created.unwrap()).toMatchObject({
       title: 'Forgejo ticket',
       description: 'Provider-owned description',
-      marker: 'kairo-ticket:ticket-1',
+      marker: 'kouro-ticket:ticket-1',
       labels: ['ticket'],
       assignees: ['satoshi'],
       milestone: 'T4',
@@ -164,7 +164,7 @@ describe('T4 Forgejo ticket provider', () => {
     expect(
       (
         await forgejo.addComment(binding, {
-          author: 'kairo',
+          author: 'kouro',
           body: 'Run started',
         })
       ).unwrap(),
@@ -183,7 +183,7 @@ describe('T4 Forgejo ticket provider', () => {
     ).toBe(true);
     expect(
       server.requests.some(
-        ({ body }) => body !== undefined && JSON.stringify(body).includes('kairo-ticket'),
+        ({ body }) => body !== undefined && JSON.stringify(body).includes('kouro-ticket'),
       ),
     ).toBe(true);
     expect(
@@ -194,8 +194,8 @@ describe('T4 Forgejo ticket provider', () => {
   });
 
   test('detects and durably records per-instance version and capabilities', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'kairo-forgejo-metadata-'));
-    const path = join(directory, 'kairo.sqlite');
+    const directory = mkdtempSync(join(tmpdir(), 'kouro-forgejo-metadata-'));
+    const path = join(directory, 'kouro.sqlite');
     const metadataStore = new SqliteTicketSyncStore(path);
     try {
       expect(metadataStore.initialize().isOk()).toBe(true);
@@ -246,9 +246,9 @@ describe('T4 Forgejo ticket provider', () => {
       kind: 'forgejo' as const,
       instanceUrl: 'https://forgejo.test',
       owner: 'acme',
-      repository: 'kairo',
+      repository: 'kouro',
       issueNumber: 7,
-      externalUrl: 'https://forgejo.test/acme/kairo/issues/7',
+      externalUrl: 'https://forgejo.test/acme/kouro/issues/7',
     };
     const stale = await forgejo.update(binding, {
       title: 'stale',
@@ -281,7 +281,7 @@ describe('T4 Forgejo ticket provider', () => {
         JSON.parse(payload),
         'https://forgejo.test/',
         'acme',
-        'kairo',
+        'kouro',
       ).unwrap(),
     ).toMatchObject({
       binding: {

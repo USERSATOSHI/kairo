@@ -1,4 +1,4 @@
-# Kairo M1 Runtime Model
+# Kouro M1 Runtime Model
 
 M1 proves deterministic orchestration without performing external effects.
 

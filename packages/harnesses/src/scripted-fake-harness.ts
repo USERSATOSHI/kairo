@@ -5,7 +5,7 @@ import type {
   HarnessError,
   HarnessExecution,
   HarnessExecutionRequest,
-} from '@kairo/executors';
+} from '@kouro/executors';
 
 export type ScriptedHarnessResult = Result<HarnessExecution, HarnessError>;
 

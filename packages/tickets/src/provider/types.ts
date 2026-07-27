@@ -62,7 +62,7 @@ export interface TicketProviderCapabilities {
 export interface ProviderCreateTicketInput extends CreateTicketInput {
   /**
    * Durable identity embedded in provider-visible content so an interrupted
-   * create can be rediscovered before Kairo retries it.
+   * create can be rediscovered before Kouro retries it.
    */
   readonly marker?: string;
   readonly milestone?: string;

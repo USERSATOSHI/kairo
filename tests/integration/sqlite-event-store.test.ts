@@ -4,16 +4,16 @@ import { join } from 'node:path';
 
 import { describe, expect, test } from 'bun:test';
 
-import { compileWorkflow } from '@kairo/adw';
-import type { CompiledWorkflowArtifact, JsonValue, WorkflowSourceBundle } from '@kairo/domain';
+import { compileWorkflow } from '@kouro/adw';
+import type { CompiledWorkflowArtifact, JsonValue, WorkflowSourceBundle } from '@kouro/domain';
 import {
   BunCommandRunner,
   type CommandExecution,
   type CommandRunner,
   type CommandRunnerError,
   RunCoordinator,
-} from '@kairo/executors';
-import { SqliteEventStore } from '@kairo/persistence-sqlite';
+} from '@kouro/executors';
+import { SqliteEventStore } from '@kouro/persistence-sqlite';
 import { ok, type Result } from '@usersatoshi/results';
 import { runStoreContract } from '../contracts/run-store.contract.ts';
 
@@ -95,7 +95,7 @@ function execution(outcome: string, output: JsonValue = {}): CommandExecution {
 }
 
 function databasePath(): { readonly directory: string; readonly path: string } {
-  const directory = mkdtempSync(join(tmpdir(), 'kairo-m2-'));
+  const directory = mkdtempSync(join(tmpdir(), 'kouro-m2-'));
   return {
     directory,
     path: join(directory, 'runs.sqlite'),
@@ -126,12 +126,12 @@ runStoreContract('SqliteEventStore', () => {
 describe('M2 durable command and approval runtime', () => {
   test('Bun command runner records the process exit outcome', async () => {
     const runner = new BunCommandRunner(process.cwd());
-    const succeeded = await runner.execute("printf 'kairo'");
+    const succeeded = await runner.execute("printf 'kouro'");
     expect(succeeded.unwrap()).toEqual({
       outcome: 'success',
       output: {
         exitCode: 0,
-        stdout: 'kairo',
+        stdout: 'kouro',
         stderr: '',
       },
     });

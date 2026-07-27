@@ -1,6 +1,6 @@
-# `@kairo/harnesses` — Agent Harness and Artifact Writer Implementations
+# `@kouro/harnesses` — Agent Harness and Artifact Writer Implementations
 
-Infrastructure implementations of the normalized agent-harness and artifact writer ports declared in `@kairo/executors`. Bridges Kairo's workflow orchestration with real-world AI coding agents (Claude Code, OpenAI Codex CLI, OpenCode, and Pi) and filesystem artifact storage.
+Infrastructure implementations of the normalized agent-harness and artifact writer ports declared in `@kouro/executors`. Bridges Kouro's workflow orchestration with real-world AI coding agents (Claude Code, OpenAI Codex CLI, OpenCode, and Pi) and filesystem artifact storage.
 
 ## Architecture
 
@@ -9,7 +9,7 @@ Application layer (executors)
     ↓ declares port interfaces
 AgentHarness | AgentHarnessRegistry | ArtifactWriter
     ↓
-@kairo/harnesses (infrastructure implementations)
+@kouro/harnesses (infrastructure implementations)
   ├── ClaudeCodeHarness — wraps the `claude` CLI
   ├── CodexHarness — wraps the `codex` CLI
   ├── OpenCodeHarness — wraps the `opencode` CLI
@@ -17,6 +17,7 @@ AgentHarness | AgentHarnessRegistry | ArtifactWriter
   ├── ScriptedFakeHarness — test double for scripted results
   ├── HarnessRegistry — in-memory harness registry
   ├── LocalArtifactWriter — filesystem artifact persistence
+  ├── LocalInvocationActivityStore — cross-process best-effort live transcript observation
   └── BunProcessRunner — subprocess execution via Bun.spawn
 ```
 
@@ -27,7 +28,7 @@ AgentHarness | AgentHarnessRegistry | ArtifactWriter
 Wraps Anthropic's `claude` CLI tool (Claude Code):
 
 ```typescript
-import { ClaudeCodeHarness } from '@kairo/harnesses';
+import { ClaudeCodeHarness } from '@kouro/harnesses';
 
 const harness = new ClaudeCodeHarness();
 // or with a custom process runner:
@@ -46,7 +47,7 @@ const harness = new ClaudeCodeHarness(new BunProcessRunner());
 Wraps OpenAI's `codex` CLI tool (Codex CLI):
 
 ```typescript
-import { CodexHarness } from '@kairo/harnesses';
+import { CodexHarness } from '@kouro/harnesses';
 
 const harness = new CodexHarness();
 ```
@@ -58,7 +59,7 @@ const harness = new CodexHarness();
 - Parses output as JSONL, looking for `thread.started` (to capture `thread_id` as resume token) and `item.completed` with `item.type === 'agent_message'` (to capture final text)
 - Maps capabilities to sandbox mode: `workspace-write` or `read-only`
 
-Kairo may call `resume()` for a later graph invocation of the same agent node,
+Kouro may call `resume()` for a later graph invocation of the same agent node,
 not only for interruption recovery. The durable session token retains the
 agent's engineering context; `clearContext: true` on the node forces
 `execute()` instead.
@@ -68,7 +69,7 @@ agent's engineering context; `clearContext: true` on the node forces
 Runs `opencode run --format json --pure`, captures the session ID and final text
 event, and resumes with `--session <token>`. Read-only capabilities select
 OpenCode's `plan` agent; write or command capabilities select `build`. Schemas
-are included in the normalized prompt and independently validated by Kairo.
+are included in the normalized prompt and independently validated by Kouro.
 
 ### PiHarness
 
@@ -77,14 +78,14 @@ and project extensions and optional resources disabled. It resumes with
 `--session <token>`. Pi's built-in tool allowlist is derived from declared
 capabilities: read tools are always present, edit/write require a write
 capability, and Bash requires an execute capability. Schemas are included in
-the normalized prompt and independently validated by Kairo.
+the normalized prompt and independently validated by Kouro.
 
 ### ScriptedFakeHarness
 
 Test double that returns pre-scripted results:
 
 ```typescript
-import { ScriptedFakeHarness, processFailure } from '@kairo/harnesses';
+import { ScriptedFakeHarness, processFailure } from '@kouro/harnesses';
 import { err } from '@usersatoshi/results';
 
 const fake = new ScriptedFakeHarness('test-harness', [
@@ -110,7 +111,7 @@ import {
   HarnessRegistry,
   OpenCodeHarness,
   PiHarness,
-} from '@kairo/harnesses';
+} from '@kouro/harnesses';
 
 const registry = new HarnessRegistry([
   new ClaudeCodeHarness(),
@@ -132,7 +133,7 @@ Validates uniqueness and non-empty IDs at construction time. Returns `HarnessErr
 Persists artifacts to the local filesystem with checksum verification:
 
 ```typescript
-import { LocalArtifactWriter } from '@kairo/harnesses';
+import { LocalArtifactWriter } from '@kouro/harnesses';
 
 const writer = new LocalArtifactWriter('/path/to/artifacts');
 
@@ -170,19 +171,23 @@ const result = await writer.write({
 Port interface and Bun implementation for subprocess execution:
 
 ```typescript
-import { BunProcessRunner } from '@kairo/harnesses';
+import { BunProcessRunner } from '@kouro/harnesses';
 
 const runner = new BunProcessRunner();
 const result = await runner.run('claude', ['-p', 'hello'], '/tmp');
 // Returns { exitCode: 0, stdout: '...', stderr: '' }
 ```
 
+The runner can also copy decoded stdout chunks to an optional observer while
+still returning the complete stdout transcript. The executor isolates observer
+failures so presentation cannot alter attempt execution.
+
 ## Execution Flow
 
 The typical flow through the harness system:
 
 ```
-AgentExecutor.execute()  (from @kairo/executors)
+AgentExecutor.execute()  (from @kouro/executors)
   │
   ├── HarnessRegistry.get(harnessId) → AgentHarness
   │
@@ -232,6 +237,6 @@ omitted, the adapter leaves model selection to the CLI.
 
 | Package | Purpose |
 |---------|---------|
-| `@kairo/executors` | Port interfaces (`AgentHarness`, `HarnessRegistry`, etc.) |
-| `@kairo/domain` | `ArtifactReference` type |
+| `@kouro/executors` | Port interfaces (`AgentHarness`, `HarnessRegistry`, etc.) |
+| `@kouro/domain` | `ArtifactReference` type |
 | `@usersatoshi/results` | `Result<T, E>` type |

@@ -1,5 +1,5 @@
 {
-  "name": "@kairo/harnesses",
+  "name": "@kouro/harnesses",
   "version": "0.1.0",
   "private": true,
   "license": "Apache-2.0",
@@ -9,8 +9,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@kairo/domain": "0.1.0",
-    "@kairo/executors": "0.1.0",
+    "@kouro/domain": "0.1.0",
+    "@kouro/executors": "0.1.0",
     "@usersatoshi/results": "^1.0.0"
   }
 }

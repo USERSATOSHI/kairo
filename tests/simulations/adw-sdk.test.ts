@@ -8,7 +8,7 @@ import {
   WorkflowAuthoringError,
   WorkflowAuthoringErrorKind,
   WorkflowBuilder,
-} from '@kairo/adw';
+} from '@kouro/adw';
 
 function expectAuthoringError(operation: () => unknown, kind: WorkflowAuthoringErrorKind): void {
   try {

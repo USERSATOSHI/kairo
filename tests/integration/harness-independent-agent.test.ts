@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 
-import { compileWorkflow } from '@kairo/adw';
-import type { CompiledWorkflowArtifact, WorkflowSourceBundle } from '@kairo/domain';
+import { compileWorkflow } from '@kouro/adw';
+import type { CompiledWorkflowArtifact, WorkflowSourceBundle } from '@kouro/domain';
 import {
   AgentExecutor,
   ExecutorErrorKind,
@@ -16,8 +16,9 @@ import {
   type AgentHarness,
   type CommandRunner,
   type CommandRunnerError,
-} from '@kairo/executors';
+} from '@kouro/executors';
 import {
+  BunProcessRunner,
   ClaudeCodeHarness,
   CodexHarness,
   HarnessRegistry,
@@ -27,8 +28,8 @@ import {
   ScriptedFakeHarness,
   type ProcessOutput,
   type ProcessRunner,
-} from '@kairo/harnesses';
-import { SqliteEventStore } from '@kairo/persistence-sqlite';
+} from '@kouro/harnesses';
+import { SqliteEventStore } from '@kouro/persistence-sqlite';
 import { err, ok, type Result } from '@usersatoshi/results';
 
 class UnusedCommandRunner implements CommandRunner {
@@ -222,7 +223,7 @@ async function runAdapter(
   harness: AgentHarness,
   runId: string,
 ): Promise<ReturnType<SqliteEventStore['loadRun']>> {
-  const paths = location(`kairo-m4-${harness.id}-`);
+  const paths = location(`kouro-m4-${harness.id}-`);
   const store = storeAt(paths.database);
   try {
     const executor = new AgentExecutor(
@@ -256,9 +257,28 @@ async function runAdapter(
 }
 
 describe('M4 harness-independent agent execution', () => {
+  test('the Bun process runner observes stdout while preserving the full transcript', async () => {
+    const chunks: string[] = [];
+    const runner = new BunProcessRunner();
+    const result = await runner.run(
+      process.execPath,
+      [
+        '-e',
+        "process.stdout.write('first\\n'); setTimeout(() => process.stdout.write('second\\n'), 25)",
+      ],
+      process.cwd(),
+      async (chunk) => {
+        chunks.push(chunk);
+      },
+    );
+
+    expect(result.unwrap().stdout).toBe('first\nsecond\n');
+    expect(chunks.join('')).toBe('first\nsecond\n');
+  });
+
   test('reuses agent context across graph invocations unless clearContext is set', async () => {
     for (const clearContext of [false, true]) {
-      const paths = location(`kairo-agent-context-${clearContext}-`);
+      const paths = location(`kouro-agent-context-${clearContext}-`);
       let store = storeAt(paths.database);
       try {
         const harness = new ScriptedFakeHarness('context-fake', [
@@ -321,7 +341,7 @@ describe('M4 harness-independent agent execution', () => {
   });
 
   test('artifact publication is idempotent and refuses conflicting content', async () => {
-    const paths = location('kairo-m4-artifact-');
+    const paths = location('kouro-m4-artifact-');
     try {
       const writer = new LocalArtifactWriter(paths.artifacts);
       const request = {
@@ -343,7 +363,7 @@ describe('M4 harness-independent agent execution', () => {
   });
 
   test('SQLite initialization adds M4 attempt projection columns to an M2 database', () => {
-    const paths = location('kairo-m4-migration-');
+    const paths = location('kouro-m4-migration-');
     const legacy = new Database(paths.database, { create: true });
     legacy.exec(`
       CREATE TABLE attempt_projections (
@@ -594,7 +614,7 @@ describe('M4 harness-independent agent execution', () => {
   });
 
   test('workflow pins override run routing and unpinned agents use node routes', async () => {
-    const paths = location('kairo-agent-routing-');
+    const paths = location('kouro-agent-routing-');
     const store = storeAt(paths.database);
     try {
       const planner = new ScriptedFakeHarness('claude-code', [
@@ -662,7 +682,7 @@ describe('M4 harness-independent agent execution', () => {
   });
 
   test('replay rejects a model that differs from the compiled harness selection', () => {
-    const paths = location('kairo-agent-model-replay-');
+    const paths = location('kouro-agent-model-replay-');
     const store = storeAt(paths.database);
     try {
       const coordinator = new RunCoordinator(store, new UnusedCommandRunner());
@@ -708,7 +728,7 @@ describe('M4 harness-independent agent execution', () => {
   });
 
   test('invalid structured output is persisted as a typed node failure', async () => {
-    const paths = location('kairo-m4-invalid-');
+    const paths = location('kouro-m4-invalid-');
     const store = storeAt(paths.database);
     try {
       const harness = new ScriptedFakeHarness('fake', [
@@ -748,7 +768,7 @@ describe('M4 harness-independent agent execution', () => {
   });
 
   test('fallback creates another attempt in the same invocation', async () => {
-    const paths = location('kairo-m4-fallback-');
+    const paths = location('kouro-m4-fallback-');
     const store = storeAt(paths.database);
     try {
       const primary = new ScriptedFakeHarness('primary', [
@@ -815,7 +835,7 @@ describe('M4 harness-independent agent execution', () => {
   });
 
   test('resume continues the interrupted harness session without a new attempt', async () => {
-    const paths = location('kairo-m4-resume-');
+    const paths = location('kouro-m4-resume-');
     const store = storeAt(paths.database);
     try {
       const harness = new ScriptedFakeHarness('fake', [

@@ -1,5 +1,5 @@
 {
-  "name": "kairo",
+  "name": "kouro",
   "version": "0.1.0",
   "description": "A programmable, deterministic execution engine for Agent Development Workflows",
   "keywords": [
@@ -8,17 +8,17 @@
     "cli",
     "workflow"
   ],
-  "homepage": "https://github.com/usersatoshi/kairo#readme",
+  "homepage": "https://github.com/usersatoshi/kouro#readme",
   "bugs": {
-    "url": "https://github.com/usersatoshi/kairo/issues"
+    "url": "https://github.com/usersatoshi/kouro/issues"
   },
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/usersatoshi/kairo.git"
+    "url": "git+https://github.com/usersatoshi/kouro.git"
   },
   "bin": {
-    "kairo": "packages/cli/dist/main.js"
+    "kouro": "packages/cli/dist/main.js"
   },
   "workspaces": [
     "packages/*"
@@ -35,7 +35,7 @@
   "scripts": {
     "build:cli": "bun build packages/cli/src/main.ts --target=bun --outfile packages/cli/dist/main.js",
     "create-package": "bun run scripts/create-package.ts",
-    "kairo": "bun run packages/cli/src/main.ts",
+    "kouro": "bun run packages/cli/src/main.ts",
     "format": "oxfmt --write \"**/*.{ts,json,jsonc}\"",
     "format:check": "oxfmt --check \"**/*.{ts,json,jsonc}\"",
     "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives .",
@@ -44,21 +44,21 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@kairo/adw": "0.1.0",
-    "@kairo/api": "0.1.0",
-    "@kairo/api-contracts": "0.1.0",
-    "@kairo/cli": "0.1.0",
-    "@kairo/domain": "0.1.0",
-    "@kairo/executors": "0.1.0",
-    "@kairo/harnesses": "0.1.0",
-    "@kairo/persistence-sqlite": "0.1.0",
-    "@kairo/runtime": "0.1.0",
-    "@kairo/sandbox-worktree": "0.1.0",
-    "@kairo/ticket-provider-forgejo": "0.1.0",
-    "@kairo/ticket-provider-github": "0.1.0",
-    "@kairo/ticket-provider-local": "0.1.0",
-    "@kairo/tickets": "0.1.0",
-    "@kairo/web": "0.1.0",
+    "@kouro/adw": "0.1.0",
+    "@kouro/api": "0.1.0",
+    "@kouro/api-contracts": "0.1.0",
+    "@kouro/cli": "0.1.0",
+    "@kouro/domain": "0.1.0",
+    "@kouro/executors": "0.1.0",
+    "@kouro/harnesses": "0.1.0",
+    "@kouro/persistence-sqlite": "0.1.0",
+    "@kouro/runtime": "0.1.0",
+    "@kouro/sandbox-worktree": "0.1.0",
+    "@kouro/ticket-provider-forgejo": "0.1.0",
+    "@kouro/ticket-provider-github": "0.1.0",
+    "@kouro/ticket-provider-local": "0.1.0",
+    "@kouro/tickets": "0.1.0",
+    "@kouro/web": "0.1.0",
     "@types/bun": "latest",
     "oxfmt": "^0.60.0",
     "oxlint": "^1.75.0",

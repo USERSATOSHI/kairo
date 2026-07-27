@@ -10,7 +10,7 @@ import type {
   SourceNodeDefinition,
   SourceTransition,
   WorkflowSourceBundle,
-} from '@kairo/domain';
+} from '@kouro/domain';
 import { CompilerErrorKind, toCompilerError, type CompilerError } from './errors.ts';
 import { canonicalJson, compareCanonicalText, sha256 } from './canonical.ts';
 

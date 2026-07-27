@@ -1,4 +1,4 @@
-import { type TicketProviderError } from '@kairo/tickets';
+import { type TicketProviderError } from '@kouro/tickets';
 import { err } from '@usersatoshi/results';
 
 export function forgejoError(

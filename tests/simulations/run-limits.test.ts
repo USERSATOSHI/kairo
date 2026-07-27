@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import type { RunEvent } from '@kairo/domain';
-import { reduceRun, scheduleRun } from '@kairo/runtime';
+import type { RunEvent } from '@kouro/domain';
+import { reduceRun, scheduleRun } from '@kouro/runtime';
 import { compileOrThrow, workflowSource } from './fixtures.ts';
 
 describe('ADR-0009: deterministic run limits and terminal results', () => {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import type { ApprovalBinding, RunEvent } from '@kairo/domain';
-import { reduceRun, RuntimeErrorKind, scheduleRun } from '@kairo/runtime';
+import type { ApprovalBinding, RunEvent } from '@kouro/domain';
+import { reduceRun, RuntimeErrorKind, scheduleRun } from '@kouro/runtime';
 import { compileOrThrow, workflowSource } from './fixtures.ts';
 
 const startingCommit = '0123456789abcdef';

@@ -1,14 +1,14 @@
-# `@kairo/cli` — Local Kairo Host and Operator CLI
+# `@kouro/cli` — Local Kouro Host and Operator CLI
 
-The CLI package provides a **runnable single-process Kairo host** with an operator command-line interface. It composes all infrastructure layers — persistence, sandbox, harnesses, and HTTP API — into a stand-alone application that can run workflows locally.
+The CLI package provides a **runnable single-process Kouro host** with an operator command-line interface. It composes all infrastructure layers — persistence, sandbox, harnesses, and HTTP API — into a stand-alone application that can run workflows locally.
 
 ## Quick Start
 
 Install the root package directly from GitHub:
 
 ```bash
-npm install --global github:usersatoshi/kairo
-kairo --help
+npm install --global github:usersatoshi/kouro
+kouro --help
 ```
 
 The installed executable requires Bun. The repository and published package
@@ -19,51 +19,54 @@ From a repository checkout:
 
 ```bash
 # Create an ADW package from a starter template
-bun run kairo create adw my-feature --template feature-development
+bun run kouro create adw my-feature --template feature-development
 
 # Run a feature development workflow
-bun run kairo run feature-development --repo /path/to/repository \
+bun run kouro run feature-development --repo /path/to/repository \
   --task "Implement the requested change" --harness codex
 
 # Create and run a durable local ticket
-ticket_id=$(bun run kairo ticket create \
+ticket_id=$(bun run kouro ticket create \
   --project personal \
   --title "Add CSV export" \
   --description "Export filtered results as CSV." \
   --priority high \
   --label feature | jq -r .id)
-bun run kairo ticket move "$ticket_id" --revision 1 --status ready
-bun run kairo run feature-development --repo /path/to/repository \
-  --ticket "kairo:$ticket_id" --harness codex
+bun run kouro ticket move "$ticket_id" --revision 1 --status ready
+bun run kouro run feature-development --repo /path/to/repository \
+  --ticket "kouro:$ticket_id" --harness codex
 
-# List all runs
-bun run kairo runs
+# List runs for the current repository
+bun run kouro runs
 
 # Check run status
-bun run kairo status <run-id>
+bun run kouro status <run-id>
+
+# Permanently remove a terminal run
+bun run kouro delete <run-id> --yes
 
 # Approval operations
-bun run kairo approve <run-id> <invocation> --reason "plan accepted"
-bun run kairo reject <run-id> <invocation> --reason "changes needed"
+bun run kouro approve <run-id> <invocation> --reason "plan accepted"
+bun run kouro reject <run-id> <invocation> --reason "changes needed"
 
 # Lifecycle operations
-bun run kairo pause <run-id>
-bun run kairo resume <run-id>
-bun run kairo cancel <run-id> --reason "abandoned"
+bun run kouro pause <run-id>
+bun run kouro resume <run-id>
+bun run kouro cancel <run-id> --reason "abandoned"
 
 # Invocation operations
-bun run kairo interrupt <run-id> <invocation> --reason "taking too long"
-bun run kairo retry <run-id> <invocation> --reason "transient error"
-bun run kairo skip <run-id> <invocation> --reason "not applicable"
+bun run kouro interrupt <run-id> <invocation> --reason "taking too long"
+bun run kouro retry <run-id> <invocation> --reason "transient error"
+bun run kouro skip <run-id> <invocation> --reason "not applicable"
 
 # Diagnostics
-bun run kairo diagnostics
+bun run kouro diagnostics
 
-# Start HTTP API server (default port 4317)
-bun run kairo serve [--port <number>]
+# Start the current repository dashboard and API (default port 4317)
+bun run kouro serve [--port <number>] [--repo <path>]
 
 # Help
-bun run kairo --help
+bun run kouro --help
 ```
 
 ## Architecture
@@ -72,7 +75,7 @@ bun run kairo --help
 CLI (main.ts)
   │
   ▼ dispatches commands
-LocalKairoHost (local-host.ts)
+LocalKouroHost (local-host.ts)
   ├── SqliteEventStore (persistence-sqlite)
   ├── WorktreeSandboxProvider (sandbox-worktree)
   ├── HarnessRegistry (harnesses)
@@ -82,21 +85,21 @@ LocalKairoHost (local-host.ts)
   │   └── PiHarness
   ├── LocalArtifactWriter (harnesses)
   ├── TicketService + SQLite ticket stores
-  ├── GitHubTicketProvider (when KAIRO_GITHUB_* is configured)
-  ├── ForgejoTicketProvider (when KAIRO_FORGEJO_* is configured)
-  ├── LocalWorker (worker.ts) — polling loop
+  ├── GitHubTicketProvider (when KOURO_GITHUB_* is configured)
+  ├── ForgejoTicketProvider (when KOURO_FORGEJO_* is configured)
+  ├── LocalWorker (worker.ts) — leased polling loop
   │   └── RunCoordinator (executors)
-  └── createKairoApp (api)
+  └── createKouroApp (api)
        └── Elysia HTTP server
 ```
 
 ## Commands
 
-### `kairo create adw <name> [--template <template>] [--output <directory>]`
+### `kouro create adw <name> [--template <template>] [--output <directory>]`
 
 Creates a compilable ADW package in `<directory>/<name>`. Names must be
-lowercase kebab-case identifiers. The output directory defaults to `.kairo`
-under the current directory, producing `.kairo/<name>`. The template defaults
+lowercase kebab-case identifiers. The output directory defaults to `.kouro`
+under the current directory, producing `.kouro/<name>`. The template defaults
 to `feature-development`.
 
 Available templates:
@@ -106,9 +109,14 @@ Available templates:
 - `bug-fix` — reproduce, fix, and validate a defect
 - `chore` — implement and validate a focused maintenance task
 
+Each generated entrypoint uses `WorkflowBuilder` and includes a self-contained
+`kouro-sdk.ts` snapshot. The package can run immediately without installing
+dependencies, and can be extended through node handles and fluent transitions
+instead of editing raw node and transition records.
+
 The command refuses to replace an existing folder.
 
-### `kairo run <adw> --repo <path> <work-item> [--harness <id|node=id>]...`
+### `kouro run <adw> --repo <path> <work-item> [--harness <id|node=id>]...`
 
 Creates and executes a new run:
 
@@ -138,7 +146,7 @@ Qualify repeated options with a compiled agent node ID to route different
 agents independently:
 
 ```bash
-bun run kairo run feature-development --repo /path/to/repository \
+bun run kouro run feature-development --repo /path/to/repository \
   --task "Implement the requested change" \
   --harness plan=claude-code \
   --harness implement=opencode \
@@ -152,21 +160,35 @@ An agent node's compiled `harness` field takes precedence over both forms of
 CLI routing. Omit the field when operators should choose a harness or configure
 fallbacks at run creation.
 
-### `kairo serve [--port <number>]`
+### `kouro serve [--port <number>]`
 
-Starts the Kairo HTTP API server:
+Starts the Kouro HTTP API server:
 - API routes under `/api/`
 - Static web assets from `../../web/dist`
 - SPA fallback to `index.html`
 - Default port: `4317`
+- Repository scope: `--repo <path>`, defaulting to the current directory
 
-### `kairo ticket ...`
+Only runs for the selected repository are exposed by default. Use
+`--all-repos` for the explicit shared local view. The server can observe a run
+started by another CLI process without interrupting it. A renewable SQLite
+lease ensures only one process performs recovery and advancement, and lets the
+server take ownership after the CLI releases or loses the lease.
+
+### `kouro delete <run-id> --yes`
+
+Permanently removes a terminal run, its Kouro-owned worktree, local artifacts,
+events, idempotency records, and projections. Active and paused runs must first
+be cancelled or otherwise reach a terminal state. The source repository and a
+completed run's delivery branch are preserved.
+
+### `kouro ticket ...`
 
 Local tickets need no Git repository or remote account:
 
 ```bash
 # Create
-bun run kairo ticket create \
+bun run kouro ticket create \
   --project personal \
   --title "Add CSV export" \
   --description "Export filtered results as CSV." \
@@ -175,20 +197,20 @@ bun run kairo ticket create \
   --assignee usersatoshi
 
 # Inspect (use the id and revision returned by create)
-bun run kairo ticket list --project personal
-bun run kairo ticket show <ticket-id>
+bun run kouro ticket list --project personal
+bun run kouro ticket show <ticket-id>
 
 # Optimistic writes require the current revision
-bun run kairo ticket update <ticket-id> --revision 1 \
+bun run kouro ticket update <ticket-id> --revision 1 \
   --title "Add filtered CSV export"
-bun run kairo ticket move <ticket-id> --revision 2 --status ready
-bun run kairo ticket comment <ticket-id> --body "Ready for implementation"
-bun run kairo ticket close <ticket-id> --revision <current-revision>
-bun run kairo ticket reopen <ticket-id> --revision <current-revision>
+bun run kouro ticket move <ticket-id> --revision 2 --status ready
+bun run kouro ticket comment <ticket-id> --body "Ready for implementation"
+bun run kouro ticket close <ticket-id> --revision <current-revision>
+bun run kouro ticket reopen <ticket-id> --revision <current-revision>
 
 # Launch a linked workflow from the durable ticket
-bun run kairo run feature-development --repo /path/to/repository \
-  --ticket kairo:<ticket-id> --harness codex
+bun run kouro run feature-development --repo /path/to/repository \
+  --ticket kouro:<ticket-id> --harness codex
 ```
 
 The run command captures an immutable ticket snapshot before repository
@@ -206,58 +228,58 @@ JSON so scripts can read the resulting ticket ID and revision.
 Configure one GitHub repository connection in the process environment:
 
 ```bash
-export KAIRO_GITHUB_OWNER=usersatoshi
-export KAIRO_GITHUB_REPOSITORY=my-repository
-export KAIRO_GITHUB_PROJECT=my-repository
-export KAIRO_GITHUB_TOKEN=github_pat_...
+export KOURO_GITHUB_OWNER=usersatoshi
+export KOURO_GITHUB_REPOSITORY=my-repository
+export KOURO_GITHUB_PROJECT=my-repository
+export KOURO_GITHUB_TOKEN=github_pat_...
 
 # Optional for GitHub Enterprise
-export KAIRO_GITHUB_API_URL=https://github.example.com/api/v3
+export KOURO_GITHUB_API_URL=https://github.example.com/api/v3
 
-bun run kairo ticket providers
-bun run kairo ticket import github --project my-repository
+bun run kouro ticket providers
+bun run kouro ticket import github --project my-repository
 ```
 
 The token must be able to read issues for import/pull and write issues,
-comments, labels, and assignees for push/migration. Kairo passes it directly to
+comments, labels, and assignees for push/migration. Kouro passes it directly to
 the adapter and never persists or returns it.
 
 #### Forgejo setup
 
 ```bash
-export KAIRO_FORGEJO_URL=https://git.example.com
-export KAIRO_FORGEJO_OWNER=usersatoshi
-export KAIRO_FORGEJO_REPOSITORY=my-repository
-export KAIRO_FORGEJO_PROJECT=my-repository
-export KAIRO_FORGEJO_TOKEN=...
+export KOURO_FORGEJO_URL=https://git.example.com
+export KOURO_FORGEJO_OWNER=usersatoshi
+export KOURO_FORGEJO_REPOSITORY=my-repository
+export KOURO_FORGEJO_PROJECT=my-repository
+export KOURO_FORGEJO_TOKEN=...
 
-bun run kairo ticket providers
-bun run kairo ticket import forgejo --project my-repository
+bun run kouro ticket providers
+bun run kouro ticket import forgejo --project my-repository
 ```
 
 The Forgejo token likewise needs issue read/write access. Non-secret detected
-instance metadata may be stored in Kairo SQLite; the token is not.
+instance metadata may be stored in Kouro SQLite; the token is not.
 
-Remote operations use the stable Kairo ticket ID returned by import:
+Remote operations use the stable Kouro ticket ID returned by import:
 
 ```bash
-# Refresh Kairo from the authoritative remote issue
-bun run kairo ticket pull <ticket-id>
+# Refresh Kouro from the authoritative remote issue
+bun run kouro ticket pull <ticket-id>
 
-# Push a Kairo edit to the bound remote issue
-bun run kairo ticket push <ticket-id>
+# Push a Kouro edit to the bound remote issue
+bun run kouro ticket push <ticket-id>
 
-# Move a local ticket to a remote provider without changing its Kairo ID
-bun run kairo ticket migrate <ticket-id> \
+# Move a local ticket to a remote provider without changing its Kouro ID
+bun run kouro ticket migrate <ticket-id> \
   --to github \
   --project my-repository
 ```
 
 Migration is resumable and switches authority only after the created remote
-issue is read back and verified. Run `kairo ticket providers` first when a
+issue is read back and verified. Run `kouro ticket providers` first when a
 remote command reports that its provider is not configured.
 
-### `kairo diagnostics`
+### `kouro diagnostics`
 
 Checks availability of agent harness binaries:
 - `codex` — OpenAI Codex CLI
@@ -271,20 +293,20 @@ Paths follow the XDG Base Directory Specification:
 
 | Path | Default | Override |
 |------|---------|----------|
-| Data directory | `~/.local/share/kairo` | `$KAIRO_DATA_DIR` / `$XDG_DATA_HOME/kairo` |
-| Config directory | `~/.config/kairo` | `$KAIRO_CONFIG_DIR` / `$XDG_CONFIG_HOME/kairo` |
-| Database | `<dataDir>/kairo.sqlite` | — |
+| Data directory | `~/.local/share/kouro` | `$KOURO_DATA_DIR` / `$XDG_DATA_HOME/kouro` |
+| Config directory | `~/.config/kouro` | `$KOURO_CONFIG_DIR` / `$XDG_CONFIG_HOME/kouro` |
+| Database | `<dataDir>/kouro.sqlite` | — |
 | Artifacts | `<dataDir>/artifacts` | — |
 | Worktrees | `<dataDir>/worktrees` | — |
 
-## LocalKairoHost
+## LocalKouroHost
 
-The `LocalKairoHost` class is the **central orchestrator**:
+The `LocalKouroHost` class is the **central orchestrator**:
 
 ```typescript
-import { LocalKairoHost } from '@kairo/cli';
+import { LocalKouroHost } from '@kouro/cli';
 
-const host = new LocalKairoHost();
+const host = new LocalKouroHost();
 await host.initialize();
 
 // Create a run
@@ -311,14 +333,14 @@ await host.dispose();
 1. **Initialization** (`initialize()`): Creates directories, boots SQLite, initializes the worktree sandbox, recovers previously running runs
 2. **Run creation** (`create()`): Compiles ADW, registers repository, creates worktree, creates run, advances to first stable boundary
 3. **Run advancement** (`LocalWorker`): Polling loop (250ms) that advances running runs to their next stable boundary
-4. **Finalization** (`finalize()`): When a run reaches a terminal `complete` node with a successful result, captures git artifacts, commits changes, and creates a delivery branch `kairo/<run-id>`
+4. **Finalization** (`finalize()`): When a run reaches a terminal `complete` node with a successful result, captures git artifacts, commits changes, and creates a delivery branch `kouro/<run-id>`
 
 ## LocalWorker
 
 The `LocalWorker` is a polling loop that advances runs:
 
 ```typescript
-import { LocalWorker } from '@kairo/cli';
+import { LocalWorker } from '@kouro/cli';
 
 const worker = new LocalWorker(runServices);
 await worker.recover();       // recover interrupted runs
@@ -370,7 +392,7 @@ transitions, and two human approval gates.
 
 | Export | Kind | Source |
 |--------|------|--------|
-| `LocalKairoHost` | class | `local-host.ts` |
+| `LocalKouroHost` | class | `local-host.ts` |
 | `LocalWorker` | class | `worker.ts` |
 | `createLocalRequestHandler(app, webRoot)` | function | `local-host.ts` |
 | `resolveLocalPaths(environment?)` | function | `paths.ts` |
@@ -382,12 +404,12 @@ transitions, and two human approval gates.
 
 | Package | Purpose |
 |---------|---------|
-| `@kairo/adw` | ADW compilation |
-| `@kairo/api` | HTTP API |
-| `@kairo/api-contracts` | API DTOs |
-| `@kairo/domain` | Domain types |
-| `@kairo/executors` | RunCoordinator |
-| `@kairo/harnesses` | CodexHarness, ClaudeCodeHarness, OpenCodeHarness, PiHarness |
-| `@kairo/persistence-sqlite` | SqliteEventStore |
-| `@kairo/sandbox-worktree` | WorktreeSandboxProvider |
+| `@kouro/adw` | ADW compilation |
+| `@kouro/api` | HTTP API |
+| `@kouro/api-contracts` | API DTOs |
+| `@kouro/domain` | Domain types |
+| `@kouro/executors` | RunCoordinator |
+| `@kouro/harnesses` | CodexHarness, ClaudeCodeHarness, OpenCodeHarness, PiHarness |
+| `@kouro/persistence-sqlite` | SqliteEventStore |
+| `@kouro/sandbox-worktree` | WorktreeSandboxProvider |
 | `@usersatoshi/results` | Result type |

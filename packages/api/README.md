@@ -1,13 +1,13 @@
-# `@kairo/api` — HTTP API and Application Use Cases
+# `@kouro/api` — HTTP API and Application Use Cases
 
-The application layer of Kairo, implementing a hexagonal/ports-and-adapters architecture. Provides an Elysia HTTP server with 19 routes, application use cases, declared port interfaces, a single-process composition root, and checksum-verifying local artifact reader.
+The application layer of Kouro, implementing a hexagonal/ports-and-adapters architecture. Provides an Elysia HTTP server with 21 routes, application use cases, declared port interfaces, a single-process composition root, and checksum-verifying local artifact reader.
 
 ## Architecture
 
 ```
 Transport (HTTP)
     ↓
-@kairo/api (application layer)
+@kouro/api (application layer)
     ├── app.ts              — Elysia route definitions
     ├── use-cases.ts        — application orchestration logic
     ├── ports.ts            — declared port interfaces
@@ -15,14 +15,14 @@ Transport (HTTP)
     ├── composition-root.ts — DI wiring for single-process MVP
     └── local-artifact-content-reader.ts — filesystem artifact reader
     ↓
-Domain and runtime (@kairo/domain, @kairo/executors)
+Domain and runtime (@kouro/domain, @kouro/executors)
     ↓
 Infrastructure (implemented by other packages)
 ```
 
 ## HTTP API (Elysia Routes)
 
-The `createKairoApp(services)` factory produces an Elysia instance with **19 routes**:
+The `createKouroApp(services)` factory produces an Elysia instance with **21 routes**:
 
 ### Health
 
@@ -37,9 +37,11 @@ The `createKairoApp(services)` factory produces an Elysia instance with **19 rou
 | `GET` | `/runs` | List all runs |
 | `POST` | `/runs` | Create a new run |
 | `GET` | `/runs/:runId` | Get run details with graph view |
+| `DELETE` | `/runs/:runId` | Permanently delete a terminal local run |
 | `GET` | `/runs/:runId/events` | SSE event stream (optional `?after=`) |
 | `GET` | `/runs/:runId/artifacts` | List all artifacts |
 | `GET` | `/runs/:runId/artifacts/:artifactId` | Get artifact (with optional content) |
+| `GET` | `/runs/:runId/invocations/:invocationSequence/activity` | Get best-effort live harness activity |
 | `GET` | `/runs/:runId/approvals` | List pending/historical approvals |
 | `POST` | `/runs/:runId/approvals/:invocationSequence` | Grant or reject approval |
 | `POST` | `/runs/:runId/:action` | Pause, resume, or cancel a run |
@@ -82,6 +84,7 @@ All use cases receive an `ApiServices` object (injected port implementations) an
 | `listApprovals` | `readonly ApprovalView[]` | Approvals for a run |
 | `decideApproval` | `ApprovalDecisionResponse` | Grant or reject |
 | `createRun` | `CreateRunResponse` | Create run (delegates to `LocalRunCreator`) |
+| `deleteRun` | `DeleteRunResponse` | Delete a terminal run through `LocalRunDeleter` |
 | `controlRun` | `LifecycleResponse` | Pause / resume / cancel |
 | `controlInvocation` | `LifecycleResponse` | Interrupt / retry / skip |
 | `listWorkflows` | `readonly WorkflowSummary[]` | Unique workflows |
@@ -114,14 +117,19 @@ interface LocalRunCreator {
 
 Optional ports (`artifacts`, `repositories`, `runCreator`) degrade gracefully when unavailable.
 
+`InvocationActivityReader` exposes provider transcript bytes for presentation.
+It is an ephemeral observation port: reducers, scheduling, recovery, and
+approvals do not consume it, and completed checksum-verified artifacts remain
+the durable authority.
+
 ## Composition Root
 
-The `composeKairoApp(databasePath, artifactRoot?)` function wires up the single-process MVP:
+The `composeKouroApp(databasePath, artifactRoot?)` function wires up the single-process MVP:
 
 ```typescript
-import { composeKairoApp } from '@kairo/api';
+import { composeKouroApp } from '@kouro/api';
 
-const composed = composeKairoApp('/path/to/kairo.sqlite', '/path/to/artifacts');
+const composed = composeKouroApp('/path/to/kouro.sqlite', '/path/to/artifacts');
 if (composed.isOk()) {
   const { app, dispose } = composed.unwrap();
   // app is the Elysia instance, ready to handle requests
@@ -133,15 +141,15 @@ The composition creates:
 1. `SqliteEventStore` — event-sourced persistence
 2. `RunCoordinator` — run orchestration with `BunCommandRunner`
 3. `LocalArtifactContentReader` — filesystem artifact reads
-4. `createKairoApp(services)` — the Elysia app
+4. `createKouroApp(services)` — the Elysia app
 
 ### Eden Client
 
-`createKairoClient(baseUrl)` creates a typed Eden treaty client for the dashboard:
+`createKouroClient(baseUrl)` creates a typed Eden treaty client for the dashboard:
 
 ```typescript
-import { createKairoClient } from '@kairo/api';
-const client = createKairoClient('http://localhost:4317');
+import { createKouroClient } from '@kouro/api';
+const client = createKouroClient('http://localhost:4317');
 // Fully typed API client
 ```
 
@@ -169,9 +177,9 @@ The events endpoint (`GET /runs/:runId/events`) returns `text/event-stream` with
 ## Testing
 
 ```typescript
-import { createKairoApp } from '@kairo/api';
+import { createKouroApp } from '@kouro/api';
 
-const app = createKairoApp(mockServices);
+const app = createKouroApp(mockServices);
 const response = await app.handle(
   new Request('http://localhost/runs')
 );
@@ -184,8 +192,8 @@ const response = await app.handle(
 |---------|---------|
 | `elysia` | HTTP framework |
 | `@elysiajs/eden` | Typed HTTP client |
-| `@kairo/api-contracts` | Request/response DTOs |
-| `@kairo/domain` | Domain types |
-| `@kairo/executors` | RunCoordinator, RunAggregate |
-| `@kairo/persistence-sqlite` | SqliteEventStore |
+| `@kouro/api-contracts` | Request/response DTOs |
+| `@kouro/domain` | Domain types |
+| `@kouro/executors` | RunCoordinator, RunAggregate |
+| `@kouro/persistence-sqlite` | SqliteEventStore |
 | `@usersatoshi/results` | Result type |

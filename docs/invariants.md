@@ -1,4 +1,4 @@
-# Kairo Runtime Invariants
+# Kouro Runtime Invariants
 
 These invariants are the acceptance boundary for the deterministic simulator.
 

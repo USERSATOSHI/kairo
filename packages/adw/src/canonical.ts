@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import type { JsonValue } from '@kairo/domain';
+import type { JsonValue } from '@kouro/domain';
 
 export function compareCanonicalText(left: string, right: string): number {
   if (left === right) return 0;

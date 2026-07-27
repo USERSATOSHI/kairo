@@ -6,14 +6,68 @@ import { resolve } from 'node:path';
 import {
   createInlineWorkItem,
   createLocalRequestHandler,
-  LocalKairoHost,
+  LocalKouroHost,
+  resolveLocalPaths,
   resolveTicketWorkItem,
   type LocalPaths,
-} from '@kairo/cli';
-import { compileAdwPackage, compileWorkflow } from '@kairo/adw';
-import { ScriptedFakeTicketProvider, type TicketProvider } from '@kairo/executors';
-import { ScriptedFakeHarness } from '@kairo/harnesses';
-import { ok } from '@usersatoshi/results';
+} from '@kouro/cli';
+import { compileAdwPackage, compileWorkflow } from '@kouro/adw';
+import {
+  type AgentHarness,
+  type HarnessError,
+  type HarnessExecution,
+  type HarnessExecutionRequest,
+  RunStoreErrorKind,
+  ScriptedFakeTicketProvider,
+  type TicketProvider,
+} from '@kouro/executors';
+import { ScriptedFakeHarness } from '@kouro/harnesses';
+import { ok, type Result } from '@usersatoshi/results';
+
+class BlockingHarness implements AgentHarness {
+  readonly id = 'blocking';
+  readonly started: Promise<void>;
+  private resolveStarted: (() => void) | undefined;
+  private resolveExecution: (() => void) | undefined;
+
+  constructor() {
+    this.started = new Promise((resolveStarted) => {
+      this.resolveStarted = resolveStarted;
+    });
+  }
+
+  async execute(request: HarnessExecutionRequest): Promise<Result<HarnessExecution, HarnessError>> {
+    await request.onTranscriptChunk?.(
+      `${JSON.stringify({
+        type: 'item.completed',
+        item: {
+          id: 'reasoning-1',
+          type: 'reasoning',
+          text: 'Inspecting the active worktree.',
+        },
+      })}\n`,
+    );
+    this.resolveStarted?.();
+    await new Promise<void>((resolveExecution) => {
+      this.resolveExecution = resolveExecution;
+    });
+    return ok({
+      output: { summary: 'Lease-safe plan', steps: ['Observe without interruption'] },
+      transcript: 'completed after observer started',
+    });
+  }
+
+  resume(
+    request: HarnessExecutionRequest,
+    _token: string,
+  ): Promise<Result<HarnessExecution, HarnessError>> {
+    return this.execute(request);
+  }
+
+  release(): void {
+    this.resolveExecution?.();
+  }
+}
 
 async function process(
   command: readonly string[],
@@ -60,7 +114,7 @@ function localPaths(root: string): LocalPaths {
   return {
     dataDirectory,
     configDirectory: resolve(root, 'config'),
-    databasePath: resolve(dataDirectory, 'kairo.sqlite'),
+    databasePath: resolve(dataDirectory, 'kouro.sqlite'),
     artifactDirectory: resolve(dataDirectory, 'artifacts'),
     worktreeDirectory: resolve(dataDirectory, 'worktrees'),
   };
@@ -73,6 +127,21 @@ describe('M7 runnable local MVP and operator CLI', () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
+  test('legacy Kairo path overrides continue to resolve existing local data', () => {
+    expect(
+      resolveLocalPaths({
+        KAIRO_DATA_DIR: '/tmp/legacy-kairo-data',
+        KAIRO_CONFIG_DIR: '/tmp/legacy-kairo-config',
+      }),
+    ).toEqual({
+      dataDirectory: '/tmp/legacy-kairo-data',
+      configDirectory: '/tmp/legacy-kairo-config',
+      databasePath: '/tmp/legacy-kairo-data/kairo.sqlite',
+      artifactDirectory: '/tmp/legacy-kairo-data/artifacts',
+      worktreeDirectory: '/tmp/legacy-kairo-data/worktrees',
+    });
+  });
+
   test('fresh checkout exposes stable help and version through the binary entrypoint', async () => {
     const root = resolve(import.meta.dir, '..', '..');
     const help = await process(
@@ -81,12 +150,20 @@ describe('M7 runnable local MVP and operator CLI', () => {
     );
     expect(help.exitCode).toBe(0);
     expect(help.stdout).toContain(
-      'kairo create adw <name> [--template <template>] [--output <directory>]',
+      'kouro create adw <name> [--template <template>] [--output <directory>]',
     );
     expect(help.stdout).toContain('feature-development, hotfix, bug-fix, chore');
-    expect(help.stdout).toContain('kairo run <adw> --repo <path>');
+    expect(help.stdout).toContain('kouro run <adw> --repo <path>');
     expect(help.stdout).toContain('--ticket <provider:reference>');
-    expect(help.stdout).toContain('kairo pause|resume|cancel <run-id>');
+    expect(help.stdout).toContain('kouro pause|resume|cancel <run-id>');
+
+    const runHelp = await process(
+      ['bun', 'run', resolve(root, 'packages', 'cli', 'src', 'main.ts'), 'help', 'run'],
+      root,
+    );
+    expect(runHelp.exitCode).toBe(0);
+    expect(runHelp.stdout).toContain('Usage:\n  kouro run <adw>');
+    expect(runHelp.stdout).toContain('Examples:');
 
     const version = await process(
       ['bun', 'run', resolve(root, 'packages', 'cli', 'src', 'main.ts'), '--version'],
@@ -97,7 +174,7 @@ describe('M7 runnable local MVP and operator CLI', () => {
 
   test('distribution bundle exposes the CLI and packaged templates', async () => {
     const root = resolve(import.meta.dir, '..', '..');
-    const output = await mkdtemp(resolve(tmpdir(), 'kairo-distribution-'));
+    const output = await mkdtemp(resolve(tmpdir(), 'kouro-distribution-'));
     roots.push(output);
 
     const built = await process(['bun', 'run', 'build:cli'], root);
@@ -106,7 +183,7 @@ describe('M7 runnable local MVP and operator CLI', () => {
     const binary = resolve(root, 'packages', 'cli', 'dist', 'main.js');
     const help = await process([binary, '--help'], root);
     expect(help.exitCode).toBe(0);
-    expect(help.stdout).toContain('Kairo 0.1.0');
+    expect(help.stdout).toContain('Kouro 0.1.0');
 
     const created = await process(
       [binary, 'create', 'adw', 'packaged-cli', '--output', output],
@@ -123,7 +200,7 @@ describe('M7 runnable local MVP and operator CLI', () => {
 
   test('create adw renders every bundled template as a compilable package', async () => {
     const root = resolve(import.meta.dir, '..', '..');
-    const output = await mkdtemp(resolve(root, '.kairo-adw-templates-'));
+    const output = await mkdtemp(resolve(root, '.kouro-adw-templates-'));
     roots.push(output);
     const templates = ['feature-development', 'hotfix', 'bug-fix', 'chore'] as const;
 
@@ -159,13 +236,96 @@ describe('M7 runnable local MVP and operator CLI', () => {
           .map((part) => `${part[0]?.toUpperCase() ?? ''}${part.slice(1)}`)
           .join(' '),
       );
-      expect((await compileAdwPackage(resolve(output, name))).isOk()).toBe(true);
+      const entrypoint = await readFile(resolve(output, name, 'kouro.adw.ts'), 'utf8');
+      expect(entrypoint).toContain("import { WorkflowBuilder } from './kouro-sdk.ts'");
+      expect(entrypoint).toContain('workflow.startAt(');
+      expect(entrypoint).toContain(".on('success').to(");
+      expect(entrypoint).toContain('export default workflow.build()');
+      expect(await readFile(resolve(output, name, 'kouro-sdk.ts'), 'utf8')).toContain(
+        'export class WorkflowBuilder',
+      );
+      const compiled = await compileAdwPackage(resolve(output, name));
+      expect(compiled.isOk()).toBe(true);
+      if (template === 'chore' && compiled.isOk()) {
+        const bundle = compiled.unwrap().bundle;
+        expect(bundle.counterLimits).toEqual({ validationRepairs: 3 });
+        expect(bundle.runLimits?.maxNodeInvocations).toBe(9);
+        expect(bundle.transitions).toContainEqual({
+          id: 'validate.failure.implement',
+          from: { nodeId: 'validate', outcome: 'failure' },
+          toNodeId: 'implement',
+          condition: {
+            op: 'lt',
+            left: { scope: 'counter', name: 'validationRepairs' },
+            right: 3,
+          },
+          increment: 'validationRepairs',
+        });
+        expect(bundle.transitions).toContainEqual({
+          id: 'validate.failure.failed',
+          from: { nodeId: 'validate', outcome: 'failure' },
+          toNodeId: 'failed',
+          default: true,
+        });
+      }
+    }
+  });
+
+  test('a generated SDK workflow can be extended with another node and transitions', async () => {
+    const root = resolve(import.meta.dir, '..', '..');
+    const output = await mkdtemp(resolve(root, '.kouro-adw-extension-'));
+    roots.push(output);
+    const created = await process(
+      [
+        'bun',
+        'run',
+        resolve(root, 'packages', 'cli', 'src', 'main.ts'),
+        'create',
+        'adw',
+        'extended-chore',
+        '--template',
+        'chore',
+        '--output',
+        output,
+      ],
+      root,
+    );
+    expect(created.exitCode).toBe(0);
+    const packageDirectory = resolve(output, 'extended-chore');
+    const entrypointPath = resolve(packageDirectory, 'kouro.adw.ts');
+    const entrypoint = await readFile(entrypointPath, 'utf8');
+    const extended = entrypoint
+      .replace(
+        "const complete = workflow.complete('complete');",
+        `const inspect = workflow.command('inspect', {
+  command: 'git diff --check',
+  capabilities: ['repository.read', 'terminal.execute'],
+  recoveryPolicy: 'replay_safe',
+});
+const complete = workflow.complete('complete');`,
+      )
+      .replace(
+        "validate.on('success').to(complete);",
+        `validate.on('success').to(inspect);
+inspect.on('success').to(complete);
+inspect.on('failure').to(failed);`,
+      );
+    await writeFile(entrypointPath, extended);
+
+    const compiled = await compileAdwPackage(packageDirectory);
+
+    expect(compiled.isOk()).toBe(true);
+    if (compiled.isOk()) {
+      expect(compiled.unwrap().bundle.nodes.some(({ id }) => id === 'inspect')).toBe(true);
+      expect(
+        compiled.unwrap().bundle.transitions.some(({ id }) => id === 'validate.success.inspect'),
+      ).toBe(true);
     }
   });
 
   test('create adw rejects invalid names and existing target folders', async () => {
     const root = resolve(import.meta.dir, '..', '..');
-    const output = await mkdtemp(resolve(tmpdir(), 'kairo-adw-reject-'));
+    const output = await mkdtemp(resolve(tmpdir(), 'kouro-adw-reject-'));
     roots.push(output);
     const command = [
       'bun',
@@ -186,9 +346,9 @@ describe('M7 runnable local MVP and operator CLI', () => {
     expect(second.stderr).toContain('Target already exists');
   });
 
-  test('create adw defaults to the current repository .kairo directory', async () => {
+  test('create adw defaults to the current repository .kouro directory', async () => {
     const root = resolve(import.meta.dir, '..', '..');
-    const repository = await mkdtemp(resolve(tmpdir(), 'kairo-adw-default-'));
+    const repository = await mkdtemp(resolve(tmpdir(), 'kouro-adw-default-'));
     roots.push(repository);
 
     const created = await process(
@@ -206,16 +366,16 @@ describe('M7 runnable local MVP and operator CLI', () => {
     );
 
     expect(created.exitCode).toBe(0);
-    expect(JSON.parse(created.stdout).path).toBe(resolve(repository, '.kairo', 'default-location'));
+    expect(JSON.parse(created.stdout).path).toBe(resolve(repository, '.kouro', 'default-location'));
     expect(
-      await readFile(resolve(repository, '.kairo', 'default-location', 'manifest.json'), 'utf8'),
+      await readFile(resolve(repository, '.kouro', 'default-location', 'manifest.json'), 'utf8'),
     ).toContain('"id": "default-location"');
   });
 
   test('serve router mounts JSON API under /api before the SPA fallback', async () => {
-    const root = await mkdtemp(resolve(tmpdir(), 'kairo-m7-serve-'));
+    const root = await mkdtemp(resolve(tmpdir(), 'kouro-m7-serve-'));
     roots.push(root);
-    const host = new LocalKairoHost(localPaths(root), []);
+    const host = new LocalKouroHost(localPaths(root), []);
     expect((await host.initialize()).isOk()).toBe(true);
     const repositoryRoot = resolve(import.meta.dir, '..', '..');
     const handle = createLocalRequestHandler(
@@ -223,12 +383,12 @@ describe('M7 runnable local MVP and operator CLI', () => {
       resolve(repositoryRoot, 'packages', 'web', 'dist'),
     );
     try {
-      const response = await handle(new Request('http://kairo.local/api/runs'));
+      const response = await handle(new Request('http://kouro.local/api/runs'));
       expect(response.status).toBe(200);
       expect(response.headers.get('content-type')).toContain('application/json');
       expect(await response.json()).toEqual([]);
 
-      const page = await handle(new Request('http://kairo.local/'));
+      const page = await handle(new Request('http://kouro.local/'));
       expect(page.status).toBe(200);
       expect(await page.text()).toContain('<!doctype html>');
     } finally {
@@ -236,10 +396,189 @@ describe('M7 runnable local MVP and operator CLI', () => {
     }
   });
 
-  test('local host diagnoses every supported harness binary', async () => {
-    const root = await mkdtemp(resolve(tmpdir(), 'kairo-m7-diagnostics-'));
+  test('a repository-scoped app does not expose runs from another repository', async () => {
+    const root = await mkdtemp(resolve(tmpdir(), 'kouro-repository-scope-'));
     roots.push(root);
-    const host = new LocalKairoHost(localPaths(root));
+    const firstRepository = resolve(root, 'first');
+    const secondRepository = resolve(root, 'second');
+    await createRepository(firstRepository);
+    await createRepository(secondRepository);
+    const host = new LocalKouroHost(localPaths(root), [
+      new ScriptedFakeHarness('fake-0', [
+        {
+          output: { summary: 'First plan', steps: ['Wait for approval'] },
+          transcript: 'planned first',
+        },
+      ]),
+      new ScriptedFakeHarness('fake-1', [
+        {
+          output: { summary: 'Second plan', steps: ['Wait for approval'] },
+          transcript: 'planned second',
+        },
+      ]),
+    ]);
+    try {
+      expect((await host.initialize()).isOk()).toBe(true);
+      const first = await host.create({
+        adw: 'feature-development',
+        repositoryPath: firstRepository,
+        task: 'First repository task',
+        harnesses: ['fake-0'],
+        actor: 'operator',
+      });
+      const second = await host.create({
+        adw: 'feature-development',
+        repositoryPath: secondRepository,
+        task: 'Second repository task',
+        harnesses: ['fake-1'],
+        actor: 'operator',
+      });
+      expect(first.isOk()).toBe(true);
+      expect(second.isOk()).toBe(true);
+
+      const app = host.app(firstRepository);
+      const listed = await app.handle(new Request('http://kouro.local/runs'));
+      const body: readonly { readonly id: string; readonly repositoryPath: string }[] =
+        await listed.json();
+      expect(body).toHaveLength(1);
+      expect(body[0]?.id).toBe(first.unwrap().runId);
+      expect(body[0]?.repositoryPath).toBe(firstRepository);
+
+      const hidden = await app.handle(
+        new Request(`http://kouro.local/runs/${second.unwrap().runId}`),
+      );
+      expect(hidden.status).toBe(404);
+      const hiddenControl = await app.handle(
+        new Request(`http://kouro.local/runs/${second.unwrap().runId}/pause`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            actor: 'operator',
+            idempotencyKey: 'pause:hidden-run',
+          }),
+        }),
+      );
+      expect(hiddenControl.status).toBe(404);
+    } finally {
+      host.dispose();
+    }
+  });
+
+  test('a serving observer does not recover or interrupt a CLI-owned attempt', async () => {
+    const root = await mkdtemp(resolve(tmpdir(), 'kouro-worker-lease-'));
+    roots.push(root);
+    const repository = resolve(root, 'repository');
+    await createRepository(repository);
+    const paths = localPaths(root);
+    const harness = new BlockingHarness();
+    const owner = new LocalKouroHost(paths, [harness]);
+    const observer = new LocalKouroHost(paths, []);
+    try {
+      expect((await owner.initialize()).isOk()).toBe(true);
+      const creation = owner.create({
+        adw: 'feature-development',
+        repositoryPath: repository,
+        task: 'Keep this attempt alive while serve starts.',
+        harnesses: ['blocking'],
+        actor: 'operator',
+      });
+      await harness.started;
+      const runId = owner.store.listRuns().unwrap()[0]?.runId;
+      if (!runId) throw new Error('The active run was not persisted');
+
+      expect((await observer.initialize()).isOk()).toBe(true);
+      observer.worker.start();
+      await new Promise((resolveWait) => setTimeout(resolveWait, 400));
+      const observed = observer.store.loadRun(runId).unwrap();
+      expect(observed.events.some(({ type }) => type === 'attempt.interrupted')).toBe(false);
+      expect(
+        observed.state.invocations.some(({ attempts }) =>
+          attempts.some(({ state }) => state === 'running'),
+        ),
+      ).toBe(true);
+      const activeInvocation = observed.state.invocations.find(({ attempts }) =>
+        attempts.some(({ state }) => state === 'running'),
+      );
+      if (!activeInvocation) throw new Error('The active invocation was not projected');
+      const activityResponse = await observer
+        .app(repository)
+        .handle(
+          new Request(
+            `http://kouro.local/runs/${runId}/invocations/${activeInvocation.sequence}/activity`,
+          ),
+        );
+      const activityBody = await activityResponse.json();
+      expect({ status: activityResponse.status, body: activityBody }).toEqual({
+        status: 200,
+        body: expect.objectContaining({
+          runId,
+          invocationSequence: activeInvocation.sequence,
+          harnessId: 'blocking',
+          complete: false,
+          transcript: expect.stringContaining('Inspecting the active worktree.'),
+        }),
+      });
+
+      harness.release();
+      expect((await creation).isOk()).toBe(true);
+    } finally {
+      harness.release();
+      observer.dispose();
+      owner.dispose();
+    }
+  });
+
+  test('deletion rejects an active run and removes a cancelled run', async () => {
+    const root = await mkdtemp(resolve(tmpdir(), 'kouro-run-deletion-'));
+    roots.push(root);
+    const repository = resolve(root, 'repository');
+    await createRepository(repository);
+    const host = new LocalKouroHost(localPaths(root), [
+      new ScriptedFakeHarness('fake', [
+        {
+          output: { summary: 'Plan to delete', steps: ['Wait for cancellation'] },
+          transcript: 'planned',
+        },
+      ]),
+    ]);
+    try {
+      expect((await host.initialize()).isOk()).toBe(true);
+      const created = await host.create({
+        adw: 'feature-development',
+        repositoryPath: repository,
+        task: 'Create a disposable run.',
+        harnesses: ['fake'],
+        actor: 'operator',
+      });
+      const runId = created.unwrap().runId;
+      const app = host.app(repository);
+
+      const activeDeletion = await app.handle(
+        new Request(`http://kouro.local/runs/${runId}`, { method: 'DELETE' }),
+      );
+      expect(activeDeletion.status).toBe(409);
+
+      const cancelled = host
+        .coordinatorFor(host.store.loadRun(runId).unwrap())
+        .cancelRun(runId, 'operator', 'test cleanup', 'cancel:delete-test');
+      expect(cancelled.isOk()).toBe(true);
+      const deleted = await app.handle(
+        new Request(`http://kouro.local/runs/${runId}`, { method: 'DELETE' }),
+      );
+      expect(deleted.status).toBe(200);
+      expect(await deleted.json()).toEqual({ runId, deleted: true });
+      const missing = host.store.loadRun(runId);
+      expect(missing.isErr()).toBe(true);
+      if (missing.isErr()) expect(missing.error.kind).toBe(RunStoreErrorKind.RunNotFound);
+    } finally {
+      host.dispose();
+    }
+  });
+
+  test('local host diagnoses every supported harness binary', async () => {
+    const root = await mkdtemp(resolve(tmpdir(), 'kouro-m7-diagnostics-'));
+    roots.push(root);
+    const host = new LocalKouroHost(localPaths(root));
     try {
       expect(host.harnessDiagnostics().map(({ id }) => id)).toEqual([
         'codex',
@@ -253,9 +592,9 @@ describe('M7 runnable local MVP and operator CLI', () => {
   });
 
   test('run creation rejects a harness route that is not an agent node', async () => {
-    const root = await mkdtemp(resolve(tmpdir(), 'kairo-m7-routing-'));
+    const root = await mkdtemp(resolve(tmpdir(), 'kouro-m7-routing-'));
     roots.push(root);
-    const host = new LocalKairoHost(localPaths(root), []);
+    const host = new LocalKouroHost(localPaths(root), []);
     try {
       expect((await host.initialize()).isOk()).toBe(true);
       const result = await host.create({
@@ -272,9 +611,9 @@ describe('M7 runnable local MVP and operator CLI', () => {
   });
 
   test('feature development requires one durable work item before repository side effects', async () => {
-    const root = await mkdtemp(resolve(tmpdir(), 'kairo-m8-required-'));
+    const root = await mkdtemp(resolve(tmpdir(), 'kouro-m8-required-'));
     roots.push(root);
-    const host = new LocalKairoHost(localPaths(root), []);
+    const host = new LocalKouroHost(localPaths(root), []);
     try {
       expect((await host.initialize()).isOk()).toBe(true);
       const repository = resolve(root, 'repository-that-does-not-exist');
@@ -335,7 +674,7 @@ describe('M7 runnable local MVP and operator CLI', () => {
   });
 
   test('ticket resolution snapshots and delivers one immutable work item to the agent', async () => {
-    const root = await mkdtemp(resolve(tmpdir(), 'kairo-m8-ticket-'));
+    const root = await mkdtemp(resolve(tmpdir(), 'kouro-m8-ticket-'));
     roots.push(root);
     const repository = resolve(root, 'repository');
     await createRepository(repository);
@@ -357,7 +696,7 @@ describe('M7 runnable local MVP and operator CLI', () => {
         labels: ['runtime', 'feature'],
       },
     ]);
-    const host = new LocalKairoHost(paths, [harness], [provider]);
+    const host = new LocalKouroHost(paths, [harness], [provider]);
     let runId = '';
     try {
       expect((await host.initialize()).isOk()).toBe(true);
@@ -390,7 +729,7 @@ describe('M7 runnable local MVP and operator CLI', () => {
     } finally {
       host.dispose();
     }
-    const restarted = new LocalKairoHost(paths, [new ScriptedFakeHarness('fake', [])], [provider]);
+    const restarted = new LocalKouroHost(paths, [new ScriptedFakeHarness('fake', [])], [provider]);
     try {
       expect((await restarted.initialize()).isOk()).toBe(true);
       expect(restarted.store.loadRun(runId).isOk()).toBe(true);
@@ -401,7 +740,7 @@ describe('M7 runnable local MVP and operator CLI', () => {
   });
 
   test('packaged workflow survives restart and reaches a merge-ready branch', async () => {
-    const root = await mkdtemp(resolve(tmpdir(), 'kairo-m7-'));
+    const root = await mkdtemp(resolve(tmpdir(), 'kouro-m7-'));
     roots.push(root);
     const repository = resolve(root, 'repository');
     await createRepository(repository);
@@ -420,7 +759,7 @@ describe('M7 runnable local MVP and operator CLI', () => {
         transcript: 'reviewed',
       },
     ]);
-    const first = new LocalKairoHost(paths, [harness]);
+    const first = new LocalKouroHost(paths, [harness]);
     expect((await first.initialize()).isOk()).toBe(true);
     const created = await first.create({
       adw: 'feature-development',
@@ -440,7 +779,7 @@ describe('M7 runnable local MVP and operator CLI', () => {
     if (!planApproval?.approval) throw new Error('Plan approval was not requested');
 
     const pauseResponse = await first.app().handle(
-      new Request(`http://kairo.local/runs/${runId}/pause`, {
+      new Request(`http://kouro.local/runs/${runId}/pause`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -477,7 +816,7 @@ describe('M7 runnable local MVP and operator CLI', () => {
     ).toBe(true);
     first.dispose();
 
-    const restarted = new LocalKairoHost(paths, [new ScriptedFakeHarness('fake', [])]);
+    const restarted = new LocalKouroHost(paths, [new ScriptedFakeHarness('fake', [])]);
     expect((await restarted.initialize()).isOk()).toBe(true);
     aggregate = restarted.store.loadRun(runId).unwrap();
     const deliveryApproval = aggregate.state.invocations.find(
@@ -508,16 +847,16 @@ describe('M7 runnable local MVP and operator CLI', () => {
     expect(branchCommit.exitCode).toBe(0);
     expect(branchCommit.stdout.trim()).not.toBe(aggregate.state.startingCommit);
 
-    const appRun = await restarted.app().handle(new Request(`http://kairo.local/runs/${runId}`));
+    const appRun = await restarted.app().handle(new Request(`http://kouro.local/runs/${runId}`));
     expect(appRun.status).toBe(200);
     expect((await appRun.json()).status).toBe('succeeded');
     restarted.dispose();
   });
 
   test('interrupt, retry, and policy-eligible skip are durable bound events', async () => {
-    const root = await mkdtemp(resolve(tmpdir(), 'kairo-m7-controls-'));
+    const root = await mkdtemp(resolve(tmpdir(), 'kouro-m7-controls-'));
     roots.push(root);
-    const host = new LocalKairoHost(localPaths(root), []);
+    const host = new LocalKouroHost(localPaths(root), []);
     expect((await host.initialize()).isOk()).toBe(true);
     const commandWorkflow = compileWorkflow({
       manifest: { id: 'controls', version: '1.0.0' },

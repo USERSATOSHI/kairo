@@ -9,7 +9,7 @@ import type {
   JsonValue,
   SourceNodeDefinition,
   WorkflowSourceBundle,
-} from '@kairo/domain';
+} from '@kouro/domain';
 import { compareCanonicalText, sha256 } from './canonical.ts';
 import { compileWorkflow } from './compiler.ts';
 import { CompilerErrorKind, toErr, toCompilerError, type CompilerError } from './errors.ts';
@@ -24,7 +24,7 @@ interface AdwManifest {
   readonly name: string;
   readonly version: string;
   readonly description?: string;
-  readonly kairo: string;
+  readonly kouro: string;
   readonly entrypoint: string;
   readonly permissions: readonly string[];
 }
@@ -73,13 +73,20 @@ function validateManifest(value: unknown, file: string): Result<AdwManifest, Com
     });
   }
 
-  for (const field of ['id', 'name', 'version', 'kairo', 'entrypoint']) {
+  for (const field of ['id', 'name', 'version', 'entrypoint']) {
     if (typeof value[field] !== 'string' || !value[field]) {
       return toCompilerError(CompilerErrorKind.ManifestInvalid, {
         file,
         reason: `${field} must be a non-empty string`,
       });
     }
+  }
+  const kouro = value.kouro ?? value.kairo;
+  if (typeof kouro !== 'string' || !kouro) {
+    return toCompilerError(CompilerErrorKind.ManifestInvalid, {
+      file,
+      reason: 'kouro must be a non-empty string',
+    });
   }
   if (
     !Array.isArray(value.permissions) ||
@@ -97,9 +104,15 @@ function validateManifest(value: unknown, file: string): Result<AdwManifest, Com
     });
   }
 
-  // All manifest fields are narrowed above; TypeScript does not retain loop-based narrowing.
-  // oxlint-disable-next-line typescript/no-unsafe-type-assertion
-  return ok(value as unknown as AdwManifest);
+  return ok({
+    id: String(value.id),
+    name: String(value.name),
+    version: String(value.version),
+    ...(typeof value.description === 'string' ? { description: value.description } : {}),
+    kouro,
+    entrypoint: String(value.entrypoint),
+    permissions: value.permissions,
+  });
 }
 
 function validateDefinition(
@@ -196,7 +209,7 @@ async function importDefault(
   errorKind: CompilerErrorKind.EntrypointLoadFailed | CompilerErrorKind.ResourceInvalid,
 ): Promise<Result<unknown, CompilerError>> {
   const url = pathToFileURL(file);
-  url.searchParams.set('kairo', sha256(content).slice(7));
+  url.searchParams.set('kouro', sha256(content).slice(7));
   return fromAsync(
     async () => {
       const module = await import(url.href);
@@ -383,7 +396,7 @@ async function compilePackage(
       metadata: {
         name: manifest.name,
         description: manifest.description ?? '',
-        kairo: manifest.kairo,
+        kouro: manifest.kouro,
         entrypoint: manifest.entrypoint,
       },
     },

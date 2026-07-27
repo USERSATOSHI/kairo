@@ -26,7 +26,7 @@ Ticket providers are infrastructure adapters behind a provider-neutral port.
 They return normalized ticket data and never expose credentials to workflows or
 agents.
 
-Before repository registration or worktree creation, Kairo resolves and
+Before repository registration or worktree creation, Kouro resolves and
 normalizes the input into a versioned `WorkItemSnapshot` containing:
 
 - kind and source provider;

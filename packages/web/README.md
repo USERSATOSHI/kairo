@@ -1,16 +1,22 @@
-# `@kairo/web` — Ticket and Execution Dashboard
+# `@kouro/web` — Ticket and Execution Dashboard
 
-Kairo's local ticket and execution dashboard, built with **React 19**, **Vite**,
+Kouro's local ticket and execution dashboard, built with **React 19**, **Vite**,
 and **React Flow** (`@xyflow/react`). It displays a unified planning/execution
 Kanban, ticket histories and redacted provider configuration alongside runs,
 workflow graphs, durable events, artifacts, diffs, and artifact-bound approval
-controls.
+controls. Active agent attempts expose a best-effort live activity view, and
+provider JSONL transcripts are presented as user, agent, reasoning, and
+call-ID-correlated tool exchanges in a large modal.
 
 ## Design Constraints
 
 - **Read-only execution console** — The graph is not editable (`nodesConnectable={false}`, `nodesDraggable={false}`)
+- **Repository-scoped runs** — The serving application enforces the repository boundary before data reaches React
+- **Explicit terminal deletion** — A confirmed delete removes only terminal runs and Kouro-owned local data
 - **The browser cannot supply an approval binding** — Approvals are submitted by a human operator ("web-user") but cryptographic/state bindings happen server-side
 - **Live event replay** — Events are delivered via Server-Sent Events (SSE) with `lastEventId` tracking for resilient reconnection
+- **Live invocation activity** — Active harness stdout is polled through an ephemeral observation endpoint without changing durable orchestration history
+- **Readable transcript modal** — User prompts, agent messages, reasoning summaries, parallel tool calls, and their matching results replace raw JSONL
 - **Derived ticket columns** — The API supplies planning and runtime-owned execution projections; React never persists board state
 - **Server-resolved provider secrets** — Provider configuration responses contain status and non-secret scope only
 
@@ -24,7 +30,7 @@ bun run dev
 bun run build
 ```
 
-Output goes to `dist/` (static files served by the Kairo CLI's `serve` command or any HTTP server).
+Output goes to `dist/` (static files served by the Kouro CLI's `serve` command or any HTTP server).
 
 ## Architecture
 
@@ -37,7 +43,7 @@ App (root component)
     ├── Run Header
     │   └── Workflow ID, run ID, status, event count
     ├── Graph (React Flow)
-    │   └── DAG of workflow nodes/edges with color-coded state
+    │   └── Top-to-bottom flowchart with topology layers, typed shapes, outcomes, and selected-path emphasis
     └── Inspector (tabbed panel)
         ├── "details" tab → NodeDetails
         │   └── Node definition + invocations + attempts
@@ -47,6 +53,8 @@ App (root component)
         │   └── Artifact list + content viewer
         └── "approval" tab → ApprovalControl
             └── Grant/reject with reason
+    └── Activity / artifact modal
+        └── Full-size readable transcript with call-ID-correlated tool results
 ```
 
 ## Data Flow
@@ -58,6 +66,7 @@ App (root component)
 5. **Node click** → Inspector switches to "details" tab showing that node's invocations/attempts
 6. **Artifact click** → Content fetched on demand via `fetchArtifact()`
 7. **Approval action** → `decideApproval()` POSTs grant/reject; on success, run state and approvals are re-fetched
+8. **Active attempt** → `fetchInvocationActivity()` polls the worker's best-effort transcript while the durable attempt remains active
 
 ## API Client
 
@@ -72,7 +81,7 @@ import {
   fetchArtifact,
   decideApproval,
   reconnectEvents,
-} from '@kairo/web/api';
+} from '@kouro/web/api';
 
 // List all runs
 const runs = await fetchRuns();
@@ -89,7 +98,7 @@ const close = reconnectEvents('run-abc', lastEventId, (event) => {
 
 ### SSE Events
 
-`reconnectEvents` listens for both generic `message` events and 20 named event types covering the full Kairo lifecycle:
+`reconnectEvents` listens for both generic `message` events and 20 named event types covering the full Kouro lifecycle:
 
 - Run lifecycle: `run.created`, `run.paused`, `run.resumed`, `run.cancelled`, `run.completed`
 - Invocation lifecycle: `invocation.activated`, `invocation.completed`, `invocation.skipped`, `invocation.retry_requested`
@@ -114,11 +123,11 @@ Dark theme with color-coded state indicators:
 | `pending` | Gray |
 | `interrupted` / `cancelled` | Orange |
 
-Layout: 260px sidebar + flexible main area with a DAG graph and tabbed inspector panel.
+Layout: 260px sidebar + flexible main area with a flowchart graph and tabbed inspector panel. Node positions derive from graph reachability rather than declaration index, so branches share a layer and bounded loop edges route back to earlier layers.
 
 ## Vite Dev Proxy
 
-The dev server proxies `/api/*` to `http://localhost:3000` (the Kairo CLI serve command). The `/api` prefix is stripped before forwarding:
+The dev server proxies `/api/*` to `http://localhost:3000` (the Kouro CLI serve command). The `/api` prefix is stripped before forwarding:
 
 ```typescript
 // vite.config.ts
@@ -143,17 +152,17 @@ bun run build
 # dist/assets/index-<hash>.css
 # dist/assets/index-<hash>.js
 
-# Serve via Kairo CLI
-bun run kairo serve
+# Serve via Kouro CLI
+bun run kouro serve
 ```
 
-The Kairo CLI (`kairo serve`) serves the production build from its own HTTP server with SPA fallback (all routes not matching `/api/*` serve `index.html`).
+The Kouro CLI (`kouro serve`) serves the production build from its own HTTP server with SPA fallback (all routes not matching `/api/*` serve `index.html`).
 
 ## Dependencies
 
 | Dependency | Version | Purpose |
 |------------|---------|---------|
-| `@kairo/api-contracts` | workspace:* | TypeScript interfaces for API shapes |
+| `@kouro/api-contracts` | workspace:* | TypeScript interfaces for API shapes |
 | `@xyflow/react` | ^12.11.2 | React Flow DAG graph rendering |
 | `react` | ^19.2.8 | UI framework |
 | `react-dom` | ^19.2.8 | React DOM renderer |

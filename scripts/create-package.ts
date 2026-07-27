@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const name = process.argv[2]?.replace(/^@kairo\//, '');
+const name = process.argv[2]?.replace(/^@kouro\//, '');
 
 if (!name) {
   process.stderr.write('Usage: bun run create-package <name>\n');
@@ -26,7 +26,7 @@ writeFileSync(
   resolve(dir, 'package.json'),
   JSON.stringify(
     {
-      name: `@kairo/${name}`,
+      name: `@kouro/${name}`,
       private: true,
       type: 'module',
       exports: {
@@ -42,4 +42,4 @@ writeFileSync(
 
 writeFileSync(resolve(dir, 'src', 'index.ts'), '');
 
-process.stdout.write(`Created package @kairo/${name} at packages/${name}\n`);
+process.stdout.write(`Created package @kouro/${name} at packages/${name}\n`);

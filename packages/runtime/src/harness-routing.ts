@@ -1,4 +1,4 @@
-import type { JsonValue } from '@kairo/domain';
+import type { JsonValue } from '@kouro/domain';
 
 function isRecord(value: JsonValue | undefined): value is Readonly<Record<string, JsonValue>> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);

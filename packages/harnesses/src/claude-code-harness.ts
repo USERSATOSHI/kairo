@@ -7,7 +7,7 @@ import type {
   HarnessError,
   HarnessExecution,
   HarnessExecutionRequest,
-} from '@kairo/executors';
+} from '@kouro/executors';
 import { invalidResponse, processFailure } from './errors.ts';
 import { BunProcessRunner, type ProcessRunner } from './process-runner.ts';
 
@@ -118,6 +118,7 @@ export class ClaudeCodeHarness implements AgentHarness {
       'claude',
       [...baseArgs, ...schemaArgs, promptFor(request)],
       request.workingDirectory,
+      request.onTranscriptChunk,
     );
     if (result.isErr()) return result;
     const output = result.unwrap();

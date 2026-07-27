@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import type { OrchestrationIntent, RecoveryPolicy } from '@kairo/domain';
-import { reduceRun, scheduleRun } from '@kairo/runtime';
+import type { OrchestrationIntent, RecoveryPolicy } from '@kouro/domain';
+import { reduceRun, scheduleRun } from '@kouro/runtime';
 import { compileOrThrow, interruptedEvents, workflowSource } from './fixtures.ts';
 
 function recoveryDecision(policy: RecoveryPolicy, resumeToken?: string): OrchestrationIntent {

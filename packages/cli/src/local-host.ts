@@ -1,35 +1,44 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
-import { mkdir, readFile, readdir } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
-import { compileAdwPackage } from '@kairo/adw';
+import { compileAdwPackage } from '@kouro/adw';
 import {
-  createKairoApp,
-  KairoTicketRunQuery,
+  createKouroApp,
+  KouroTicketRunQuery,
   LocalArtifactContentReader,
-  type KairoApp,
-} from '@kairo/api';
-import type { CreateRunRequest, CreateRunResponse, RepositorySummary } from '@kairo/api-contracts';
-import type { TicketProviderConfigurationView } from '@kairo/api-contracts';
+  type KouroApp,
+  type ObservableRunStore,
+} from '@kouro/api';
+import type {
+  CreateRunRequest,
+  CreateRunResponse,
+  DeleteRunResponse,
+  RepositorySummary,
+} from '@kouro/api-contracts';
+import type { TicketProviderConfigurationView } from '@kouro/api-contracts';
 import {
   AgentExecutor,
   type AgentHarness,
   BunCommandRunner,
   RunCoordinator,
+  RunStoreErrorKind,
   type RunAggregate,
+  type RunStoreError,
   type TicketProvider,
-} from '@kairo/executors';
+} from '@kouro/executors';
 import {
   ClaudeCodeHarness,
   CodexHarness,
   HarnessRegistry,
   LocalArtifactWriter,
+  LocalInvocationActivityStore,
   OpenCodeHarness,
   PiHarness,
-} from '@kairo/harnesses';
-import { SqliteEventStore } from '@kairo/persistence-sqlite';
-import { WorktreeSandboxProvider, type RunWorktree } from '@kairo/sandbox-worktree';
+} from '@kouro/harnesses';
+import { SqliteEventStore } from '@kouro/persistence-sqlite';
+import { WorktreeSandboxProvider, type RunWorktree } from '@kouro/sandbox-worktree';
 import {
   SqliteTicketRepository,
   SqliteTicketRunStore,
@@ -51,8 +60,8 @@ import {
   type UpdateTicketInput,
   toTicketError,
   toTicketSyncError,
-} from '@kairo/tickets';
-import { ok, type Result } from '@usersatoshi/results';
+} from '@kouro/tickets';
+import { err, ok, type Result } from '@usersatoshi/results';
 
 import { CliErrorKind, cliErr, type CliError } from './errors.ts';
 import { resolveLocalPaths, type LocalPaths } from './paths.ts';
@@ -94,16 +103,46 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : JSON.stringify(error);
 }
 
-function repositoryId(path: string): string {
+function isNotFoundError(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT';
+}
+
+/** Returns the stable local identity used to scope runs to a repository path. */
+export function repositoryIdForPath(path: string): string {
   return `repo-${createHash('sha256').update(resolve(path)).digest('hex').slice(0, 16)}`;
 }
 
-function runId(): string {
+function createRunId(): string {
   return `run-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function belongsToRepository(aggregate: RunAggregate, repositoryId: string): boolean {
+  return aggregate.state.configuration.repositoryId === repositoryId;
+}
+
+class RepositoryScopedRunStore implements ObservableRunStore {
+  constructor(
+    private readonly store: SqliteEventStore,
+    private readonly repositoryId: string,
+  ) {}
+
+  loadRun(runId: string): Result<RunAggregate, RunStoreError> {
+    const loaded = this.store.loadRun(runId);
+    return loaded.isErr() || belongsToRepository(loaded.unwrap(), this.repositoryId)
+      ? loaded
+      : err({ kind: RunStoreErrorKind.RunNotFound, runId });
+  }
+
+  listRuns(): Result<readonly RunAggregate[], RunStoreError> {
+    const listed = this.store.listRuns();
+    return listed.isErr()
+      ? listed
+      : ok(listed.unwrap().filter((run) => belongsToRepository(run, this.repositoryId)));
+  }
 }
 
 function harnessRouteError(
@@ -127,7 +166,7 @@ function harnessRouteError(
 
 /** Mounts the API under `/api` and serves production web assets as an SPA. */
 export function createLocalRequestHandler(
-  app: KairoApp,
+  app: KouroApp,
   webRoot: string,
 ): (request: Request) => Promise<Response> {
   return async (request): Promise<Response> => {
@@ -154,7 +193,7 @@ export function createLocalRequestHandler(
   };
 }
 
-export class LocalKairoHost {
+export class LocalKouroHost {
   readonly store: SqliteEventStore;
   readonly sandbox: WorktreeSandboxProvider;
   readonly worker: LocalWorker;
@@ -169,6 +208,7 @@ export class LocalKairoHost {
   private readonly registry: HarnessRegistry;
   private readonly ticketProviders: ReadonlyMap<string, TicketProvider>;
   private readonly artifactWriter: LocalArtifactWriter;
+  private readonly activityStore: LocalInvocationActivityStore;
   private initialized = false;
 
   constructor(
@@ -198,7 +238,7 @@ export class LocalKairoHost {
       clock,
       ids,
       this.ticketRuns,
-      new KairoTicketRunQuery(this.store),
+      new KouroTicketRunQuery(this.store),
     );
     this.ticketMigrationService = new TicketMigrationService(this.tickets, this.ticketSync, clock);
     const ticketComposition: TicketProviderComposition = composeTicketProviders(
@@ -209,6 +249,7 @@ export class LocalKairoHost {
     this.ticketProviderViews = ticketComposition.configurations;
     this.sandbox = new WorktreeSandboxProvider(paths.worktreeDirectory);
     this.artifactWriter = new LocalArtifactWriter(paths.artifactDirectory);
+    this.activityStore = new LocalInvocationActivityStore(paths.artifactDirectory);
     this.registry = new HarnessRegistry(harnesses);
     this.ticketProviders = new Map(ticketProviders.map((provider) => [provider.id, provider]));
     this.worker = new LocalWorker(this.store, {
@@ -250,7 +291,6 @@ export class LocalKairoHost {
           message(sandbox.error),
         );
       }
-      await this.worker.recover();
       this.initialized = true;
       return ok(undefined);
     } catch (cause) {
@@ -260,6 +300,9 @@ export class LocalKairoHost {
 
   async create(request: CreateRunRequest): Promise<Result<CreateRunResponse, CliError>> {
     const ticket = request.ticket?.trim();
+    if (ticket?.startsWith('kouro:')) {
+      return this.createTicketRun(request, ticket.slice('kouro:'.length).trim());
+    }
     if (ticket?.startsWith('kairo:')) {
       return this.createTicketRun(request, ticket.slice('kairo:'.length).trim());
     }
@@ -268,13 +311,13 @@ export class LocalKairoHost {
 
   private async createRun(
     request: CreateRunRequest,
-    suppliedWorkItem?: import('@kairo/domain').WorkItemSnapshot,
+    suppliedWorkItem?: import('@kouro/domain').WorkItemSnapshot,
   ): Promise<Result<CreateRunResponse, CliError>> {
     if (!this.initialized) {
       return cliErr(
         CliErrorKind.Initialization,
         'host_not_initialized',
-        'Kairo is not initialized',
+        'Kouro is not initialized',
       );
     }
     const packageDirectory =
@@ -332,8 +375,8 @@ export class LocalKairoHost {
     if (workItem?.isErr()) {
       return cliErr(CliErrorKind.InvalidArguments, workItem.error.code, workItem.error.message);
     }
-    const id = runId();
-    const repoId = repositoryId(request.repositoryPath);
+    const id = createRunId();
+    const repoId = repositoryIdForPath(request.repositoryPath);
     const registered = await this.sandbox.registerRepository(repoId, request.repositoryPath);
     if (registered.isErr()) {
       return cliErr(
@@ -366,7 +409,7 @@ export class LocalKairoHost {
         repositoryId: repoId,
         repositoryPath: pinned.unwrap().repositoryPath,
         worktreePath: worktree.unwrap().path,
-        deliveryBranch: `kairo/${id}`,
+        deliveryBranch: `kouro/${id}`,
         operator: request.actor,
       },
       idempotencyKey: `create:${id}`,
@@ -386,7 +429,7 @@ export class LocalKairoHost {
       return cliErr(
         CliErrorKind.InvalidArguments,
         'invalid_ticket_reference',
-        'Kairo ticket references must use kairo:<ticket-id>',
+        'Kouro ticket references must use kouro:<ticket-id>',
       );
     }
     if (request.task !== undefined) {
@@ -400,7 +443,7 @@ export class LocalKairoHost {
     const service = new TicketRunService(
       this.tickets,
       this.ticketRuns,
-      new KairoTicketRunQuery(this.store),
+      new KouroTicketRunQuery(this.store),
       {
         start: async ({ ticket, snapshot }) => {
           const workItem = createStoredTicketWorkItem(ticket, snapshot);
@@ -463,26 +506,149 @@ export class LocalKairoHost {
     return new RunCoordinator(
       this.store,
       new BunCommandRunner(workingDirectory),
-      new AgentExecutor(this.registry, this.artifactWriter),
+      new AgentExecutor(this.registry, this.artifactWriter, this.activityStore),
       workingDirectory,
     );
   }
 
-  app() {
-    return createKairoApp({
-      runs: this.store,
+  app(repositoryPath?: string): KouroApp {
+    const scopeId = repositoryPath ? repositoryIdForPath(repositoryPath) : undefined;
+    const runs = scopeId ? new RepositoryScopedRunStore(this.store, scopeId) : this.store;
+    return createKouroApp({
+      runs,
       coordinator: this.coordinator(),
       artifacts: new LocalArtifactContentReader(this.paths.artifactDirectory),
-      repositories: this,
-      runCreator: this,
+      activities: this.activityStore,
+      repositories: scopeId
+        ? {
+            list: async () => (await this.list()).filter((repository) => repository.id === scopeId),
+          }
+        : this,
+      runCreator: scopeId
+        ? {
+            create: (request) =>
+              repositoryIdForPath(request.repositoryPath) === scopeId
+                ? this.create(request)
+                : Promise.resolve(
+                    cliErr(
+                      CliErrorKind.InvalidArguments,
+                      'repository_scope_mismatch',
+                      'The requested repository is outside this server scope',
+                    ),
+                  ),
+          }
+        : this,
+      runDeleter: this,
       tickets: {
         repository: this.tickets,
         runs: this.ticketRuns,
-        runQuery: new KairoTicketRunQuery(this.store),
+        runQuery: new KouroTicketRunQuery(runs),
         sync: this.ticketSync,
       },
       ticketProviders: { list: () => this.ticketProviderViews },
     });
+  }
+
+  runStoreForRepository(repositoryPath: string): ObservableRunStore {
+    return new RepositoryScopedRunStore(this.store, repositoryIdForPath(repositoryPath));
+  }
+
+  async delete(runId: string): Promise<Result<DeleteRunResponse, CliError>> {
+    const loaded = this.store.loadRun(runId);
+    if (loaded.isErr()) {
+      return cliErr(CliErrorKind.Persistence, 'run_not_found', `Run ${runId} was not found`);
+    }
+    const aggregate = loaded.unwrap();
+    if (!['succeeded', 'failed', 'cancelled'].includes(aggregate.state.status)) {
+      return cliErr(
+        CliErrorKind.Lifecycle,
+        'run_not_terminal',
+        `Run ${runId} must be terminal before it can be deleted`,
+      );
+    }
+    const configuration = runConfiguration(aggregate);
+    if (!configuration) {
+      return cliErr(
+        CliErrorKind.Persistence,
+        'invalid_run_configuration',
+        `Run ${runId} has invalid local configuration`,
+      );
+    }
+    const metadataPath = resolve(
+      this.paths.worktreeDirectory,
+      'runs',
+      configuration.repositoryId,
+      `${runId}.json`,
+    );
+    try {
+      let commonGitDirectory: string | undefined;
+      try {
+        const recorded: unknown = JSON.parse(await readFile(metadataPath, 'utf8'));
+        if (!isRecord(recorded) || typeof recorded.commonGitDirectory !== 'string') {
+          return cliErr(
+            CliErrorKind.Persistence,
+            'invalid_worktree_metadata',
+            `Run ${runId} has invalid worktree metadata`,
+          );
+        }
+        commonGitDirectory = recorded.commonGitDirectory;
+      } catch (cause) {
+        if (!isNotFoundError(cause)) throw cause;
+        const worktreeExists = await stat(configuration.worktreePath).then(
+          () => true,
+          (error: unknown) => {
+            if (isNotFoundError(error)) return false;
+            throw error;
+          },
+        );
+        if (worktreeExists) {
+          return cliErr(
+            CliErrorKind.Persistence,
+            'missing_worktree_metadata',
+            `Run ${runId} still has a worktree but its metadata is missing`,
+          );
+        }
+      }
+      if (commonGitDirectory) {
+        const cleaned = await this.sandbox.cleanupWorktree(
+          {
+            repositoryId: configuration.repositoryId,
+            runId,
+            repositoryPath: configuration.repositoryPath,
+            path: configuration.worktreePath,
+            commonGitDirectory,
+            startingCommit: aggregate.state.startingCommit,
+          },
+          true,
+        );
+        if (cleaned.isErr()) {
+          return cliErr(
+            CliErrorKind.Repository,
+            'worktree_deletion_failed',
+            message(cleaned.error),
+          );
+        }
+      }
+      const artifacts = await this.artifactWriter.deleteRunArtifacts(runId);
+      if (artifacts.isErr()) {
+        return cliErr(
+          CliErrorKind.Persistence,
+          'artifact_deletion_failed',
+          artifacts.error.message,
+        );
+      }
+      const deleted = this.store.deleteRun(runId);
+      if (deleted.isErr()) {
+        return cliErr(
+          CliErrorKind.Persistence,
+          'run_deletion_failed',
+          `Run ${runId} could not be deleted`,
+        );
+      }
+      return ok({ runId, deleted: true });
+    } catch (cause) {
+      return cliErr(CliErrorKind.Persistence, 'run_deletion_failed', message(cause));
+    }
   }
 
   createTicket(input: {
@@ -614,15 +780,18 @@ export class LocalKairoHost {
     ];
   }
 
-  async serve(port = 4317): Promise<Result<{ readonly url: string; stop(): void }, CliError>> {
+  async serve(
+    port = 4317,
+    repositoryPath?: string,
+  ): Promise<Result<{ readonly url: string; stop(): void }, CliError>> {
     if (!this.initialized) {
       return cliErr(
         CliErrorKind.Initialization,
         'host_not_initialized',
-        'Kairo is not initialized',
+        'Kouro is not initialized',
       );
     }
-    const app = this.app();
+    const app = this.app(repositoryPath);
     const webRoot = resolve(import.meta.dir, '..', '..', 'web', 'dist');
     const fetch = createLocalRequestHandler(app, webRoot);
     try {
@@ -711,8 +880,8 @@ export class LocalKairoHost {
       worktree: durableWorktree,
       expectedHead: prepared.unwrap().head,
       expectedTree: prepared.unwrap().tree,
-      message: `Kairo delivery ${aggregate.runId}`,
-      identity: { name: 'Kairo', email: 'kairo@localhost' },
+      message: `Kouro delivery ${aggregate.runId}`,
+      identity: { name: 'Kouro', email: 'kouro@localhost' },
       timestamp: aggregate.state.startedAt ?? new Date(0).toISOString(),
     });
     if (committed.isErr()) throw new Error(message(committed.error));

@@ -4,11 +4,11 @@ import { join } from 'node:path';
 
 import { describe, expect, test } from 'bun:test';
 
-import { createKairoApp, KairoTicketRunQuery } from '@kairo/api';
-import type { TicketProviderConfigurationView } from '@kairo/api-contracts';
-import type { CommandExecution, CommandRunner, CommandRunnerError } from '@kairo/executors';
-import { RunCoordinator } from '@kairo/executors';
-import { SqliteEventStore } from '@kairo/persistence-sqlite';
+import { createKouroApp, KouroTicketRunQuery } from '@kouro/api';
+import type { TicketProviderConfigurationView } from '@kouro/api-contracts';
+import type { CommandExecution, CommandRunner, CommandRunnerError } from '@kouro/executors';
+import { RunCoordinator } from '@kouro/executors';
+import { SqliteEventStore } from '@kouro/persistence-sqlite';
 import {
   SqliteTicketRepository,
   SqliteTicketRunStore,
@@ -17,7 +17,7 @@ import {
   type TicketClock,
   type TicketIdGenerator,
   type TicketMigration,
-} from '@kairo/tickets';
+} from '@kouro/tickets';
 import { type Result } from '@usersatoshi/results';
 
 class UnusedCommandRunner implements CommandRunner {
@@ -56,7 +56,7 @@ const providerConfigurations: readonly TicketProviderConfigurationView[] = [
     configured: true,
     credentialSource: 'server_environment',
     owner: 'acme',
-    repository: 'kairo',
+    repository: 'kouro',
     message: 'Token resolved by the server',
   },
 ];
@@ -66,7 +66,7 @@ function migration(stage: TicketMigration['stage'], updatedAt: string): TicketMi
     ticketId: 'ticket-ui-1',
     targetProvider: 'github',
     projectId: 'project-ui',
-    marker: 'kairo-ticket:ticket-ui-1',
+    marker: 'kouro-ticket:ticket-ui-1',
     stage,
     snapshot: {
       revision: 1,
@@ -83,8 +83,8 @@ function migration(stage: TicketMigration['stage'], updatedAt: string): TicketMi
 
 describe('T6 ticket API and UI read model', () => {
   test('lists projects, derives a board card, and returns durable ticket history', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'kairo-t6-ticket-ui-'));
-    const databasePath = join(directory, 'kairo.sqlite');
+    const directory = mkdtempSync(join(tmpdir(), 'kouro-t6-ticket-ui-'));
+    const databasePath = join(directory, 'kouro.sqlite');
     const runStore = new SqliteEventStore(databasePath);
     const tickets = new SqliteTicketRepository(databasePath);
     const ticketRuns = new SqliteTicketRunStore(databasePath);
@@ -160,24 +160,24 @@ describe('T6 ticket API and UI read model', () => {
       ).toBe(true);
 
       const coordinator = new RunCoordinator(runStore, new UnusedCommandRunner());
-      const app = createKairoApp({
+      const app = createKouroApp({
         runs: runStore,
         coordinator,
         tickets: {
           repository: tickets,
           runs: ticketRuns,
-          runQuery: new KairoTicketRunQuery(runStore),
+          runQuery: new KouroTicketRunQuery(runStore),
           sync: ticketSync,
         },
         ticketProviders: { list: () => providerConfigurations },
       });
 
       expect(
-        await (await app.handle(new Request('http://kairo.test/ticket-projects'))).json(),
+        await (await app.handle(new Request('http://kouro.test/ticket-projects'))).json(),
       ).toEqual([{ id: 'project-ui', ticketCount: 1 }]);
       expect(
         await (
-          await app.handle(new Request('http://kairo.test/tickets?projectId=project-ui'))
+          await app.handle(new Request('http://kouro.test/tickets?projectId=project-ui'))
         ).json(),
       ).toEqual([
         expect.objectContaining({
@@ -186,7 +186,7 @@ describe('T6 ticket API and UI read model', () => {
         }),
       ]);
       expect(
-        await (await app.handle(new Request('http://kairo.test/tickets/ticket-ui-1'))).json(),
+        await (await app.handle(new Request('http://kouro.test/tickets/ticket-ui-1'))).json(),
       ).toEqual(
         expect.objectContaining({
           comments: [expect.objectContaining({ id: 'comment-ui-1' })],
@@ -202,7 +202,7 @@ describe('T6 ticket API and UI read model', () => {
         }),
       );
       expect(
-        await (await app.handle(new Request('http://kairo.test/ticket-providers'))).json(),
+        await (await app.handle(new Request('http://kouro.test/ticket-providers'))).json(),
       ).toEqual(providerConfigurations);
     } finally {
       ticketSync.dispose();

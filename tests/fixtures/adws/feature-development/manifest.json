@@ -3,7 +3,7 @@
   "name": "Feature Development",
   "version": "1.0.0",
   "description": "Bounded, approval-gated feature development vertical slice.",
-  "kairo": ">=0.1.0",
-  "entrypoint": "./kairo.adw.ts",
+  "kouro": ">=0.1.0",
+  "entrypoint": "./kouro.adw.ts",
   "permissions": ["repository.read", "repository.write", "terminal.execute"]
 }

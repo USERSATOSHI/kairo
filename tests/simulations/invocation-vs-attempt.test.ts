@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { reduceRun, RuntimeErrorKind, scheduleRun } from '@kairo/runtime';
+import { reduceRun, RuntimeErrorKind, scheduleRun } from '@kouro/runtime';
 import { compileOrThrow, interruptedEvents, workflowSource } from './fixtures.ts';
 
 describe('ADR-0002: definition, invocation, and attempt', () => {

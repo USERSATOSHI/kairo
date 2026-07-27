@@ -2,12 +2,13 @@ import type {
   ArtifactContent,
   CreateRunRequest,
   CreateRunResponse,
+  DeleteRunResponse,
   RepositorySummary,
   TicketProviderConfigurationView,
   TicketProjectView,
-} from '@kairo/api-contracts';
-import type { ArtifactReference } from '@kairo/domain';
-import type { RunAggregate, RunStoreError } from '@kairo/executors';
+} from '@kouro/api-contracts';
+import type { ArtifactReference } from '@kouro/domain';
+import type { RunAggregate, RunStoreError } from '@kouro/executors';
 import type { Result } from '@usersatoshi/results';
 import type {
   TicketHistoryStore,
@@ -15,7 +16,7 @@ import type {
   TicketRunQuery,
   TicketRunStore,
   TicketSyncStore,
-} from '@kairo/tickets';
+} from '@kouro/tickets';
 
 export interface ObservableRunStore {
   loadRun(runId: string): Result<RunAggregate, RunStoreError>;
@@ -36,6 +37,27 @@ export interface ArtifactContentReaderError {
   readonly message: string;
 }
 
+export interface InvocationActivityContent {
+  readonly harnessId: string;
+  readonly role: string;
+  readonly prompt: string;
+  readonly transcript: string;
+  readonly complete: boolean;
+}
+
+export interface InvocationActivityReader {
+  read(
+    runId: string,
+    invocationSequence: number,
+    attemptNumber: number,
+  ): Promise<Result<InvocationActivityContent | undefined, InvocationActivityReaderError>>;
+}
+
+export interface InvocationActivityReaderError {
+  readonly kind: 0;
+  readonly message: string;
+}
+
 export interface RepositoryQuery {
   list(): Promise<readonly RepositorySummary[]>;
 }
@@ -49,12 +71,21 @@ export interface LocalRunCreatorError {
   readonly message: string;
 }
 
+export interface LocalRunDeleter {
+  delete(runId: string): Promise<Result<DeleteRunResponse, LocalRunDeleterError>>;
+}
+
+export interface LocalRunDeleterError {
+  readonly kind: number;
+  readonly message: string;
+}
+
 export interface TicketReadServices {
   readonly repository: Pick<
     TicketRepository,
     'get' | 'list' | 'listComments' | 'listRelationships'
   > & {
-    listProjects(): Result<readonly TicketProjectView[], import('@kairo/tickets').TicketError>;
+    listProjects(): Result<readonly TicketProjectView[], import('@kouro/tickets').TicketError>;
   };
   readonly runs: TicketRunStore;
   readonly runQuery: TicketRunQuery;

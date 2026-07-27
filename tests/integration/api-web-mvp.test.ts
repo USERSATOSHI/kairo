@@ -4,13 +4,13 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, test } from 'bun:test';
 
-import { compileWorkflow } from '@kairo/adw';
-import { createKairoApp, LocalArtifactContentReader, type ArtifactContentReader } from '@kairo/api';
-import type { ArtifactReference, WorkflowSourceBundle } from '@kairo/domain';
-import type { CommandExecution, CommandRunner, CommandRunnerError } from '@kairo/executors';
-import { RunCoordinator } from '@kairo/executors';
-import { LocalArtifactWriter } from '@kairo/harnesses';
-import { SqliteEventStore } from '@kairo/persistence-sqlite';
+import { compileWorkflow } from '@kouro/adw';
+import { createKouroApp, LocalArtifactContentReader, type ArtifactContentReader } from '@kouro/api';
+import type { ArtifactReference, WorkflowSourceBundle } from '@kouro/domain';
+import type { CommandExecution, CommandRunner, CommandRunnerError } from '@kouro/executors';
+import { RunCoordinator } from '@kouro/executors';
+import { LocalArtifactWriter } from '@kouro/harnesses';
+import { SqliteEventStore } from '@kouro/persistence-sqlite';
 import { ok, type Result } from '@usersatoshi/results';
 
 class UnusedCommandRunner implements CommandRunner {
@@ -65,7 +65,7 @@ afterEach(() => {
 
 describe('M6 observable Elysia and web MVP', () => {
   test('local artifact reads verify durable size and checksum metadata', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'kairo-m6-artifact-'));
+    const directory = mkdtempSync(join(tmpdir(), 'kouro-m6-artifact-'));
     disposals.push(() => rmSync(directory, { recursive: true, force: true }));
     const writer = new LocalArtifactWriter(directory);
     const artifact = (
@@ -96,7 +96,7 @@ describe('M6 observable Elysia and web MVP', () => {
   });
 
   test('factory exposes durable state and decides an approval without opening a port', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'kairo-m6-api-'));
+    const directory = mkdtempSync(join(tmpdir(), 'kouro-m6-api-'));
     const store = new SqliteEventStore(join(directory, 'runs.sqlite'));
     const initialized = store.initialize();
     if (initialized.isErr()) throw new Error(JSON.stringify(initialized.error));
@@ -130,7 +130,7 @@ describe('M6 observable Elysia and web MVP', () => {
         );
       },
     };
-    const app = createKairoApp({
+    const app = createKouroApp({
       runs: store,
       coordinator,
       artifacts: reader,
@@ -138,15 +138,15 @@ describe('M6 observable Elysia and web MVP', () => {
         list: () =>
           Promise.resolve([
             {
-              id: 'kairo',
-              path: '/repositories/kairo',
+              id: 'kouro',
+              path: '/repositories/kouro',
               startingCommit: 'abc123',
             },
           ]),
       },
     });
 
-    const runsResponse = await app.handle(new Request('http://kairo.test/runs'));
+    const runsResponse = await app.handle(new Request('http://kouro.test/runs'));
     expect(runsResponse.status).toBe(200);
     expect(await responseJson(runsResponse)).toEqual([
       expect.objectContaining({
@@ -156,7 +156,7 @@ describe('M6 observable Elysia and web MVP', () => {
       }),
     ]);
 
-    const runResponse = await app.handle(new Request('http://kairo.test/runs/observable-run'));
+    const runResponse = await app.handle(new Request('http://kouro.test/runs/observable-run'));
     expect(await responseJson(runResponse)).toEqual(
       expect.objectContaining({
         nodes: expect.arrayContaining([
@@ -169,14 +169,14 @@ describe('M6 observable Elysia and web MVP', () => {
     );
 
     const artifactResponse = await app.handle(
-      new Request('http://kairo.test/runs/observable-run/artifacts/delivery.diff'),
+      new Request('http://kouro.test/runs/observable-run/artifacts/delivery.diff'),
     );
     expect(await responseJson(artifactResponse)).toEqual(
       expect.objectContaining({ id: 'delivery.diff', content: '+ observable diff' }),
     );
 
     const approvalResponse = await app.handle(
-      new Request('http://kairo.test/runs/observable-run/approvals/1', {
+      new Request('http://kouro.test/runs/observable-run/approvals/1', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -196,15 +196,15 @@ describe('M6 observable Elysia and web MVP', () => {
     expect(store.loadRun('observable-run').unwrap().events.at(-1)?.type).toBe('approval.granted');
 
     expect(
-      await responseJson(await app.handle(new Request('http://kairo.test/workflows'))),
+      await responseJson(await app.handle(new Request('http://kouro.test/workflows'))),
     ).toEqual([expect.objectContaining({ id: 'api-approval', nodeCount: 3 })]);
     expect(
-      await responseJson(await app.handle(new Request('http://kairo.test/repositories'))),
-    ).toEqual([expect.objectContaining({ id: 'kairo' })]);
+      await responseJson(await app.handle(new Request('http://kouro.test/repositories'))),
+    ).toEqual([expect.objectContaining({ id: 'kouro' })]);
   });
 
   test('event reconnect replays only sequences after the client cursor', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'kairo-m6-events-'));
+    const directory = mkdtempSync(join(tmpdir(), 'kouro-m6-events-'));
     const store = new SqliteEventStore(join(directory, 'runs.sqlite'));
     const initialized = store.initialize();
     if (initialized.isErr()) throw new Error(JSON.stringify(initialized.error));
@@ -224,10 +224,10 @@ describe('M6 observable Elysia and web MVP', () => {
       .unwrap();
     await coordinator.advance('reconnect-run');
     await coordinator.advance('reconnect-run');
-    const app = createKairoApp({ runs: store, coordinator });
+    const app = createKouroApp({ runs: store, coordinator });
 
     const response = await app.handle(
-      new Request('http://kairo.test/runs/reconnect-run/events', {
+      new Request('http://kouro.test/runs/reconnect-run/events', {
         headers: { 'last-event-id': '1' },
       }),
     );

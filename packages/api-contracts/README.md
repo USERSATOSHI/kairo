@@ -1,25 +1,25 @@
-# `@kairo/api-contracts` — Transport-Neutral API Contracts
+# `@kouro/api-contracts` — Transport-Neutral API Contracts
 
-Transport-neutral request and response shapes shared by the Elysia application, Eden client, and React dashboard. The package contains **data contracts only** — pure TypeScript interfaces with zero runtime code, no framework imports, and no dependencies beyond `@kairo/domain`.
+Transport-neutral request and response shapes shared by the Elysia application, Eden client, and React dashboard. The package contains **data contracts only** — pure TypeScript interfaces with zero runtime code, no framework imports, and no dependencies beyond `@kouro/domain`.
 
 ## Purpose
 
 This package defines the shared vocabulary between:
 
 ```
-@kairo/api (Elysia HTTP server)
+@kouro/api (Elysia HTTP server)
     ↓ imports from
-@kairo/api-contracts (request/response DTOs)
+@kouro/api-contracts (request/response DTOs)
     ↓ types reference
-@kairo/domain (domain model types)
+@kouro/domain (domain model types)
 ```
 
 ```
-@kairo/web (React dashboard)
+@kouro/web (React dashboard)
     ↓ imports from
-@kairo/api-contracts (view models, request shapes)
+@kouro/api-contracts (view models, request shapes)
     ↓ calls
-@kairo/eden-client (generated from the Elysia app type)
+@kouro/eden-client (generated from the Elysia app type)
 ```
 
 ## Contracts
@@ -221,4 +221,4 @@ The SSE endpoint delivers one `EventStreamMessage` per event, supporting both `l
 
 ## Dependencies
 
-- `@kairo/domain` — imports 5 types as `type` imports only: `ApprovalBinding`, `ArtifactReference`, `CompiledWorkflowBundle`, `RunEvent`, `RunState`
+- `@kouro/domain` — imports 5 types as `type` imports only: `ApprovalBinding`, `ArtifactReference`, `CompiledWorkflowBundle`, `RunEvent`, `RunState`

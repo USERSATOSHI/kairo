@@ -5,7 +5,7 @@ import { App } from './App.tsx';
 import './styles.css';
 
 const root = document.getElementById('root');
-if (!root) throw new Error('Kairo web root is missing');
+if (!root) throw new Error('Kouro web root is missing');
 
 createRoot(root).render(
   <StrictMode>

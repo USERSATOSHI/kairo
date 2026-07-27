@@ -1,9 +1,15 @@
-import type { RunAggregate } from '@kairo/executors';
-import type { SqliteEventStore } from '@kairo/persistence-sqlite';
+import { randomUUID } from 'node:crypto';
+
+import type { RunAggregate } from '@kouro/executors';
+import type { SqliteEventStore } from '@kouro/persistence-sqlite';
 
 export interface WorkerRunServices {
-  coordinatorFor(aggregate: RunAggregate): import('@kairo/executors').RunCoordinator;
+  coordinatorFor(aggregate: RunAggregate): import('@kouro/executors').RunCoordinator;
   finalize(aggregate: RunAggregate): Promise<void>;
+}
+
+export interface WorkerClock {
+  nowMs(): number;
 }
 
 function stableBoundary(aggregate: RunAggregate): boolean {
@@ -16,15 +22,58 @@ function stableBoundary(aggregate: RunAggregate): boolean {
 export class LocalWorker {
   private timer: ReturnType<typeof setInterval> | undefined;
   private advancing = false;
+  private ownsLease = false;
+  private recoveredLease = false;
+  private renewAfterMs = 0;
+  private ownershipCheck: Promise<boolean> | undefined;
   private readonly blockedAtSequence = new Map<string, number>();
 
   constructor(
     private readonly store: SqliteEventStore,
     private readonly services: WorkerRunServices,
     private readonly intervalMs = 250,
+    private readonly leaseDurationMs = 10_000,
+    private readonly ownerId = randomUUID(),
+    private readonly clock: WorkerClock = { nowMs: () => Date.now() },
   ) {}
 
   async recover(): Promise<void> {
+    if (!(await this.ensureOwnership())) return;
+  }
+
+  start(): void {
+    if (this.timer) return;
+    this.timer = setInterval(() => void this.maintain(), this.intervalMs);
+    void this.maintain();
+  }
+
+  async runUntilStable(runId: string): Promise<RunAggregate> {
+    this.start();
+    for (;;) {
+      const loaded = this.store.loadRun(runId);
+      if (loaded.isErr()) throw new Error(`Run ${runId} could not be loaded`);
+      if (stableBoundary(loaded.unwrap())) return loaded.unwrap();
+      if ((await this.ensureOwnership()) && !this.advancing) {
+        this.advancing = true;
+        try {
+          return await this.advanceUntilStable(runId);
+        } finally {
+          this.advancing = false;
+        }
+      }
+      await new Promise<void>((resolveWait) => setTimeout(resolveWait, this.intervalMs));
+    }
+  }
+
+  dispose(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+    if (this.ownsLease) this.store.releaseWorkerLease(this.ownerId);
+    this.ownsLease = false;
+    this.recoveredLease = false;
+  }
+
+  private async recoverOwnedRuns(): Promise<void> {
     const listed = this.store.listRuns();
     if (listed.isErr()) throw new Error('Could not list runs during startup recovery');
     for (const aggregate of listed.unwrap()) {
@@ -34,12 +83,7 @@ export class LocalWorker {
     }
   }
 
-  start(): void {
-    if (this.timer) return;
-    this.timer = setInterval(() => void this.tick(), this.intervalMs);
-  }
-
-  async runUntilStable(runId: string): Promise<RunAggregate> {
+  private async advanceUntilStable(runId: string): Promise<RunAggregate> {
     for (;;) {
       const loaded = this.store.loadRun(runId);
       if (loaded.isErr()) throw new Error(`Run ${runId} could not be loaded`);
@@ -61,13 +105,8 @@ export class LocalWorker {
     }
   }
 
-  dispose(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = undefined;
-  }
-
-  private async tick(): Promise<void> {
-    if (this.advancing) return;
+  private async maintain(): Promise<void> {
+    if (!(await this.ensureOwnership()) || this.advancing) return;
     this.advancing = true;
     try {
       const listed = this.store.listRuns();
@@ -77,11 +116,43 @@ export class LocalWorker {
         if (blockedAt !== undefined && blockedAt === aggregate.nextEventSequence) continue;
         this.blockedAtSequence.delete(aggregate.runId);
         if (aggregate.state.status === 'running') {
-          await this.runUntilStable(aggregate.runId);
+          await this.advanceUntilStable(aggregate.runId);
         }
       }
     } finally {
       this.advancing = false;
     }
+  }
+
+  private async ensureOwnership(): Promise<boolean> {
+    if (this.ownershipCheck) return this.ownershipCheck;
+    this.ownershipCheck = this.checkOwnership();
+    try {
+      return await this.ownershipCheck;
+    } finally {
+      this.ownershipCheck = undefined;
+    }
+  }
+
+  private async checkOwnership(): Promise<boolean> {
+    const nowMs = this.clock.nowMs();
+    if (this.ownsLease && nowMs < this.renewAfterMs) return true;
+    const acquired = this.store.tryAcquireWorkerLease(
+      this.ownerId,
+      nowMs,
+      nowMs + this.leaseDurationMs,
+    );
+    if (acquired.isErr() || !acquired.unwrap()) {
+      this.ownsLease = false;
+      this.recoveredLease = false;
+      return false;
+    }
+    this.ownsLease = true;
+    this.renewAfterMs = nowMs + Math.floor(this.leaseDurationMs / 3);
+    if (!this.recoveredLease) {
+      await this.recoverOwnedRuns();
+      this.recoveredLease = true;
+    }
+    return true;
   }
 }

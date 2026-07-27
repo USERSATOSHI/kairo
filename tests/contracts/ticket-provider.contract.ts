@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import type { TicketProvider } from '@kairo/executors';
+import type { TicketProvider } from '@kouro/executors';
 
 export interface TicketProviderContractHarness {
   readonly provider: TicketProvider;

@@ -9,7 +9,7 @@ M1–M6 expose tested components, but operators need one executable composition.
 
 ## Decision
 
-`@kairo/cli` is the application composition boundary. It owns predictable local
+`@kouro/cli` is the application composition boundary. It owns predictable local
 paths, initializes SQLite and worktree storage, compiles packaged or local ADWs,
 registers and pins repositories, creates run worktrees, constructs per-run
 coordinators, runs the local worker, and hosts the Elysia API with built web

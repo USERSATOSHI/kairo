@@ -5,7 +5,7 @@
 
 ## Context
 
-T1 established local tickets as mutable planning aggregates beside Kairo's
+T1 established local tickets as mutable planning aggregates beside Kouro's
 runtime. T2 through T6 connect those tickets to runs and external providers
 without weakening immutable run inputs or runtime ownership.
 

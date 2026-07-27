@@ -7,8 +7,8 @@ import {
   normalizeGitHubIssueWebhook,
   type TicketFetch,
   validateGitHubWebhookSignature,
-} from '@kairo/ticket-provider-github';
-import { TicketProviderErrorKind } from '@kairo/tickets';
+} from '@kouro/ticket-provider-github';
+import { TicketProviderErrorKind } from '@kouro/tickets';
 
 interface FakeGitHub {
   readonly fetch: TicketFetch;
@@ -26,7 +26,7 @@ function issue(
     title: 'GitHub ticket',
     body: description,
     state,
-    html_url: 'https://github.test/acme/kairo/issues/7',
+    html_url: 'https://github.test/acme/kouro/issues/7',
     updated_at: state === 'open' ? '2026-07-26T10:00:00Z' : '2026-07-26T11:00:00Z',
     labels: [{ name: 'ticket' }],
     assignees: [{ login: 'satoshi' }],
@@ -53,7 +53,7 @@ function fakeGitHub(): FakeGitHub {
         return Response.json({
           id: 55,
           body: isRecord(body) && typeof body.body === 'string' ? body.body : '',
-          user: { login: 'kairo' },
+          user: { login: 'kouro' },
           created_at: '2026-07-26T12:00:00Z',
         });
       }
@@ -78,7 +78,7 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 function provider(server: FakeGitHub): GitHubTicketProvider {
   return new GitHubTicketProvider({
     owner: 'acme',
-    repository: 'kairo',
+    repository: 'kouro',
     projectId: 'project-1',
     token: 'secret-reference-value',
     apiUrl: 'https://api.github.test',
@@ -96,13 +96,13 @@ describe('T3 GitHub ticket provider', () => {
       description: 'Provider-owned description',
       labels: ['ticket'],
       assignees: ['satoshi'],
-      marker: 'kairo-ticket:ticket-1',
+      marker: 'kouro-ticket:ticket-1',
     });
     const binding = created.unwrap().binding;
     expect(created.unwrap()).toMatchObject({
       title: 'GitHub ticket',
       description: 'Provider-owned description',
-      marker: 'kairo-ticket:ticket-1',
+      marker: 'kouro-ticket:ticket-1',
       labels: ['ticket'],
       assignees: ['satoshi'],
       milestone: 'T3',
@@ -122,7 +122,7 @@ describe('T3 GitHub ticket provider', () => {
     expect(
       (
         await github.addComment(binding, {
-          author: 'kairo',
+          author: 'kouro',
           body: 'Run started',
         })
       ).unwrap(),
@@ -138,7 +138,7 @@ describe('T3 GitHub ticket provider', () => {
       webhooks: true,
       projects: false,
     });
-    expect(server.requests.some(({ body }) => JSON.stringify(body).includes('kairo-ticket'))).toBe(
+    expect(server.requests.some(({ body }) => JSON.stringify(body).includes('kouro-ticket'))).toBe(
       true,
     );
   });
@@ -149,9 +149,9 @@ describe('T3 GitHub ticket provider', () => {
     const binding = {
       kind: 'github' as const,
       owner: 'acme',
-      repository: 'kairo',
+      repository: 'kouro',
       issueNumber: 7,
-      externalUrl: 'https://github.test/acme/kairo/issues/7',
+      externalUrl: 'https://github.test/acme/kouro/issues/7',
     };
     for (const [status, kind] of [
       [401, TicketProviderErrorKind.AuthenticationFailed],
@@ -172,7 +172,7 @@ describe('T3 GitHub ticket provider', () => {
     expect(validateGitHubWebhookSignature(payload, signature, secret).unwrap()).toBe(true);
     expect(validateGitHubWebhookSignature(payload, 'sha256=bad', secret).unwrap()).toBe(false);
     expect(
-      normalizeGitHubIssueWebhook(JSON.parse(payload), 'acme', 'kairo').unwrap(),
+      normalizeGitHubIssueWebhook(JSON.parse(payload), 'acme', 'kouro').unwrap(),
     ).toMatchObject({
       binding: { kind: 'github', issueNumber: 7 },
       title: 'GitHub ticket',
