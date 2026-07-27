@@ -1,7 +1,6 @@
 {
   "name": "@kouro/cli",
   "version": "0.1.2",
-  "private": true,
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -10,11 +9,15 @@
   "bin": {
     "kouro": "./src/main.ts"
   },
+  "files": [
+    "assets",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
   "type": "module",
   "exports": {
-    ".": {
-      "default": "./src/index.ts"
-    }
+    ".": "./src/index.ts"
   },
   "dependencies": {
     "@kouro/adw": "0.1.2",
@@ -28,6 +31,7 @@
     "@kouro/ticket-provider-forgejo": "0.1.2",
     "@kouro/ticket-provider-github": "0.1.2",
     "@kouro/tickets": "0.1.2",
+    "@kouro/web": "0.1.2",
     "@usersatoshi/results": "^1.0.0"
   }
 }

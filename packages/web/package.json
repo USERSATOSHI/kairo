@@ -1,27 +1,32 @@
 {
   "name": "@kouro/web",
   "version": "0.1.2",
-  "private": true,
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/usersatoshi/kouro.git"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "type": "module",
+  "exports": {
+    "./assets": "./dist/index.html"
+  },
   "scripts": {
     "build": "vite build",
     "dev": "vite"
   },
-  "dependencies": {
-    "@kouro/api-contracts": "0.1.2",
-    "@xyflow/react": "^12.11.2",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8"
-  },
   "devDependencies": {
+    "@kouro/api-contracts": "0.1.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.4",
+    "@xyflow/react": "^12.11.2",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "vite": "^8.1.5"
   }
 }

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { mkdir, readFile, readdir, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { compileAdwPackage } from '@kouro/adw';
 import {
@@ -792,7 +793,7 @@ export class LocalKouroHost {
       );
     }
     const app = this.app(repositoryPath);
-    const webRoot = resolve(import.meta.dir, '..', '..', 'web', 'dist');
+    const webRoot = resolve(fileURLToPath(import.meta.resolve('@kouro/web/assets')), '..');
     const fetch = createLocalRequestHandler(app, webRoot);
     try {
       this.worker.start();

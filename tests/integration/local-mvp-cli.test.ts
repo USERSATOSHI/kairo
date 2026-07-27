@@ -172,21 +172,18 @@ describe('M7 runnable local MVP and operator CLI', () => {
     expect(version).toEqual({ exitCode: 0, stdout: '0.1.0\n', stderr: '' });
   });
 
-  test('distribution bundle exposes the CLI and packaged templates', async () => {
+  test('package launcher exposes the CLI and packaged templates', async () => {
     const root = resolve(import.meta.dir, '..', '..');
     const output = await mkdtemp(resolve(root, '.kouro-distribution-'));
     roots.push(output);
 
-    const built = await process(['bun', 'run', 'build:cli'], root);
-    expect(built.exitCode).toBe(0);
-
-    const binary = resolve(root, 'packages', 'cli', 'dist', 'main.js');
-    const help = await process([binary, '--help'], root);
+    const launcher = resolve(root, 'bin', 'kouro.ts');
+    const help = await process(['bun', 'run', launcher, '--help'], root);
     expect(help.exitCode).toBe(0);
     expect(help.stdout).toContain('Kouro 0.1.0');
 
     const created = await process(
-      [binary, 'create', 'adw', 'packaged-cli', '--output', output],
+      ['bun', 'run', launcher, 'create', 'adw', 'packaged-cli', '--output', output],
       root,
     );
     expect(created.exitCode).toBe(0);

@@ -47,17 +47,16 @@ The compiler includes this map in the workflow checksum. At execution time the
 coordinator resolves the model after selecting the harness, records it on the
 durable attempt, and reuses it when resuming that attempt.
 
-Build and link the distributable root CLI:
+Link the package-based root CLI:
 
 ```bash
-bun run build:cli
 bun link
 kouro --version
 ```
 
-The generated executable is `packages/cli/dist/main.js`. It is committed
-because Git installations must work even when a package manager blocks
-lifecycle scripts.
+The root `kouro` package is a small Bun launcher for the published
+`@kouro/cli` package. The CLI resolves its normal `@kouro/*` dependencies at
+runtime rather than embedding them into a generated bundle.
 
 ## Required validation
 
@@ -73,7 +72,6 @@ bun test
 Check the root distribution archive:
 
 ```bash
-bun run build:cli
 bun pm pack --dry-run --ignore-scripts
 ```
 
@@ -241,11 +239,9 @@ remote isolation, automatic merge, and deployment remain deferred.
 
 ## Publishing packages
 
-Kouro publishes its reusable `@kouro/*` libraries in dependency order, followed
-by the bundled root `kouro` CLI package. The internal `@kouro/cli` source
-workspace and embedded `@kouro/web` application remain private because they are
-implementation inputs to the root distribution rather than supported
-standalone packages.
+Kouro publishes all `@kouro/*` packages in dependency order, followed by the
+thin root `kouro` launcher. `@kouro/cli` is the local composition package and
+`@kouro/web` supplies the dashboard assets used by the CLI.
 
 Configure the target registry token without committing it:
 

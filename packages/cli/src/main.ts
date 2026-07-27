@@ -149,8 +149,8 @@ function harnessOptions(args: readonly string[]): {
   return { harnesses, harnessesByNode };
 }
 
-async function main(): Promise<number> {
-  const args = process.argv.slice(2);
+/** Runs the Kouro command line interface with the provided process arguments. */
+export async function runCli(args: readonly string[] = process.argv.slice(2)): Promise<number> {
   const command = args[0];
   if (!command || command === '--help' || command === '-h') {
     process.stdout.write(`${HELP}\n`);
@@ -347,9 +347,11 @@ async function main(): Promise<number> {
   }
 }
 
-try {
-  process.exitCode = await main();
-} catch (cause) {
-  process.stderr.write(`${cause instanceof Error ? cause.message : 'Kouro failed'}\n`);
-  process.exitCode = 1;
+if (import.meta.main) {
+  try {
+    process.exitCode = await runCli();
+  } catch (cause) {
+    process.stderr.write(`${cause instanceof Error ? cause.message : 'Kouro failed'}\n`);
+    process.exitCode = 1;
+  }
 }

@@ -49,8 +49,8 @@ kouro --version
 kouro --help
 ```
 
-Kouro ships its executable bundle in the repository, so installation does not
-depend on package lifecycle scripts being enabled.
+Kouro installs its normal `@kouro/*` package dependency graph; the root
+package is a small Bun launcher rather than an embedded implementation bundle.
 
 To upgrade, run the same global installation command again. Uninstall with the
 package manager you used:

@@ -18,29 +18,25 @@
     "url": "git+https://github.com/usersatoshi/kouro.git"
   },
   "bin": {
-    "kouro": "packages/cli/dist/main.js"
+    "kouro": "bin/kouro.ts"
   },
   "workspaces": [
     "packages/*"
   ],
   "files": [
+    "bin",
     "docs",
-    "packages/cli/assets",
-    "packages/cli/dist",
-    "packages/web/dist",
     "plan.md",
     "TODO.md"
   ],
   "type": "module",
   "scripts": {
-    "build:cli": "bun build packages/cli/src/main.ts --target=bun --outfile packages/cli/dist/main.js",
     "create-package": "bun run scripts/create-package.ts",
     "kouro": "bun run packages/cli/src/main.ts",
     "format": "oxfmt --write \"**/*.{ts,json,jsonc}\"",
     "format:check": "oxfmt --check \"**/*.{ts,json,jsonc}\"",
     "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives .",
-    "prepare": "bun run build:cli",
-    "release:check": "bun run format:check && bun run lint && bun run typecheck && bun test && bun run build:cli && bun run --cwd packages/web build",
+    "release:check": "bun run format:check && bun run lint && bun run typecheck && bun test && bun run --cwd packages/web build",
     "release:all": "bun run release:check && bun run scripts/publish-packages.ts forgejo github npm",
     "release:all:dry-run": "bun run release:check && bun run scripts/publish-packages.ts forgejo github npm --dry-run",
     "release:forgejo": "bun run release:check && bun run scripts/publish-packages.ts forgejo",
@@ -52,11 +48,13 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "@kouro/cli": "0.1.2"
+  },
   "devDependencies": {
     "@kouro/adw": "0.1.2",
     "@kouro/api": "0.1.2",
     "@kouro/api-contracts": "0.1.2",
-    "@kouro/cli": "0.1.2",
     "@kouro/domain": "0.1.2",
     "@kouro/executors": "0.1.2",
     "@kouro/harnesses": "0.1.2",
