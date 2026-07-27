@@ -5,6 +5,7 @@ interface PackageManifest {
   readonly dependencies?: Readonly<Record<string, string>>;
   readonly files?: readonly string[];
   readonly private?: boolean;
+  readonly version?: string;
 }
 
 async function packageManifest(path: string): Promise<PackageManifest> {
@@ -15,10 +16,13 @@ async function packageManifest(path: string): Promise<PackageManifest> {
 
 describe('package distribution', () => {
   test('ships a thin root launcher backed by the public CLI package', async () => {
-    const manifest = await packageManifest('package.json');
+    const [manifest, cli] = await Promise.all([
+      packageManifest('package.json'),
+      packageManifest('packages/cli/package.json'),
+    ]);
 
     expect(manifest.bin?.kouro).toBe('bin/kouro.ts');
-    expect(manifest.dependencies?.['@kouro/cli']).toBe('0.1.3');
+    expect(manifest.dependencies?.['@kouro/cli']).toBe(cli.version);
     expect(manifest.files).toContain('bin');
     expect(manifest.files).not.toContain('packages/cli/dist');
   });
@@ -30,7 +34,7 @@ describe('package distribution', () => {
     ]);
 
     expect(cli.private).not.toBe(true);
-    expect(cli.dependencies?.['@kouro/web']).toBe('0.1.3');
+    expect(cli.dependencies?.['@kouro/web']).toBe(web.version);
     expect(cli.files).toEqual(expect.arrayContaining(['src', 'assets']));
     expect(web.private).not.toBe(true);
     expect(web.files).toContain('dist');
