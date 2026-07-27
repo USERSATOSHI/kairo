@@ -279,9 +279,7 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const dryRunArg = args.indexOf('--dry-run');
   const dryRun = dryRunArg !== -1;
-  const targetNames = dryRunArg !== -1
-    ? args.slice(0, dryRunArg)
-    : args;
+  const targetNames = dryRunArg !== -1 ? args.slice(0, dryRunArg) : args;
   if (targetNames.length === 0) {
     process.stderr.write(
       'Usage: bun run scripts/publish-packages.ts <target...> [--dry-run]\n' +
