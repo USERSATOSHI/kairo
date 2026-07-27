@@ -41,7 +41,8 @@
     "lint": "oxlint --type-aware --deny-warnings --report-unused-disable-directives .",
     "prepare": "bun run build:cli",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "publish": "bun publish --registry https://git.usersatoshi.com/api/packages/kouro/npm/"
   },
   "devDependencies": {
     "@kouro/adw": "0.1.0",
