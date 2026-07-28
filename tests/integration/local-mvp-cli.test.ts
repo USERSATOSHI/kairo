@@ -250,7 +250,33 @@ describe('M7 runnable local MVP and operator CLI', () => {
           deliveryRepairs: 2,
           validationRepairs: 3,
         });
-        expect(bundle.runLimits?.maxNodeInvocations).toBe(9);
+        expect(bundle.runLimits?.maxNodeInvocations).toBe(20);
+        expect(bundle.entryNodeId).toBe('dependencies');
+        expect(bundle.nodes).toContainEqual(
+          expect.objectContaining({
+            id: 'dependencies',
+            type: 'command',
+            command: 'bun install --frozen-lockfile',
+            capabilities: ['repository.read', 'terminal.execute'],
+            recoveryPolicy: 'replay_safe',
+          }),
+        );
+        expect(bundle.nodes).toContainEqual(
+          expect.objectContaining({
+            id: 'implement',
+            capabilities: ['repository.read', 'repository.write'],
+          }),
+        );
+        expect(bundle.transitions).toContainEqual({
+          id: 'dependencies.success.implement',
+          from: { nodeId: 'dependencies', outcome: 'success' },
+          toNodeId: 'implement',
+        });
+        expect(bundle.transitions).toContainEqual({
+          id: 'dependencies.failure.failed',
+          from: { nodeId: 'dependencies', outcome: 'failure' },
+          toNodeId: 'failed',
+        });
         expect(bundle.transitions).toContainEqual({
           id: 'validate.failure.implement',
           from: { nodeId: 'validate', outcome: 'failure' },
@@ -265,6 +291,12 @@ describe('M7 runnable local MVP and operator CLI', () => {
         expect(bundle.transitions).toContainEqual({
           id: 'validate.failure.failed',
           from: { nodeId: 'validate', outcome: 'failure' },
+          toNodeId: 'failed',
+          default: true,
+        });
+        expect(bundle.transitions).toContainEqual({
+          id: 'delivery.changes_requested.failed',
+          from: { nodeId: 'delivery', outcome: 'changes_requested' },
           toNodeId: 'failed',
           default: true,
         });

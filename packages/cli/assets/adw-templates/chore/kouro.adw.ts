@@ -7,15 +7,20 @@ const workflow = new WorkflowBuilder({
   .permissions('repository.read', 'repository.write', 'terminal.execute')
   .runLimits({
     maxDurationMs: 4 * 60 * 60 * 1000,
-    maxNodeInvocations: 9,
+    maxNodeInvocations: 20,
   });
 
 const validationRepairs = workflow.counter('validationRepairs', 3);
 const deliveryRepairs = workflow.counter('deliveryRepairs', 2);
+const dependencies = workflow.command('dependencies', {
+  command: 'bun install --frozen-lockfile',
+  capabilities: ['repository.read', 'terminal.execute'],
+  recoveryPolicy: 'replay_safe',
+});
 const implement = workflow.agent('implement', {
   role: 'maintainer',
   prompt: './prompts/implement.md',
-  capabilities: ['repository.read', 'repository.write', 'terminal.execute'],
+  capabilities: ['repository.read', 'repository.write'],
   recoveryPolicy: 'resume_supported',
 });
 const validate = workflow.command('validate', {
@@ -36,7 +41,9 @@ const delivery = workflow.deliveryReview('delivery', {
 const complete = workflow.complete('complete');
 const failed = workflow.complete('failed', { result: 'failed' });
 
-workflow.startAt(implement);
+workflow.startAt(dependencies);
+dependencies.on('success').to(implement);
+dependencies.on('failure').to(failed);
 implement.on('success').to(validate);
 validate.on('success').to(deliveryMetadata);
 validate
@@ -52,6 +59,7 @@ delivery
   .when(deliveryRepairs.belowLimit())
   .increment(deliveryRepairs)
   .to(implement);
+delivery.on('changes_requested').otherwise().to(failed);
 delivery.on('rejected').to(failed);
 
 export default workflow.build();
