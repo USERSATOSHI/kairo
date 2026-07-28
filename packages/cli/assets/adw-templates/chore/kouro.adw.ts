@@ -20,7 +20,7 @@ const dependencies = workflow.command('dependencies', {
 const implement = workflow.agent('implement', {
   role: 'maintainer',
   prompt: './prompts/implement.md',
-  capabilities: ['repository.read', 'repository.write'],
+  capabilities: ['repository.read', 'repository.write', 'terminal.execute'],
   recoveryPolicy: 'resume_supported',
 });
 const validate = workflow.command('validate', {

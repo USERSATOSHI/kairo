@@ -12,6 +12,7 @@ import type {
 } from '@kouro/executors';
 import { invalidResponse, processFailure } from './errors.ts';
 import { BunProcessRunner, type ProcessOutput, type ProcessRunner } from './process-runner.ts';
+import { parseHarnessOutput } from './structured-output.ts';
 
 function promptFor(request: HarnessExecutionRequest): string {
   return `Role: ${request.role}\n\n${request.prompt}`;
@@ -23,20 +24,8 @@ function sandboxFor(capabilities: readonly string[]): 'read-only' | 'workspace-w
     : 'read-only';
 }
 
-interface ParseFailure {
-  readonly kind: 0;
-}
-
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function parseJsonOrText(value: string): unknown {
-  const parsed = safeCall(
-    () => JSON.parse(value) as unknown,
-    (): ParseFailure => ({ kind: 0 }),
-  );
-  return parsed.isErr() ? value : parsed.unwrap();
 }
 
 function parseEvents(output: string): Result<HarnessExecution, HarnessError> {
@@ -65,7 +54,7 @@ function parseEvents(output: string): Result<HarnessExecution, HarnessError> {
     return err(invalidResponse('Codex response has no final agent message', output));
   }
   return ok({
-    output: parseJsonOrText(finalText),
+    output: parseHarnessOutput(finalText),
     transcript: output,
     ...(token ? { resumeToken: token } : {}),
   });

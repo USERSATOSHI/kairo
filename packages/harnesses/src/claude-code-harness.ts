@@ -10,21 +10,10 @@ import type {
 } from '@kouro/executors';
 import { invalidResponse, processFailure } from './errors.ts';
 import { BunProcessRunner, type ProcessRunner } from './process-runner.ts';
-
-interface ParseFailure {
-  readonly kind: 0;
-}
+import { parseHarnessOutput } from './structured-output.ts';
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function parseJsonOrText(value: string): unknown {
-  const parsed = safeCall(
-    () => JSON.parse(value) as unknown,
-    (): ParseFailure => ({ kind: 0 }),
-  );
-  return parsed.isErr() ? value : parsed.unwrap();
 }
 
 function promptFor(request: HarnessExecutionRequest): string {
@@ -59,7 +48,7 @@ function parseClaudeResult(
   if (rawOutput === undefined) {
     return err(invalidResponse('Claude Code response has no result', output));
   }
-  const structured = typeof rawOutput === 'string' ? parseJsonOrText(rawOutput) : rawOutput;
+  const structured = typeof rawOutput === 'string' ? parseHarnessOutput(rawOutput) : rawOutput;
   return ok({
     output: structured,
     transcript: output,

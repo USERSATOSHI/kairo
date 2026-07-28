@@ -283,7 +283,7 @@ describe('M7 runnable local MVP and operator CLI', () => {
         expect(bundle.nodes).toContainEqual(
           expect.objectContaining({
             id: 'implement',
-            capabilities: ['repository.read', 'repository.write'],
+            capabilities: ['repository.read', 'repository.write', 'terminal.execute'],
           }),
         );
         expect(bundle.transitions).toContainEqual({
