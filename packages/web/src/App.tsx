@@ -49,6 +49,7 @@ import {
   invocationDisplayState,
   invocationFailure,
 } from './execution-presentation.ts';
+import { newIdempotencyKey } from './idempotency-key.ts';
 import {
   groupTranscript,
   parseTranscript,
@@ -1066,7 +1067,7 @@ function ExecutionConsole() {
         decision,
         actor: 'web-user',
         reason,
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey: newIdempotencyKey(),
         binding: approval.binding,
         expectedEventSequence: approval.expectedEventSequence,
         ...(metadata ? { metadata } : {}),
