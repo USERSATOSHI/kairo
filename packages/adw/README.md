@@ -75,6 +75,10 @@ const review = workflow.agent('review', {
   capabilities: ['repository.read'],
   recoveryPolicy: 'resume_supported',
 });
+const delivery = workflow.deliveryReview('delivery', {
+  title: 'Review exact delivery',
+  proposalFrom: 'review',
+});
 const complete = workflow.complete('complete');
 const failed = workflow.complete('failed', { result: 'failed' });
 
@@ -99,14 +103,19 @@ review
   .on('success')
   .when(all(output('approved').equals(false), reviewRepairs.atLimit()))
   .to(failed);
-review.on('success').when(output('approved').equals(true)).to(complete);
+review.on('success').when(output('approved').equals(true)).to(delivery);
+delivery.on('approved').to(complete);
 
 export default workflow.build();
 ```
 
-The four declaration methods are `agent`, `approval`, `command`, and
-`complete`. The first three return transition-capable handles. A complete-node
+The five declaration methods are `agent`, `approval`, `deliveryReview`,
+`command`, and `complete`. The first four return transition-capable handles. A complete-node
 handle has no `on` method, so terminal transitions are rejected by TypeScript.
+
+`deliveryReview` is the only authoring boundary that asks Kouro to prepare and
+commit a reviewed tree. `proposalFrom` must name an agent node. A workflow
+without this node completes without Kouro creating a commit or branch.
 
 Repeated invocations of one agent node preserve its harness session by default
 and receive the durable source-node output as workflow feedback. Add

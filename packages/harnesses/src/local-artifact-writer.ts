@@ -44,7 +44,9 @@ export class LocalArtifactWriter implements ArtifactWriter {
       String(request.attemptNumber),
     );
     const extension =
-      request.kind === 'agent_output' || request.kind === 'command_output'
+      request.kind === 'agent_output' ||
+      request.kind === 'command_output' ||
+      request.kind === 'delivery_proposal'
         ? 'json'
         : request.kind === 'harness_transcript'
           ? 'ndjson'

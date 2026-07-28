@@ -18,6 +18,15 @@ import type {
   DeleteRunResponse,
   RepositorySummary,
 } from '@kouro/api-contracts';
+import {
+  deliveryMetadataChecksum,
+  ensurePullRequest,
+  validateDeliveryMetadata,
+  type PullRequestProvider,
+} from '@kouro/delivery';
+import { ForgejoPullRequestProvider } from '@kouro/delivery-provider-forgejo';
+import { GitHubPullRequestProvider } from '@kouro/delivery-provider-github';
+import type { DeliveryMetadata, DeliveryProposal } from '@kouro/domain';
 import type { TicketProviderConfigurationView } from '@kouro/api-contracts';
 import {
   AgentExecutor,
@@ -81,6 +90,8 @@ interface RunConfiguration {
   readonly repositoryPath: string;
   readonly deliveryBranch: string;
   readonly operator: string;
+  readonly baseBranch: string;
+  readonly deliveryLifecycleVersion?: number;
 }
 
 function runConfiguration(aggregate: RunAggregate): RunConfiguration | undefined {
@@ -96,6 +107,10 @@ function runConfiguration(aggregate: RunAggregate): RunConfiguration | undefined
         repositoryPath: value.repositoryPath,
         deliveryBranch: value.deliveryBranch,
         operator: value.operator,
+        baseBranch: typeof value.baseBranch === 'string' ? value.baseBranch : '',
+        ...(typeof value.deliveryLifecycleVersion === 'number'
+          ? { deliveryLifecycleVersion: value.deliveryLifecycleVersion }
+          : {}),
       }
     : undefined;
 }
@@ -106,6 +121,49 @@ function message(error: unknown): string {
 
 function isNotFoundError(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT';
+}
+
+function environmentValue(name: string): string | undefined {
+  return process.env[name]?.trim() ?? process.env[name.replace(/^KOURO_/, 'KAIRO_')]?.trim();
+}
+
+interface ConfiguredPullRequestProvider {
+  readonly provider: PullRequestProvider;
+  readonly owner: string;
+  readonly repository: string;
+}
+
+function pullRequestProviders(): ReadonlyMap<'github' | 'forgejo', ConfiguredPullRequestProvider> {
+  const providers = new Map<'github' | 'forgejo', ConfiguredPullRequestProvider>();
+  const githubOwner = environmentValue('KOURO_GITHUB_OWNER');
+  const githubRepository = environmentValue('KOURO_GITHUB_REPOSITORY');
+  const githubToken = environmentValue('KOURO_GITHUB_TOKEN');
+  if (githubOwner && githubRepository && githubToken) {
+    const apiUrl = environmentValue('KOURO_GITHUB_API_URL');
+    providers.set('github', {
+      owner: githubOwner,
+      repository: githubRepository,
+      provider: new GitHubPullRequestProvider({
+        token: githubToken,
+        ...(apiUrl ? { apiUrl } : {}),
+      }),
+    });
+  }
+  const forgejoUrl = environmentValue('KOURO_FORGEJO_URL');
+  const forgejoOwner = environmentValue('KOURO_FORGEJO_OWNER');
+  const forgejoRepository = environmentValue('KOURO_FORGEJO_REPOSITORY');
+  const forgejoToken = environmentValue('KOURO_FORGEJO_TOKEN');
+  if (forgejoUrl && forgejoOwner && forgejoRepository && forgejoToken) {
+    providers.set('forgejo', {
+      owner: forgejoOwner,
+      repository: forgejoRepository,
+      provider: new ForgejoPullRequestProvider({
+        instanceUrl: forgejoUrl,
+        token: forgejoToken,
+      }),
+    });
+  }
+  return providers;
 }
 
 /** Returns the stable local identity used to scope runs to a repository path. */
@@ -255,6 +313,7 @@ export class LocalKouroHost {
     this.ticketProviders = new Map(ticketProviders.map((provider) => [provider.id, provider]));
     this.worker = new LocalWorker(this.store, {
       coordinatorFor: (aggregate) => this.coordinatorFor(aggregate),
+      prepareDelivery: (aggregate) => this.prepareDelivery(aggregate),
       finalize: (aggregate) => this.finalize(aggregate),
     });
   }
@@ -390,6 +449,10 @@ export class LocalKouroHost {
     if (pinned.isErr()) {
       return cliErr(CliErrorKind.Repository, 'starting_commit_failed', message(pinned.error));
     }
+    const baseBranch = await this.sandbox.resolveBaseBranch(pinned.unwrap(), request.base);
+    if (baseBranch.isErr()) {
+      return cliErr(CliErrorKind.Repository, 'base_branch_failed', message(baseBranch.error));
+    }
     const worktree = await this.sandbox.createWorktree(pinned.unwrap(), id);
     if (worktree.isErr()) {
       return cliErr(CliErrorKind.Repository, 'worktree_creation_failed', message(worktree.error));
@@ -411,6 +474,8 @@ export class LocalKouroHost {
         repositoryPath: pinned.unwrap().repositoryPath,
         worktreePath: worktree.unwrap().path,
         deliveryBranch: `kouro/${id}`,
+        baseBranch: baseBranch.unwrap(),
+        deliveryLifecycleVersion: 1,
         operator: request.actor,
       },
       idempotencyKey: `create:${id}`,
@@ -512,6 +577,211 @@ export class LocalKouroHost {
     );
   }
 
+  updateDeliveryMetadata(
+    aggregate: RunAggregate,
+    invocationSequence: number,
+    metadata: DeliveryMetadata,
+    actor: string,
+    idempotencyKey: string,
+  ): Result<RunAggregate, CliError> {
+    const proposal = aggregate.state.delivery?.proposal;
+    if (!proposal || proposal.invocationSequence !== invocationSequence) {
+      return cliErr(
+        CliErrorKind.Lifecycle,
+        'delivery_proposal_not_pending',
+        'Delivery metadata can only be edited on the pending proposal',
+      );
+    }
+    const validated = validateDeliveryMetadata(metadata);
+    if (validated.isErr()) {
+      return cliErr(CliErrorKind.InvalidArguments, validated.error.code, validated.error.message);
+    }
+    const checksum = deliveryMetadataChecksum(
+      proposal.preparedHead,
+      proposal.preparedTree,
+      proposal.artifactChecksums,
+      validated.value,
+    );
+    const updated = this.coordinatorFor(aggregate).updateDeliveryMetadata(
+      aggregate.runId,
+      invocationSequence,
+      validated.value,
+      checksum,
+      actor,
+      idempotencyKey,
+    );
+    return updated.isErr()
+      ? cliErr(CliErrorKind.Lifecycle, 'delivery_metadata_stale', message(updated.error))
+      : updated;
+  }
+
+  async publish(
+    runId: string,
+    requestedProvider?: 'github' | 'forgejo',
+    remote = 'origin',
+  ): Promise<
+    Result<
+      {
+        readonly provider: 'github' | 'forgejo';
+        readonly number: number;
+        readonly url: string;
+      },
+      CliError
+    >
+  > {
+    const loaded = this.store.loadRun(runId);
+    if (loaded.isErr()) {
+      return cliErr(CliErrorKind.Persistence, 'run_not_found', `Run ${runId} was not found`);
+    }
+    let aggregate = loaded.value;
+    const delivery = aggregate.state.delivery;
+    const configuration = runConfiguration(aggregate);
+    if (
+      aggregate.state.status !== 'succeeded' ||
+      !delivery?.commit ||
+      !delivery.branch ||
+      !delivery.proposal ||
+      !configuration
+    ) {
+      return cliErr(
+        CliErrorKind.Publication,
+        'delivery_not_ready',
+        'The run must be successfully delivered locally before publication',
+      );
+    }
+    if (delivery.publication.status === 'published') {
+      if (
+        !delivery.publication.provider ||
+        !delivery.publication.number ||
+        !delivery.publication.url
+      ) {
+        return cliErr(
+          CliErrorKind.Persistence,
+          'publication_state_invalid',
+          'The durable publication record is incomplete',
+        );
+      }
+      return ok({
+        provider: delivery.publication.provider,
+        number: delivery.publication.number,
+        url: delivery.publication.url,
+      });
+    }
+    const providers = pullRequestProviders();
+    const workItem = aggregate.state.configuration.workItem;
+    const boundProvider =
+      isRecord(workItem) && (workItem.provider === 'github' || workItem.provider === 'forgejo')
+        ? workItem.provider
+        : undefined;
+    const providerId =
+      requestedProvider ??
+      (boundProvider && providers.has(boundProvider) ? boundProvider : undefined) ??
+      (providers.size === 1 ? [...providers.keys()][0] : undefined);
+    if (!providerId) {
+      return cliErr(
+        CliErrorKind.InvalidArguments,
+        'publication_provider_required',
+        'Choose --provider because no unique configured provider could be inferred',
+      );
+    }
+    const configured = providers.get(providerId);
+    if (!configured) {
+      return cliErr(
+        CliErrorKind.Publication,
+        'publication_provider_not_configured',
+        `${providerId} pull-request credentials are not configured`,
+      );
+    }
+    const worktree = await this.durableWorktree(aggregate);
+    const remoteUrl = await this.sandbox.remoteUrl(worktree, remote);
+    if (remoteUrl.isErr()) {
+      return cliErr(CliErrorKind.Repository, 'remote_not_found', message(remoteUrl.error));
+    }
+    const repositoryPath = `${configured.owner}/${configured.repository}`;
+    if (
+      !remoteUrl.value.replace(/\.git$/, '').endsWith(`/${repositoryPath}`) &&
+      !remoteUrl.value.replace(/\.git$/, '').endsWith(`:${repositoryPath}`)
+    ) {
+      return cliErr(
+        CliErrorKind.Publication,
+        'remote_repository_mismatch',
+        `Remote ${remote} does not match configured ${providerId} repository ${repositoryPath}`,
+      );
+    }
+    const coordinator = this.coordinatorFor(aggregate);
+    const started = coordinator.recordPublication(
+      runId,
+      { type: 'delivery.publication_started', provider: providerId, remote },
+      `publication:start:${aggregate.nextEventSequence}`,
+    );
+    if (started.isErr()) {
+      return cliErr(CliErrorKind.Publication, 'publication_stale', message(started.error));
+    }
+    aggregate = started.value;
+    const pushed = await this.sandbox.pushDeliveryBranch(
+      worktree,
+      remote,
+      delivery.branch,
+      delivery.commit,
+    );
+    if (pushed.isErr()) {
+      this.coordinatorFor(aggregate).recordPublication(
+        runId,
+        {
+          type: 'delivery.publication_failed',
+          provider: providerId,
+          remote,
+          error: message(pushed.error),
+        },
+        `publication:failed:${aggregate.nextEventSequence}`,
+      );
+      return cliErr(CliErrorKind.Publication, 'branch_push_failed', message(pushed.error));
+    }
+    const pullRequest = await ensurePullRequest(configured.provider, {
+      owner: configured.owner,
+      repository: configured.repository,
+      head: delivery.branch,
+      base: configuration.baseBranch,
+      title: delivery.proposal.metadata.pullRequestTitle,
+      ...(delivery.proposal.metadata.pullRequestBody
+        ? { body: delivery.proposal.metadata.pullRequestBody }
+        : {}),
+      draft: delivery.proposal.metadata.draft,
+    });
+    if (pullRequest.isErr()) {
+      this.coordinatorFor(aggregate).recordPublication(
+        runId,
+        {
+          type: 'delivery.publication_failed',
+          provider: providerId,
+          remote,
+          error: pullRequest.error.message,
+        },
+        `publication:failed:${aggregate.nextEventSequence}`,
+      );
+      return cliErr(CliErrorKind.Publication, pullRequest.error.code, pullRequest.error.message);
+    }
+    const recorded = this.coordinatorFor(aggregate).recordPublication(
+      runId,
+      {
+        type: 'delivery.publication_succeeded',
+        provider: providerId,
+        remote,
+        number: pullRequest.value.number,
+        url: pullRequest.value.url,
+      },
+      `publication:succeeded:${aggregate.nextEventSequence}`,
+    );
+    if (recorded.isErr()) {
+      return cliErr(CliErrorKind.Publication, 'publication_record_failed', message(recorded.error));
+    }
+    return ok({
+      provider: providerId,
+      number: pullRequest.value.number,
+      url: pullRequest.value.url,
+    });
+  }
+
   app(repositoryPath?: string): KouroApp {
     const scopeId = repositoryPath ? repositoryIdForPath(repositoryPath) : undefined;
     const runs = scopeId ? new RepositoryScopedRunStore(this.store, scopeId) : this.store;
@@ -540,6 +810,7 @@ export class LocalKouroHost {
           }
         : this,
       runDeleter: this,
+      runPublisher: this,
       tickets: {
         repository: this.tickets,
         runs: this.ticketRuns,
@@ -819,18 +1090,7 @@ export class LocalKouroHost {
     this.initialized = false;
   }
 
-  private async finalize(aggregate: RunAggregate): Promise<void> {
-    if (
-      aggregate.state.artifacts?.some(({ id }) => id === '0:0:git_diff') ||
-      !aggregate.state.invocations.some(({ state, nodeId }) => {
-        const definition = aggregate.artifact.bundle.nodes.find(({ id }) => id === nodeId);
-        return (
-          state === 'pending' && definition?.type === 'complete' && definition.result !== 'failed'
-        );
-      })
-    ) {
-      return;
-    }
+  private async durableWorktree(aggregate: RunAggregate): Promise<RunWorktree> {
     const configuration = runConfiguration(aggregate);
     if (!configuration) throw new Error(`Run ${aggregate.runId} has invalid local configuration`);
     const worktree: RunWorktree = {
@@ -851,7 +1111,14 @@ export class LocalKouroHost {
     if (!isRecord(recorded) || typeof recorded.commonGitDirectory !== 'string') {
       throw new Error('Run worktree metadata is corrupt');
     }
-    const durableWorktree = { ...worktree, commonGitDirectory: recorded.commonGitDirectory };
+    return { ...worktree, commonGitDirectory: recorded.commonGitDirectory };
+  }
+
+  private async publishGitArtifacts(
+    aggregate: RunAggregate,
+    invocationSequence: number,
+  ): Promise<RunAggregate> {
+    const durableWorktree = await this.durableWorktree(aggregate);
     const captured = await this.sandbox.captureArtifacts(durableWorktree);
     if (captured.isErr()) throw new Error(message(captured.error));
     let current = aggregate;
@@ -860,7 +1127,7 @@ export class LocalKouroHost {
       const content = await readFile(source.path, 'utf8');
       const written = await this.artifactWriter.write({
         runId: aggregate.runId,
-        invocationSequence: 0,
+        invocationSequence,
         attemptNumber: 0,
         kind,
         mediaType: kind === 'git_diff' ? 'text/x-diff' : 'text/plain',
@@ -870,18 +1137,131 @@ export class LocalKouroHost {
       const published = this.coordinatorFor(current).publishRunArtifact(
         current.runId,
         written.unwrap(),
-        `final:${kind}`,
+        `delivery:${invocationSequence}:${kind}`,
       );
       if (published.isErr()) throw new Error(message(published.error));
       current = published.unwrap();
     }
+    return current;
+  }
+
+  private proposalMetadata(aggregate: RunAggregate, proposalFrom: string): DeliveryMetadata {
+    const source = aggregate.state.invocations
+      .filter(({ nodeId, state }) => nodeId === proposalFrom && state === 'succeeded')
+      .at(-1)?.output;
+    const metadata =
+      isRecord(source) && isRecord(source.deliveryMetadata) ? source.deliveryMetadata : undefined;
+    const workItem = aggregate.state.configuration.workItem;
+    const workItemTitle =
+      isRecord(workItem) && typeof workItem.title === 'string'
+        ? workItem.title
+        : aggregate.artifact.bundle.manifest.id;
+    const candidate: DeliveryMetadata = {
+      commitTitle:
+        metadata && typeof metadata.commitTitle === 'string' ? metadata.commitTitle : workItemTitle,
+      ...(metadata && typeof metadata.commitBody === 'string'
+        ? { commitBody: metadata.commitBody }
+        : {}),
+      pullRequestTitle:
+        metadata && typeof metadata.pullRequestTitle === 'string'
+          ? metadata.pullRequestTitle
+          : workItemTitle,
+      ...(metadata && typeof metadata.pullRequestBody === 'string'
+        ? { pullRequestBody: metadata.pullRequestBody }
+        : {}),
+      draft: metadata?.draft === true,
+    };
+    const validated = validateDeliveryMetadata(candidate);
+    if (validated.isErr()) throw new Error(validated.error.message);
+    return validated.value;
+  }
+
+  private async prepareDelivery(aggregate: RunAggregate): Promise<void> {
+    const invocation = aggregate.state.invocations.find(({ state, nodeId }) => {
+      const definition = aggregate.artifact.bundle.nodes.find(({ id }) => id === nodeId);
+      return state === 'pending' && definition?.type === 'delivery_review';
+    });
+    if (!invocation || aggregate.state.delivery?.proposal) return;
+    const definition = aggregate.artifact.bundle.nodes.find(({ id }) => id === invocation.nodeId);
+    if (definition?.type !== 'delivery_review' || !definition.proposalFrom) return;
+    const current = await this.publishGitArtifacts(aggregate, invocation.sequence);
+    const durableWorktree = await this.durableWorktree(current);
     const prepared = await this.sandbox.prepareCommit(durableWorktree);
     if (prepared.isErr()) throw new Error(message(prepared.error));
+    const artifactChecksums = (current.state.artifacts ?? [])
+      .map(({ checksum }) => checksum)
+      .toSorted();
+    const metadata = this.proposalMetadata(current, definition.proposalFrom);
+    const checksum = deliveryMetadataChecksum(
+      prepared.value.head,
+      prepared.value.tree,
+      artifactChecksums,
+      metadata,
+    );
+    const proposal: DeliveryProposal = {
+      invocationSequence: invocation.sequence,
+      preparedHead: prepared.value.head,
+      preparedTree: prepared.value.tree,
+      metadata,
+      artifactChecksums,
+      checksum,
+    };
+    const written = await this.artifactWriter.write({
+      runId: aggregate.runId,
+      invocationSequence: invocation.sequence,
+      attemptNumber: 0,
+      kind: 'delivery_proposal',
+      mediaType: 'application/json',
+      content: JSON.stringify(proposal, null, 2),
+    });
+    if (written.isErr()) throw new Error(written.error.message);
+    const withArtifact = this.coordinatorFor(current).publishRunArtifact(
+      current.runId,
+      written.value,
+      `delivery:${invocation.sequence}:proposal-artifact`,
+    );
+    if (withArtifact.isErr()) throw new Error(message(withArtifact.error));
+    const proposed = this.coordinatorFor(withArtifact.value).proposeDelivery(
+      aggregate.runId,
+      proposal,
+      `delivery:${invocation.sequence}:proposal`,
+    );
+    if (proposed.isErr()) throw new Error(message(proposed.error));
+  }
+
+  private async finalize(aggregate: RunAggregate): Promise<void> {
+    const successfulComplete = aggregate.state.invocations.some(({ state, nodeId }) => {
+      const definition = aggregate.artifact.bundle.nodes.find(({ id }) => id === nodeId);
+      return (
+        state === 'pending' && definition?.type === 'complete' && definition.result !== 'failed'
+      );
+    });
+    if (!successfulComplete) return;
+    const configuration = runConfiguration(aggregate);
+    if (!configuration) throw new Error(`Run ${aggregate.runId} has invalid local configuration`);
+    const hasDeliveryReview = aggregate.artifact.bundle.nodes.some(
+      ({ type }) => type === 'delivery_review',
+    );
+    if (!hasDeliveryReview && configuration.deliveryLifecycleVersion === 1) return;
+    if (!hasDeliveryReview) {
+      await this.finalizeLegacy(aggregate);
+      return;
+    }
+    const proposal = aggregate.state.delivery?.proposal;
+    const invocation = aggregate.state.invocations.find(
+      ({ sequence, outcome }) =>
+        sequence === proposal?.invocationSequence && outcome === 'approved',
+    );
+    if (!proposal || !invocation || aggregate.state.delivery?.commit) return;
+    const durableWorktree = await this.durableWorktree(aggregate);
+    const commitMessage = proposal.metadata.commitBody
+      ? `${proposal.metadata.commitTitle}\n\n${proposal.metadata.commitBody}`
+      : proposal.metadata.commitTitle;
     const committed = await this.sandbox.commitWorktree({
       worktree: durableWorktree,
-      expectedHead: prepared.unwrap().head,
-      expectedTree: prepared.unwrap().tree,
-      message: `Kouro delivery ${aggregate.runId}`,
+      expectedHead: proposal.preparedHead,
+      expectedTree: proposal.preparedTree,
+      message: commitMessage,
       identity: { name: 'Kouro', email: 'kouro@localhost' },
       timestamp: aggregate.state.startedAt ?? new Date(0).toISOString(),
     });
@@ -890,6 +1270,40 @@ export class LocalKouroHost {
       durableWorktree,
       configuration.deliveryBranch,
       committed.unwrap().commit,
+    );
+    if (branched.isErr()) throw new Error(message(branched.error));
+    const recorded = this.coordinatorFor(aggregate).recordDeliveryCommit(
+      aggregate.runId,
+      invocation.sequence,
+      proposal.preparedTree,
+      committed.value.commit,
+      configuration.deliveryBranch,
+      `delivery:${invocation.sequence}:committed`,
+    );
+    if (recorded.isErr()) throw new Error(message(recorded.error));
+  }
+
+  private async finalizeLegacy(aggregate: RunAggregate): Promise<void> {
+    if (aggregate.state.artifacts?.some(({ id }) => id === '0:0:git_diff')) return;
+    const configuration = runConfiguration(aggregate);
+    if (!configuration) throw new Error(`Run ${aggregate.runId} has invalid local configuration`);
+    const current = await this.publishGitArtifacts(aggregate, 0);
+    const durableWorktree = await this.durableWorktree(current);
+    const prepared = await this.sandbox.prepareCommit(durableWorktree);
+    if (prepared.isErr()) throw new Error(message(prepared.error));
+    const committed = await this.sandbox.commitWorktree({
+      worktree: durableWorktree,
+      expectedHead: prepared.value.head,
+      expectedTree: prepared.value.tree,
+      message: `Kouro delivery ${aggregate.runId}`,
+      identity: { name: 'Kouro', email: 'kouro@localhost' },
+      timestamp: aggregate.state.startedAt ?? new Date(0).toISOString(),
+    });
+    if (committed.isErr()) throw new Error(message(committed.error));
+    const branched = await this.sandbox.createDeliveryBranch(
+      durableWorktree,
+      configuration.deliveryBranch,
+      committed.value.commit,
     );
     if (branched.isErr()) throw new Error(message(branched.error));
   }

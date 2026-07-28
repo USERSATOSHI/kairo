@@ -3,9 +3,17 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { createInterface } from 'node:readline/promises';
 import packageManifest from '../package.json' with { type: 'json' };
 
-import { listRuns, getRun } from '@kouro/api';
+import {
+  getArtifact,
+  getRun,
+  listArtifacts,
+  listRuns,
+  LocalArtifactContentReader,
+} from '@kouro/api';
+import type { DeliveryMetadata } from '@kouro/domain';
 
 import { ADW_TEMPLATES, createAdw, isAdwTemplate } from './create-adw.ts';
 import { LocalKouroHost } from './local-host.ts';
@@ -26,6 +34,7 @@ Common usage:
 Workflow:
   create adw      Create an ADW package from a starter template
   run             Compile and execute an ADW
+  attach          Reconnect to an interactive run session
 
 Runs:
   runs            List runs for the current repository
@@ -33,6 +42,8 @@ Runs:
   delete          Permanently delete one terminal run
   approve         Grant a pending approval
   reject          Reject a pending approval
+  request-changes Return a delivery to its implementation agent
+  publish         Push a delivered branch and open its pull request
   pause           Pause scheduling for a run
   resume          Resume a paused run
   cancel          Cancel a run
@@ -62,11 +73,15 @@ const COMMAND_HELP: Readonly<Record<string, string>> = {
 Creates .kouro/<name> by default.
 Templates: ${ADW_TEMPLATES.join(', ')}`,
   run: `Usage:
-  kouro run <adw> --repo <path> (--ticket <provider:reference> | --task <text> | --task-file <path>) [--harness <id|node=id>]...
+  kouro run <adw> --repo <path> (--ticket <provider:reference> | --task <text> | --task-file <path>) [--base <branch>] [--no-interactive] [--harness <id|node=id>]...
 
 Examples:
   kouro run feature-development --repo . --task "Add CSV export" --harness codex
   kouro run feature-development --repo . --ticket kouro:<ticket-id> --harness plan=codex`,
+  attach: `Usage:
+  kouro attach <run-id> [--repo <path> | --all-repos]
+
+Reconnects to approvals and interventions for a visible local run.`,
   runs: `Usage:
   kouro runs [--repo <path> | --all-repos]
 
@@ -79,9 +94,13 @@ Lists the current repository by default.`,
 Permanently removes a terminal run, its Kouro worktree, artifacts, events, and projections.
 The source repository and delivery branch are preserved.`,
   approve: `Usage:
-  kouro approve <run-id> <invocation> --reason <text>`,
+  kouro approve <run-id> <invocation> --reason <text> [--metadata <json-file>]`,
   reject: `Usage:
   kouro reject <run-id> <invocation> --reason <text>`,
+  'request-changes': `Usage:
+  kouro request-changes <run-id> <invocation> --reason <text>`,
+  publish: `Usage:
+  kouro publish <run-id> [--provider github|forgejo] [--remote <name>]`,
   pause: `Usage:
   kouro pause|resume|cancel <run-id> [--reason <text>]`,
   resume: `Usage:
@@ -127,6 +146,295 @@ function required(value: string | undefined, label: string): string {
 
 function print(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function deliveryMetadata(value: unknown): DeliveryMetadata | undefined {
+  return isRecord(value) &&
+    typeof value.commitTitle === 'string' &&
+    typeof value.pullRequestTitle === 'string' &&
+    typeof value.draft === 'boolean'
+    ? {
+        commitTitle: value.commitTitle,
+        ...(typeof value.commitBody === 'string' ? { commitBody: value.commitBody } : {}),
+        pullRequestTitle: value.pullRequestTitle,
+        ...(typeof value.pullRequestBody === 'string'
+          ? { pullRequestBody: value.pullRequestBody }
+          : {}),
+        draft: value.draft,
+      }
+    : undefined;
+}
+
+async function interactiveSession(
+  host: LocalKouroHost,
+  runId: string,
+  actor: string,
+): Promise<void> {
+  const terminal = createInterface({ input: process.stdin, output: process.stdout });
+  let detached = false;
+  const detach = (): void => {
+    detached = true;
+    terminal.close();
+  };
+  process.once('SIGINT', detach);
+  try {
+    for (;;) {
+      if (detached) break;
+      const stable = await host.worker.runUntilStable(runId);
+      if (['succeeded', 'failed', 'cancelled'].includes(stable.state.status)) {
+        print({
+          runId,
+          status: stable.state.status,
+          delivery: stable.state.delivery,
+        });
+        if (
+          stable.state.status === 'succeeded' &&
+          stable.state.delivery?.commit &&
+          stable.state.delivery.publication.status !== 'published'
+        ) {
+          const answer = (await terminal.question('Publish the reviewed pull request now? [y/N] '))
+            .trim()
+            .toLowerCase();
+          if (answer === 'y' || answer === 'yes') {
+            const published = await host.publish(runId);
+            if (published.isErr()) {
+              process.stdout.write(
+                `Publication remains retryable: ${published.error.message}\nRun "kouro publish ${runId}" to retry.\n`,
+              );
+            } else {
+              print(published.value);
+            }
+          } else {
+            process.stdout.write(`Publish later with "kouro publish ${runId}".\n`);
+          }
+        }
+        return;
+      }
+      if (stable.state.status === 'paused') {
+        const action = (await terminal.question('Run paused: [r]esume, [c]ancel, or [d]etach? '))
+          .trim()
+          .toLowerCase();
+        if (action === 'd') break;
+        const coordinator = host.coordinatorFor(stable);
+        const changed =
+          action === 'r'
+            ? coordinator.resumeRun(runId, actor, `resume:${randomUUID()}`)
+            : coordinator.cancelRun(
+                runId,
+                actor,
+                'cancelled from interactive session',
+                `cancel:${randomUUID()}`,
+              );
+        if (changed.isErr()) throw new Error('Lifecycle decision was stale');
+        continue;
+      }
+      const invocation = stable.state.invocations.find(
+        ({ state }) => state === 'waiting_for_approval',
+      );
+      if (!invocation?.approval) {
+        const interrupted = stable.state.invocations.find(({ state }) => state === 'interrupted');
+        if (interrupted) {
+          const definition = stable.artifact.bundle.nodes.find(
+            ({ id }) => id === interrupted.nodeId,
+          );
+          const canRetry = definition?.recoveryPolicy === 'replay_safe';
+          const canSkip = definition?.skipOutcome !== undefined;
+          const action = (
+            await terminal.question(
+              `Invocation ${interrupted.sequence} interrupted: ${canRetry ? '[r]etry, ' : ''}${canSkip ? '[s]kip, ' : ''}[c]ancel, or [d]etach? `,
+            )
+          )
+            .trim()
+            .toLowerCase();
+          if (action === 'd') break;
+          const reason = (await terminal.question('Required reason: ')).trim();
+          if (!reason) {
+            process.stdout.write('A decision reason is required.\n');
+            continue;
+          }
+          const coordinator = host.coordinatorFor(stable);
+          const changed =
+            action === 'r' && canRetry
+              ? coordinator.retryInvocation(
+                  runId,
+                  interrupted.sequence,
+                  actor,
+                  reason,
+                  `interactive:retry:${randomUUID()}`,
+                )
+              : action === 's' && canSkip
+                ? coordinator.skipInvocation(
+                    runId,
+                    interrupted.sequence,
+                    actor,
+                    reason,
+                    `interactive:skip:${randomUUID()}`,
+                  )
+                : coordinator.cancelRun(runId, actor, reason, `interactive:cancel:${randomUUID()}`);
+          if (changed.isErr()) {
+            process.stdout.write('Another operator already acted; refreshing.\n');
+          }
+          continue;
+        }
+        print({ runId, status: stable.state.status, pendingAction: 'intervention' });
+        return;
+      }
+      const definition = stable.artifact.bundle.nodes.find(({ id }) => id === invocation.nodeId);
+      process.stdout.write(
+        `\n${invocation.approval.resolvedAction}\nInvocation ${invocation.sequence}\nHEAD ${invocation.approval.repositoryHead}\n`,
+      );
+      const activation = stable.events.find(
+        (event) =>
+          event.type === 'invocation.activated' && event.invocationSequence === invocation.sequence,
+      );
+      const source =
+        activation?.type === 'invocation.activated' &&
+        activation.sourceInvocationSequence !== undefined
+          ? stable.state.invocations.find(
+              ({ sequence }) => sequence === activation.sourceInvocationSequence,
+            )
+          : undefined;
+      if (source?.output !== undefined) {
+        process.stdout.write(
+          `Relevant ${source.nodeId} output:\n${JSON.stringify(source.output, null, 2)}\n`,
+        );
+      }
+      process.stdout.write(
+        `Bound artifacts:\n${invocation.approval.artifactChecksums.map((value) => `  ${value}`).join('\n')}\n`,
+      );
+      let metadata = stable.state.delivery?.proposal?.metadata;
+      if (definition?.type === 'delivery_review' && metadata) {
+        const artifacts = listArtifacts(
+          {
+            runs: host.store,
+            coordinator: host.coordinatorFor(stable),
+          },
+          runId,
+        );
+        const diff = artifacts.isOk()
+          ? artifacts.value
+              .filter(({ kind }) => kind === 'git_diff')
+              .toSorted((left, right) => right.id.localeCompare(left.id))[0]
+          : undefined;
+        if (diff) {
+          const content = await getArtifact(
+            {
+              runs: host.store,
+              coordinator: host.coordinatorFor(stable),
+              artifacts: new LocalArtifactContentReader(host.paths.artifactDirectory),
+            },
+            runId,
+            diff.id,
+          );
+          if (content.isOk() && content.value.content) {
+            const sections = content.value.content
+              .split(/(?=^diff --git )/m)
+              .filter((section) => section.startsWith('diff --git '));
+            if (sections.length > 0) {
+              process.stdout.write(
+                `\nChanged files\n${sections
+                  .map(
+                    (section, index) =>
+                      `  ${index + 1}. ${section.match(/^diff --git a\/(.+?) b\//m)?.[1] ?? 'change'}`,
+                  )
+                  .join('\n')}\n`,
+              );
+              const selection = (
+                await terminal.question('View file number, or press Enter for the full diff: ')
+              ).trim();
+              const selected = Number(selection);
+              process.stdout.write(
+                `\nUnified diff\n${
+                  Number.isSafeInteger(selected) && selected > 0
+                    ? (sections[selected - 1] ?? content.value.content)
+                    : content.value.content
+                }\n`,
+              );
+            } else {
+              process.stdout.write(`\nUnified diff\n${content.value.content}\n`);
+            }
+          }
+        }
+        const commitTitle = await terminal.question(`Commit title [${metadata.commitTitle}]: `);
+        const commitBody = await terminal.question(
+          `Commit body [${metadata.commitBody ?? 'empty'}]: `,
+        );
+        const pullRequestTitle = await terminal.question(
+          `Pull request title [${metadata.pullRequestTitle}]: `,
+        );
+        const pullRequestBody = await terminal.question(
+          `Pull request body [${metadata.pullRequestBody ?? 'empty'}]: `,
+        );
+        const draft = await terminal.question(
+          `Draft pull request [${metadata.draft ? 'y' : 'n'}]: `,
+        );
+        metadata = {
+          ...metadata,
+          ...(commitTitle.trim() ? { commitTitle: commitTitle.trim() } : {}),
+          ...(commitBody.trim() ? { commitBody: commitBody.trim() } : {}),
+          ...(pullRequestTitle.trim() ? { pullRequestTitle: pullRequestTitle.trim() } : {}),
+          ...(pullRequestBody.trim() ? { pullRequestBody: pullRequestBody.trim() } : {}),
+          ...(draft.trim() ? { draft: ['y', 'yes'].includes(draft.trim().toLowerCase()) } : {}),
+        };
+      }
+      const repairs = stable.state.delivery?.repairsUsed ?? 0;
+      const choices =
+        definition?.type === 'delivery_review'
+          ? `[a]pprove, ${repairs < 2 ? '[r]equest changes, ' : ''}[f]ail, or [d]etach`
+          : '[a]pprove, [r]eject, or [d]etach';
+      const action = (await terminal.question(`${choices}? `)).trim().toLowerCase();
+      if (action === 'd') break;
+      const reason = (await terminal.question('Required reason: ')).trim();
+      if (!reason) {
+        process.stdout.write('A decision reason is required.\n');
+        continue;
+      }
+      const decision =
+        action === 'a'
+          ? 'grant'
+          : definition?.type === 'delivery_review' && action === 'r' && repairs < 2
+            ? 'request_changes'
+            : 'reject';
+      let binding = invocation.approval;
+      const coordinator = host.coordinatorFor(stable);
+      if (metadata && stable.state.delivery?.proposal) {
+        const updated = host.updateDeliveryMetadata(
+          stable,
+          invocation.sequence,
+          metadata,
+          actor,
+          `interactive:${randomUUID()}:metadata`,
+        );
+        if (updated.isErr()) throw new Error(updated.error.message);
+        binding =
+          updated.value.state.invocations.find(({ sequence }) => sequence === invocation.sequence)
+            ?.approval ?? binding;
+      }
+      const decided = coordinator.decideApproval(
+        runId,
+        binding,
+        decision,
+        actor,
+        reason,
+        `interactive:${randomUUID()}:decision`,
+      );
+      if (decided.isErr()) {
+        process.stdout.write('Another operator already decided; refreshing.\n');
+      }
+    }
+  } catch (cause) {
+    if (!detached) throw cause;
+  } finally {
+    process.removeListener('SIGINT', detach);
+    terminal.close();
+  }
+  process.stdout.write(
+    `Detached from ${runId}. Reconnect with "kouro attach ${runId}" or inspect with "kouro status ${runId}".\n`,
+  );
 }
 
 function harnessOptions(args: readonly string[]): {
@@ -215,9 +523,46 @@ export async function runCli(args: readonly string[] = process.argv.slice(2)): P
         ...(harnesses.length ? { harnesses } : {}),
         ...(Object.keys(harnessesByNode).length ? { harnessesByNode } : {}),
         actor,
+        ...(option(args, '--base') ? { base: option(args, '--base') } : {}),
       });
       if (result.isErr()) throw new Error(`${result.error.code}: ${result.error.message}`);
-      print(result.unwrap());
+      const created = result.unwrap();
+      if (args.includes('--no-interactive') || !process.stdin.isTTY || !process.stdout.isTTY) {
+        const aggregate = host.store.loadRun(created.runId);
+        const pending = aggregate.isOk()
+          ? aggregate.value.state.invocations.find(
+              ({ state }) => state === 'waiting_for_approval' || state === 'interrupted',
+            )
+          : undefined;
+        print({
+          ...created,
+          ...(pending
+            ? {
+                pendingAction: {
+                  invocationSequence: pending.sequence,
+                  nodeId: pending.nodeId,
+                  state: pending.state,
+                },
+              }
+            : {}),
+        });
+        return 0;
+      }
+      await interactiveSession(host, created.runId, actor);
+      return 0;
+    }
+    if (command === 'attach') {
+      const runId = required(args[1], 'run-id');
+      const runs = args.includes('--all-repos')
+        ? host.store
+        : host.runStoreForRepository(resolve(option(args, '--repo') ?? process.cwd()));
+      const loaded = runs.loadRun(runId);
+      if (loaded.isErr()) throw new Error(`Run ${runId} was not found`);
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        print({ runId, status: loaded.value.state.status });
+        return 0;
+      }
+      await interactiveSession(host, runId, actor);
       return 0;
     }
     if (command === 'runs') {
@@ -253,22 +598,45 @@ export async function runCli(args: readonly string[] = process.argv.slice(2)): P
       print(deleted.unwrap());
       return 0;
     }
-    if (command === 'approve' || command === 'reject') {
+    if (command === 'approve' || command === 'reject' || command === 'request-changes') {
       const runId = required(args[1], 'run-id');
       const invocation = Number(required(args[2], 'invocation'));
       const reason = required(option(args, '--reason'), '--reason');
       const loaded = host.store.loadRun(runId);
       if (loaded.isErr()) throw new Error(`Run ${runId} was not found`);
-      const binding = loaded
+      let binding = loaded
         .unwrap()
         .state.invocations.find(({ sequence }) => sequence === invocation)?.approval;
       if (!binding) throw new Error(`Invocation ${invocation} is not awaiting approval`);
+      let current = loaded.unwrap();
+      const metadataFile = option(args, '--metadata');
+      if (metadataFile) {
+        const parsed: unknown = JSON.parse(await readFile(resolve(metadataFile), 'utf8'));
+        const metadata = deliveryMetadata(parsed);
+        if (!metadata) throw new Error('Metadata file is malformed');
+        const updated = host.updateDeliveryMetadata(
+          current,
+          invocation,
+          metadata,
+          actor,
+          `${command}:metadata:${randomUUID()}`,
+        );
+        if (updated.isErr()) throw new Error(updated.error.message);
+        current = updated.value;
+        binding =
+          current.state.invocations.find(({ sequence }) => sequence === invocation)?.approval ??
+          binding;
+      }
       const decided = host
-        .coordinatorFor(loaded.unwrap())
+        .coordinatorFor(current)
         .decideApproval(
           runId,
           binding,
-          command === 'approve' ? 'grant' : 'reject',
+          command === 'approve'
+            ? 'grant'
+            : command === 'request-changes'
+              ? 'request_changes'
+              : 'reject',
           actor,
           reason,
           `${command}:${randomUUID()}`,
@@ -276,6 +644,22 @@ export async function runCli(args: readonly string[] = process.argv.slice(2)): P
       if (decided.isErr()) throw new Error(`${command} failed`);
       const stable = await host.worker.runUntilStable(runId);
       print({ runId, status: stable.state.status });
+      return 0;
+    }
+    if (command === 'publish') {
+      const provider = option(args, '--provider');
+      if (provider !== undefined && provider !== 'github' && provider !== 'forgejo') {
+        throw new Error('--provider must be github or forgejo');
+      }
+      const published = await host.publish(
+        required(args[1], 'run-id'),
+        provider,
+        option(args, '--remote') ?? 'origin',
+      );
+      if (published.isErr()) {
+        throw new Error(`${published.error.code}: ${published.error.message}`);
+      }
+      print(published.value);
       return 0;
     }
     if (['pause', 'resume', 'cancel'].includes(command)) {

@@ -10,6 +10,7 @@ export const enum CliErrorKind {
   Serve = 6,
   HarnessUnavailable = 7,
   Scaffolding = 8,
+  Publication = 9,
 }
 
 export interface CliError {

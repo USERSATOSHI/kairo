@@ -27,6 +27,13 @@ export interface ApprovalNodeAuthoring {
   readonly skipOutcome?: string;
 }
 
+export interface DeliveryReviewNodeAuthoring {
+  readonly type: 'delivery_review';
+  readonly title: string;
+  readonly proposalFrom: string;
+  readonly priority?: number;
+}
+
 export interface CommandNodeAuthoring {
   readonly type: 'command';
   readonly command: string;
@@ -45,6 +52,7 @@ export interface CompleteNodeAuthoring {
 export type NodeAuthoring =
   | AgentNodeAuthoring
   | ApprovalNodeAuthoring
+  | DeliveryReviewNodeAuthoring
   | CommandNodeAuthoring
   | CompleteNodeAuthoring;
 
@@ -273,6 +281,17 @@ export class WorkflowBuilder implements BuilderContext {
 
   approval(name: string, config: Omit<ApprovalNodeAuthoring, 'type'>): TransitionNodeHandle {
     return this.addTransitionNode(name, { type: 'approval', ...config });
+  }
+
+  /**
+   * Adds the human boundary that reviews the exact prepared tree and editable
+   * commit/pull-request proposal before local delivery.
+   */
+  deliveryReview(
+    name: string,
+    config: Omit<DeliveryReviewNodeAuthoring, 'type'>,
+  ): TransitionNodeHandle {
+    return this.addTransitionNode(name, { type: 'delivery_review', ...config });
   }
 
   command(name: string, config: Omit<CommandNodeAuthoring, 'type'>): TransitionNodeHandle {

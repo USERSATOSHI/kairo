@@ -101,7 +101,7 @@ function isNodeDefinition(value: unknown): value is NodeDefinition {
   if (!isRecord(value)) return false;
   return (
     typeof value.id === 'string' &&
-    ['agent', 'approval', 'command', 'complete'].includes(String(value.type)) &&
+    ['agent', 'approval', 'command', 'complete', 'delivery_review'].includes(String(value.type)) &&
     typeof value.ordinal === 'number' &&
     typeof value.priority === 'number'
   );
@@ -135,7 +135,9 @@ function isApprovalBinding(value: unknown): value is ApprovalBinding {
     Array.isArray(value.artifactChecksums) &&
     value.artifactChecksums.every((checksum) => typeof checksum === 'string') &&
     typeof value.resolvedAction === 'string' &&
-    typeof value.repositoryHead === 'string'
+    typeof value.repositoryHead === 'string' &&
+    (value.preparedTree === undefined || typeof value.preparedTree === 'string') &&
+    (value.proposalChecksum === undefined || typeof value.proposalChecksum === 'string')
   );
 }
 
@@ -159,9 +161,14 @@ function isArtifactReference(value: unknown): value is ArtifactReference {
   if (!isRecord(value)) return false;
   return (
     typeof value.id === 'string' &&
-    ['agent_output', 'harness_transcript', 'command_output', 'git_diff', 'git_status'].includes(
-      String(value.kind),
-    ) &&
+    [
+      'agent_output',
+      'harness_transcript',
+      'command_output',
+      'git_diff',
+      'git_status',
+      'delivery_proposal',
+    ].includes(String(value.kind)) &&
     typeof value.mediaType === 'string' &&
     typeof value.checksum === 'string' &&
     /^sha256:[0-9a-f]{64}$/.test(value.checksum) &&
@@ -221,6 +228,40 @@ function isRunEvent(value: unknown): value is RunEvent {
       );
     case 'run.artifact_published':
       return isArtifactReference(value.artifact);
+    case 'delivery.proposed':
+      return isRecord(value.proposal) && hasNumber(value.proposal, 'invocationSequence');
+    case 'delivery.metadata_updated':
+      return (
+        hasNumber(value, 'invocationSequence') &&
+        isRecord(value.metadata) &&
+        typeof value.checksum === 'string' &&
+        typeof value.actor === 'string'
+      );
+    case 'delivery.committed':
+      return (
+        hasNumber(value, 'invocationSequence') &&
+        typeof value.preparedTree === 'string' &&
+        typeof value.commit === 'string' &&
+        typeof value.branch === 'string'
+      );
+    case 'delivery.publication_started':
+      return (
+        (value.provider === 'github' || value.provider === 'forgejo') &&
+        typeof value.remote === 'string'
+      );
+    case 'delivery.publication_succeeded':
+      return (
+        (value.provider === 'github' || value.provider === 'forgejo') &&
+        typeof value.remote === 'string' &&
+        typeof value.number === 'number' &&
+        typeof value.url === 'string'
+      );
+    case 'delivery.publication_failed':
+      return (
+        (value.provider === 'github' || value.provider === 'forgejo') &&
+        typeof value.remote === 'string' &&
+        typeof value.error === 'string'
+      );
     case 'attempt.failed':
       return (
         hasNumber(value, 'invocationSequence') &&
@@ -257,6 +298,7 @@ function isRunEvent(value: unknown): value is RunEvent {
       return isApprovalBinding(value.binding);
     case 'approval.granted':
     case 'approval.rejected':
+    case 'approval.changes_requested':
       return (
         isApprovalBinding(value.binding) &&
         typeof value.actor === 'string' &&

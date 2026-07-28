@@ -118,6 +118,16 @@ composed from environment-only credentials. See
 [`packages/cli/README.md`](packages/cli/README.md#kouro-ticket-) for setup and
 command examples.
 
+On a TTY, `kouro run` stays attached, advances the workflow, and presents each
+approval until the run is terminal or you detach. Pressing Ctrl-C detaches
+without cancelling. Reconnect with:
+
+```bash
+kouro attach <run-id>
+```
+
+Use `--no-interactive` (or non-TTY input/output) to advance only to the next
+operator boundary and print the run ID plus pending action as structured JSON.
 Kouro returns the new run ID and its current status:
 
 ```json
@@ -146,9 +156,20 @@ The built-in workflow asks for approval twice:
 1. Before implementation begins.
 2. Before the completed changes are delivered.
 
-After the final approval, Kouro creates a merge-ready branch named
-`kouro/<run-id>` in the target repository. Kouro does not merge that branch for
-you.
+The final review displays the exact bound diff and editable commit/PR metadata.
+After approval, Kouro verifies that the worktree still produces the prepared
+tree, creates the approved commit, and creates `kouro/<run-id>`. It never
+silently recaptures changed contents.
+
+Publish immediately from the interactive session or later:
+
+```bash
+kouro publish <run-id> --provider github --remote origin
+```
+
+GitHub and Forgejo use the existing `KOURO_*_OWNER`, `REPOSITORY`, `TOKEN`, and
+endpoint configuration; project-board configuration is not required for pull
+requests. Publication failures are retryable and do not change local success.
 
 ## What the built-in workflow does
 

@@ -308,6 +308,26 @@ silently refresh it during the run.
 
 ---
 
+## M9 — Review-bound delivery and pull requests
+
+Status: **Complete** (accepted 2026-07-28)
+
+- [x] Explicit `delivery_review` authoring and compiler validation
+- [x] Exact prepared-tree, diff-artifact, and metadata proposal binding
+- [x] Editable commit and pull-request metadata
+- [x] Two bounded context-preserving delivery repair returns
+- [x] Interactive `run`, `attach`, detach, and structured non-TTY boundaries
+- [x] Shared CLI/web durable decisions with stale-submission conflicts
+- [x] Named base-branch snapshot and detached-repository validation
+- [x] Exact-tree controlled commit and `kouro/<run-id>` branch
+- [x] Provider-neutral pull-request port
+- [x] GitHub and Forgejo pull-request adapters
+- [x] Verify-then-replay branch push and pull-request reconciliation
+- [x] Retryable publication errors that preserve local success
+- [x] ADR, milestone evidence, tests, and operator documentation
+
+---
+
 ## Ticket system
 
 ### T1 — Local ticket foundation

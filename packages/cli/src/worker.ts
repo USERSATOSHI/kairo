@@ -5,6 +5,7 @@ import type { SqliteEventStore } from '@kouro/persistence-sqlite';
 
 export interface WorkerRunServices {
   coordinatorFor(aggregate: RunAggregate): import('@kouro/executors').RunCoordinator;
+  prepareDelivery(aggregate: RunAggregate): Promise<void>;
   finalize(aggregate: RunAggregate): Promise<void>;
 }
 
@@ -89,6 +90,14 @@ export class LocalWorker {
       if (loaded.isErr()) throw new Error(`Run ${runId} could not be loaded`);
       const aggregate = loaded.unwrap();
       if (stableBoundary(aggregate)) return aggregate;
+      const pendingDelivery = aggregate.state.invocations.find(({ state, nodeId }) => {
+        const definition = aggregate.artifact.bundle.nodes.find(({ id }) => id === nodeId);
+        return state === 'pending' && definition?.type === 'delivery_review';
+      });
+      if (pendingDelivery && !aggregate.state.delivery?.proposal) {
+        await this.services.prepareDelivery(aggregate);
+        continue;
+      }
       const pendingComplete = aggregate.state.invocations.find(({ state, nodeId }) => {
         const definition = aggregate.artifact.bundle.nodes.find(({ id }) => id === nodeId);
         return (

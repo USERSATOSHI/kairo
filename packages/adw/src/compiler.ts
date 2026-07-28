@@ -118,6 +118,11 @@ function nodeConfigurationError(node: SourceNodeDefinition): string | undefined 
       return undefined;
     case 'approval':
       return node.title?.trim() ? undefined : 'approval title is required';
+    case 'delivery_review':
+      if (!node.title?.trim()) return 'delivery review title is required';
+      if (!node.proposalFrom?.trim()) return 'delivery review proposalFrom is required';
+      if (node.skipOutcome !== undefined) return 'delivery review nodes cannot be skipped';
+      return undefined;
     case 'command':
       if (!node.command?.trim()) return 'command is required';
       if (!isRecoveryPolicy(node.recoveryPolicy)) {
@@ -508,6 +513,32 @@ function validate(source: WorkflowSourceBundle): Result<void, CompilerError> {
 
   const transitions = validateTransitions(source.transitions, nodeIds, source.counterLimits);
   if (transitions.isErr()) return transitions;
+
+  for (const node of source.nodes) {
+    if (
+      node.type === 'delivery_review' &&
+      !source.nodes.some(({ id, type }) => id === node.proposalFrom && type === 'agent')
+    ) {
+      return toCompilerError(CompilerErrorKind.InvalidNodeConfiguration, {
+        nodeId: node.id,
+        reason: `proposalFrom must name an agent node: ${node.proposalFrom}`,
+      });
+    }
+    if (node.type === 'delivery_review') {
+      for (const outcome of ['approved', 'changes_requested', 'rejected']) {
+        if (
+          !source.transitions.some(
+            ({ from }) => from.nodeId === node.id && from.outcome === outcome,
+          )
+        ) {
+          return toCompilerError(CompilerErrorKind.InvalidNodeConfiguration, {
+            nodeId: node.id,
+            reason: `delivery review requires a ${outcome} transition`,
+          });
+        }
+      }
+    }
+  }
 
   for (const node of source.nodes) {
     if (

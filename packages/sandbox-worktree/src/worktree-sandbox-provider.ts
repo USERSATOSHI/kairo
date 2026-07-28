@@ -225,6 +225,92 @@ export class WorktreeSandboxProvider {
     });
   }
 
+  async resolveBaseBranch(
+    repository: PinnedRepository,
+    explicit?: string,
+  ): Promise<Result<string, SandboxError>> {
+    const branch = explicit
+      ? ok({ stdout: explicit })
+      : await this.git.run(repository.repositoryPath, 'resolve base branch', [
+          'symbolic-ref',
+          '--quiet',
+          '--short',
+          'HEAD',
+        ]);
+    if (branch.isErr()) {
+      return err(
+        toErr(SandboxErrorKind.WorktreeConflict, {
+          runId: repository.repositoryId,
+          path: repository.repositoryPath,
+          reason: 'detached repositories require an explicit base branch',
+        }),
+      );
+    }
+    const name = branch.value.stdout.trim();
+    const resolved = await this.git.run(repository.repositoryPath, 'verify base branch', [
+      'rev-parse',
+      '--verify',
+      '--end-of-options',
+      `${name}^{commit}`,
+    ]);
+    if (resolved.isErr()) return resolved;
+    return resolved.value.stdout.trim() === repository.startingCommit
+      ? ok(name)
+      : err(
+          toErr(SandboxErrorKind.HeadConflict, {
+            runId: repository.repositoryId,
+            expected: repository.startingCommit,
+            received: resolved.value.stdout.trim(),
+          }),
+        );
+  }
+
+  async pushDeliveryBranch(
+    worktree: RunWorktree,
+    remote: string,
+    branch: string,
+    commit: string,
+  ): Promise<Result<void, SandboxError>> {
+    const ready = this.validateReady();
+    if (ready.isErr()) return ready;
+    return this.withRepositoryLock(worktree, async () => {
+      const remoteBranch = await this.git.run(worktree.repositoryPath, 'inspect remote branch', [
+        'ls-remote',
+        '--heads',
+        remote,
+        `refs/heads/${branch}`,
+      ]);
+      if (remoteBranch.isErr()) return remoteBranch;
+      const remoteCommit = remoteBranch.value.stdout.trim().split(/\s+/)[0] ?? '';
+      if (remoteCommit) {
+        return remoteCommit === commit
+          ? ok(undefined)
+          : err(
+              toErr(SandboxErrorKind.HeadConflict, {
+                runId: worktree.runId,
+                expected: commit,
+                received: remoteCommit,
+              }),
+            );
+      }
+      const pushed = await this.git.run(worktree.repositoryPath, 'push delivery branch', [
+        'push',
+        remote,
+        `${commit}:refs/heads/${branch}`,
+      ]);
+      return pushed.isErr() ? pushed : ok(undefined);
+    });
+  }
+
+  async remoteUrl(worktree: RunWorktree, remote: string): Promise<Result<string, SandboxError>> {
+    const value = await this.git.run(worktree.repositoryPath, 'read remote URL', [
+      'remote',
+      'get-url',
+      remote,
+    ]);
+    return value.isErr() ? value : ok(value.value.stdout.trim());
+  }
+
   async createWorktree(
     repository: PinnedRepository,
     runId: string,

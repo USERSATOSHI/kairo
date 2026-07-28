@@ -157,6 +157,8 @@ describe('M7 runnable local MVP and operator CLI', () => {
     expect(help.stdout).toContain('kouro run <adw> --repo <path>');
     expect(help.stdout).toContain('--ticket <provider:reference>');
     expect(help.stdout).toContain('kouro pause|resume|cancel <run-id>');
+    expect(help.stdout).toContain('attach          Reconnect to an interactive run session');
+    expect(help.stdout).toContain('publish         Push a delivered branch');
 
     const runHelp = await process(
       ['bun', 'run', resolve(root, 'packages', 'cli', 'src', 'main.ts'), 'help', 'run'],
@@ -244,7 +246,10 @@ describe('M7 runnable local MVP and operator CLI', () => {
       expect(compiled.isOk()).toBe(true);
       if (template === 'chore' && compiled.isOk()) {
         const bundle = compiled.unwrap().bundle;
-        expect(bundle.counterLimits).toEqual({ validationRepairs: 3 });
+        expect(bundle.counterLimits).toEqual({
+          deliveryRepairs: 2,
+          validationRepairs: 3,
+        });
         expect(bundle.runLimits?.maxNodeInvocations).toBe(9);
         expect(bundle.transitions).toContainEqual({
           id: 'validate.failure.implement',
@@ -301,9 +306,9 @@ describe('M7 runnable local MVP and operator CLI', () => {
 const complete = workflow.complete('complete');`,
       )
       .replace(
-        "validate.on('success').to(complete);",
+        "validate.on('success').to(deliveryMetadata);",
         `validate.on('success').to(inspect);
-inspect.on('success').to(complete);
+inspect.on('success').to(deliveryMetadata);
 inspect.on('failure').to(failed);`,
       );
     await writeFile(entrypointPath, extended);
@@ -834,6 +839,7 @@ inspect.on('failure').to(failed);`,
     aggregate = await restarted.worker.runUntilStable(runId);
     expect(aggregate.state.status).toBe('succeeded');
     expect(aggregate.state.artifacts?.map(({ kind }) => kind).toSorted()).toEqual([
+      'delivery_proposal',
       'git_diff',
       'git_status',
     ]);
@@ -841,7 +847,10 @@ inspect.on('failure').to(failed);`,
     if (typeof branch !== 'string') throw new Error('Delivery branch was not snapshotted');
     const branchCommit = await process(['git', 'rev-parse', branch], repository);
     expect(branchCommit.exitCode).toBe(0);
+    expect(aggregate.state.delivery?.commit).toBe(branchCommit.stdout.trim());
     expect(branchCommit.stdout.trim()).not.toBe(aggregate.state.startingCommit);
+    const commitTitle = await process(['git', 'log', '-1', '--format=%s', branch], repository);
+    expect(commitTitle.stdout.trim()).toBe('Implement and validate the fixture change.');
 
     const appRun = await restarted.app().handle(new Request(`http://kouro.local/runs/${runId}`));
     expect(appRun.status).toBe(200);

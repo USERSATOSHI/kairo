@@ -19,6 +19,7 @@ import {
   listRepositories,
   listRuns,
   listWorkflows,
+  publishRun,
   type ApiServices,
 } from './use-cases.ts';
 import {
@@ -88,6 +89,7 @@ export function createKouroApp(services: ApiServices) {
             ),
           ),
           actor: t.String({ minLength: 1 }),
+          base: t.Optional(t.String({ minLength: 1 })),
         }),
       },
     )
@@ -99,6 +101,19 @@ export function createKouroApp(services: ApiServices) {
       const result = await deleteRun(services, params.runId);
       return result.isErr() ? failure(result.error, set) : result.value;
     })
+    .post(
+      '/runs/:runId/publish',
+      async ({ params, body, set }) => {
+        const result = await publishRun(services, params.runId, body);
+        return result.isErr() ? failure(result.error, set) : result.value;
+      },
+      {
+        body: t.Object({
+          provider: t.Optional(t.Union([t.Literal('github'), t.Literal('forgejo')])),
+          remote: t.Optional(t.String({ minLength: 1 })),
+        }),
+      },
+    )
     .get('/runs/:runId/events', ({ params, query, request, set }) => {
       const result = listEvents(services, params.runId, afterSequence(request, query.after));
       if (result.isErr()) return failure(result.error, set);
@@ -142,10 +157,35 @@ export function createKouroApp(services: ApiServices) {
       },
       {
         body: t.Object({
-          decision: t.Union([t.Literal('grant'), t.Literal('reject')]),
+          decision: t.Union([
+            t.Literal('grant'),
+            t.Literal('reject'),
+            t.Literal('request_changes'),
+          ]),
           actor: t.String({ minLength: 1 }),
           reason: t.String({ minLength: 1 }),
           idempotencyKey: t.String({ minLength: 1 }),
+          metadata: t.Optional(
+            t.Object({
+              commitTitle: t.String({ minLength: 1 }),
+              commitBody: t.Optional(t.String()),
+              pullRequestTitle: t.String({ minLength: 1 }),
+              pullRequestBody: t.Optional(t.String()),
+              draft: t.Boolean(),
+            }),
+          ),
+          binding: t.Optional(
+            t.Object({
+              workflowChecksum: t.String({ minLength: 1 }),
+              invocationSequence: t.Number({ minimum: 1 }),
+              artifactChecksums: t.Array(t.String({ minLength: 1 })),
+              resolvedAction: t.String(),
+              repositoryHead: t.String({ minLength: 1 }),
+              preparedTree: t.Optional(t.String({ minLength: 1 })),
+              proposalChecksum: t.Optional(t.String({ minLength: 1 })),
+            }),
+          ),
+          expectedEventSequence: t.Optional(t.Number({ minimum: 1 })),
         }),
       },
     )

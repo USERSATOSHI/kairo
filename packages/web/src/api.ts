@@ -5,6 +5,7 @@ import type {
   ArtifactView,
   DeleteRunResponse,
   InvocationActivityView,
+  PublishRunResponse,
   RunDetails,
   RunSummary,
   TicketDetails,
@@ -51,6 +52,7 @@ function isApprovalView(value: unknown): value is ApprovalView {
     typeof value.runId === 'string' &&
     typeof value.nodeId === 'string' &&
     typeof value.invocationSequence === 'number' &&
+    typeof value.expectedEventSequence === 'number' &&
     isRecord(value.binding)
   );
 }
@@ -193,6 +195,29 @@ export async function deleteRun(runId: string): Promise<DeleteRunResponse> {
   return { runId, deleted: true };
 }
 
+export async function publishRun(runId: string): Promise<PublishRunResponse> {
+  const value = await json(
+    await fetch(`/api/runs/${encodeURIComponent(runId)}/publish`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    }),
+  );
+  if (
+    !isRecord(value) ||
+    (value.provider !== 'github' && value.provider !== 'forgejo') ||
+    typeof value.number !== 'number' ||
+    typeof value.url !== 'string'
+  ) {
+    throw new Error('Kouro API returned a malformed publication response');
+  }
+  return {
+    provider: value.provider,
+    number: value.number,
+    url: value.url,
+  };
+}
+
 export async function fetchApprovals(runId: string): Promise<readonly ApprovalView[]> {
   const value = await json(await fetch(`/api/runs/${encodeURIComponent(runId)}/approvals`));
   if (!Array.isArray(value) || !value.every(isApprovalView)) {
@@ -277,6 +302,12 @@ export function reconnectEvents(
     'attempt.resume_token_recorded',
     'attempt.artifact_published',
     'run.artifact_published',
+    'delivery.proposed',
+    'delivery.metadata_updated',
+    'delivery.committed',
+    'delivery.publication_started',
+    'delivery.publication_succeeded',
+    'delivery.publication_failed',
     'attempt.failed',
     'attempt.interrupted',
     'attempt.interrupt_requested',
@@ -286,6 +317,7 @@ export function reconnectEvents(
     'approval.requested',
     'approval.granted',
     'approval.rejected',
+    'approval.changes_requested',
     'run.completed',
   ] as const;
   for (const eventType of eventTypes) {

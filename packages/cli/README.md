@@ -333,7 +333,12 @@ await host.dispose();
 1. **Initialization** (`initialize()`): Creates directories, boots SQLite, initializes the worktree sandbox, recovers previously running runs
 2. **Run creation** (`create()`): Compiles ADW, registers repository, creates worktree, creates run, advances to first stable boundary
 3. **Run advancement** (`LocalWorker`): Polling loop (250ms) that advances running runs to their next stable boundary
-4. **Finalization** (`finalize()`): When a run reaches a terminal `complete` node with a successful result, captures git artifacts, commits changes, and creates a delivery branch `kouro/<run-id>`
+4. **Delivery preparation**: At an explicit `delivery_review` node, captures
+   status/diff artifacts, stages the exact tree, and publishes editable commit
+   and pull-request metadata.
+5. **Approved finalization**: Verifies and commits only the prepared tree, then
+   creates `kouro/<run-id>`. New custom ADWs without delivery review receive no
+   implicit commit or branch.
 
 ## LocalWorker
 
@@ -371,8 +376,13 @@ worktree → plan → planApproval → implement → validate → review
 
 Validation runs lint, format, and tests. Both validation failures (maximum 3)
 and review change requests (maximum 2) return durable feedback to the same
-context-preserving implementation agent. The workflow has 9 nodes, 14
-transitions, and two human approval gates.
+context-preserving implementation agent. Delivery-review change requests have
+their own two-return bound.
+
+`kouro run` is continuous on a TTY. Use `kouro attach <run-id>` after detaching,
+or `--no-interactive` for a structured one-boundary response. After local
+delivery, use `kouro publish <run-id> [--provider github|forgejo] [--remote
+origin]` to push without force and create or recover the reviewed pull request.
 
 ## Error Handling
 
@@ -387,6 +397,7 @@ transitions, and two human approval gates.
 | `Serve` | 6 | HTTP server startup failure |
 | `HarnessUnavailable` | 7 | Agent harness not found |
 | `Scaffolding` | 8 | ADW template creation failed |
+| `Publication` | 9 | Push or pull-request publication failed |
 
 ## Exported API
 

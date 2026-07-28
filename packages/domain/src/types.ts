@@ -67,12 +67,13 @@ export type Expression =
 
 export interface SourceNodeDefinition {
   readonly id: string;
-  readonly type: 'agent' | 'approval' | 'command' | 'complete';
+  readonly type: 'agent' | 'approval' | 'command' | 'complete' | 'delivery_review';
   readonly priority?: number;
   readonly recoveryPolicy?: RecoveryPolicy;
   readonly capabilities?: readonly string[];
   readonly command?: string;
   readonly title?: string;
+  readonly proposalFrom?: string;
   readonly role?: string;
   readonly prompt?: string;
   readonly outputSchema?: string;
@@ -177,7 +178,8 @@ export interface ArtifactReference {
     | 'harness_transcript'
     | 'command_output'
     | 'git_diff'
-    | 'git_status';
+    | 'git_status'
+    | 'delivery_proposal';
   readonly mediaType: string;
   readonly checksum: `sha256:${string}`;
   readonly size: number;
@@ -215,6 +217,42 @@ export interface ApprovalBinding {
   readonly artifactChecksums: readonly string[];
   readonly resolvedAction: string;
   readonly repositoryHead: string;
+  readonly preparedTree?: string;
+  readonly proposalChecksum?: string;
+}
+
+export interface DeliveryMetadata {
+  readonly commitTitle: string;
+  readonly commitBody?: string;
+  readonly pullRequestTitle: string;
+  readonly pullRequestBody?: string;
+  readonly draft: boolean;
+}
+
+export interface DeliveryProposal {
+  readonly invocationSequence: number;
+  readonly preparedHead: string;
+  readonly preparedTree: string;
+  readonly metadata: DeliveryMetadata;
+  readonly artifactChecksums: readonly string[];
+  readonly checksum: `sha256:${string}`;
+}
+
+export interface PullRequestPublication {
+  readonly status: 'not_published' | 'publishing' | 'published' | 'failed';
+  readonly provider?: 'github' | 'forgejo';
+  readonly remote?: string;
+  readonly number?: number;
+  readonly url?: string;
+  readonly error?: string;
+}
+
+export interface DeliveryState {
+  readonly proposal?: DeliveryProposal;
+  readonly repairsUsed: number;
+  readonly commit?: string;
+  readonly branch?: string;
+  readonly publication: PullRequestPublication;
 }
 
 export interface SkipBinding {
@@ -237,6 +275,7 @@ export interface RunState {
   readonly counters: Readonly<Record<string, number>>;
   readonly invocations: readonly NodeInvocation[];
   readonly artifacts?: readonly ArtifactReference[];
+  readonly delivery?: DeliveryState;
 }
 
 export type RunEvent =
@@ -315,6 +354,48 @@ export type RunEvent =
     }
   | {
       readonly sequence: number;
+      readonly type: 'delivery.proposed';
+      readonly proposal: DeliveryProposal;
+    }
+  | {
+      readonly sequence: number;
+      readonly type: 'delivery.metadata_updated';
+      readonly invocationSequence: number;
+      readonly metadata: DeliveryMetadata;
+      readonly checksum: `sha256:${string}`;
+      readonly actor: string;
+    }
+  | {
+      readonly sequence: number;
+      readonly type: 'delivery.committed';
+      readonly invocationSequence: number;
+      readonly preparedTree: string;
+      readonly commit: string;
+      readonly branch: string;
+    }
+  | {
+      readonly sequence: number;
+      readonly type: 'delivery.publication_started';
+      readonly provider: 'github' | 'forgejo';
+      readonly remote: string;
+    }
+  | {
+      readonly sequence: number;
+      readonly type: 'delivery.publication_succeeded';
+      readonly provider: 'github' | 'forgejo';
+      readonly remote: string;
+      readonly number: number;
+      readonly url: string;
+    }
+  | {
+      readonly sequence: number;
+      readonly type: 'delivery.publication_failed';
+      readonly provider: 'github' | 'forgejo';
+      readonly remote: string;
+      readonly error: string;
+    }
+  | {
+      readonly sequence: number;
       readonly type: 'attempt.failed';
       readonly invocationSequence: number;
       readonly attemptNumber: number;
@@ -371,6 +452,13 @@ export type RunEvent =
   | {
       readonly sequence: number;
       readonly type: 'approval.rejected';
+      readonly binding: ApprovalBinding;
+      readonly actor: string;
+      readonly reason: string;
+    }
+  | {
+      readonly sequence: number;
+      readonly type: 'approval.changes_requested';
       readonly binding: ApprovalBinding;
       readonly actor: string;
       readonly reason: string;

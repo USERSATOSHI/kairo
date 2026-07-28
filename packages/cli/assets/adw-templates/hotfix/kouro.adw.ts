@@ -9,6 +9,7 @@ const workflow = new WorkflowBuilder({
     maxDurationMs: 2 * 60 * 60 * 1000,
     maxNodeInvocations: 10,
   });
+const deliveryRepairs = workflow.counter('deliveryRepairs', 2);
 
 const assess = workflow.agent('assess', {
   role: 'hotfix-assessor',
@@ -27,13 +28,31 @@ const validate = workflow.command('validate', {
   capabilities: ['repository.read', 'terminal.execute'],
   recoveryPolicy: 'replay_safe',
 });
+const deliveryMetadata = workflow.agent('deliveryMetadata', {
+  role: 'delivery-metadata-proposer',
+  prompt: './prompts/delivery.md',
+  capabilities: ['repository.read'],
+  recoveryPolicy: 'resume_supported',
+});
+const delivery = workflow.deliveryReview('delivery', {
+  title: 'Review hotfix delivery',
+  proposalFrom: 'deliveryMetadata',
+});
 const complete = workflow.complete('complete');
 const failed = workflow.complete('failed', { result: 'failed' });
 
 workflow.startAt(assess);
 assess.on('success').to(implement);
 implement.on('success').to(validate);
-validate.on('success').to(complete);
+validate.on('success').to(deliveryMetadata);
 validate.on('failure').to(failed);
+deliveryMetadata.on('success').to(delivery);
+delivery.on('approved').to(complete);
+delivery
+  .on('changes_requested')
+  .when(deliveryRepairs.belowLimit())
+  .increment(deliveryRepairs)
+  .to(implement);
+delivery.on('rejected').to(failed);
 
 export default workflow.build();

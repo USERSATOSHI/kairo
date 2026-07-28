@@ -556,6 +556,31 @@ Exit criteria:
 - end-to-end CLI tests use real subprocess, SQLite, Git, worktree, restart, and
   in-process HTTP boundaries without requiring a real model provider.
 
+### M9 — Review-bound delivery and pull requests
+
+Status: Complete on 2026-07-28. See
+[`docs/milestones/m9.md`](docs/milestones/m9.md) for acceptance evidence.
+
+Deliver:
+
+- explicit `delivery_review` authoring and compiled runtime semantics;
+- checksum-bound diff, prepared tree, and editable commit/PR proposal;
+- concurrent durable CLI and web decisions with first-valid-decision wins;
+- interactive `run` and `attach`, structured non-TTY boundaries, and detach;
+- exact-tree controlled commit and named base-branch snapshot;
+- provider-neutral GitHub and Forgejo pull-request publication;
+- verify-then-replay branch push and PR reconciliation;
+- retryable publication failures that preserve local run success.
+
+Exit criteria:
+
+- new workflows without delivery review create no implicit commit or branch;
+- approval cannot commit a tree different from the reviewed prepared tree;
+- two change requests return to the same implementation context;
+- CLI and web render and edit the same durable delivery proposal;
+- detached repositories require an explicit base branch;
+- publication retries do not duplicate branches or pull requests.
+
 ## 14. Ticket-system roadmap
 
 The ticket system is a planning bounded domain beside the existing runtime:

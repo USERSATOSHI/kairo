@@ -11,6 +11,7 @@ const workflow = new WorkflowBuilder({
   });
 
 const validationRepairs = workflow.counter('validationRepairs', 3);
+const deliveryRepairs = workflow.counter('deliveryRepairs', 2);
 const implement = workflow.agent('implement', {
   role: 'maintainer',
   prompt: './prompts/implement.md',
@@ -22,17 +23,35 @@ const validate = workflow.command('validate', {
   capabilities: ['repository.read', 'terminal.execute'],
   recoveryPolicy: 'replay_safe',
 });
+const deliveryMetadata = workflow.agent('deliveryMetadata', {
+  role: 'delivery-metadata-proposer',
+  prompt: './prompts/delivery.md',
+  capabilities: ['repository.read'],
+  recoveryPolicy: 'resume_supported',
+});
+const delivery = workflow.deliveryReview('delivery', {
+  title: 'Review chore delivery',
+  proposalFrom: 'deliveryMetadata',
+});
 const complete = workflow.complete('complete');
 const failed = workflow.complete('failed', { result: 'failed' });
 
 workflow.startAt(implement);
 implement.on('success').to(validate);
-validate.on('success').to(complete);
+validate.on('success').to(deliveryMetadata);
 validate
   .on('failure')
   .when(validationRepairs.belowLimit())
   .increment(validationRepairs)
   .to(implement);
 validate.on('failure').otherwise().to(failed);
+deliveryMetadata.on('success').to(delivery);
+delivery.on('approved').to(complete);
+delivery
+  .on('changes_requested')
+  .when(deliveryRepairs.belowLimit())
+  .increment(deliveryRepairs)
+  .to(implement);
+delivery.on('rejected').to(failed);
 
 export default workflow.build();

@@ -31,6 +31,9 @@ const repo = await sandbox.registerRepository('my-repo', '/path/to/repo');
 const pinned = await sandbox.pinStartingCommit(repo, 'main');
 // Returns: { ...repo, startingCommit: 'abc123...' }
 
+const base = await sandbox.resolveBaseBranch(pinned, 'main');
+// Verifies that the named base resolves to the pinned starting commit.
+
 // 4. Create a worktree sandbox for a run
 const worktree = await sandbox.createWorktree(pinned, 'run-abc');
 // Returns: { repositoryId, runId, repositoryPath, path, commonGitDirectory, startingCommit }
@@ -58,6 +61,14 @@ const commitResult = await sandbox.commitWorktree({
 
 // 9. Create delivery branch (kouro/ namespace)
 await sandbox.createDeliveryBranch(worktree, 'kouro/run-abc', commitResult.commit);
+
+// Push without force; an existing remote branch must name the same commit.
+await sandbox.pushDeliveryBranch(
+  worktree,
+  'origin',
+  'kouro/run-abc',
+  commitResult.commit,
+);
 
 // 10. Clean up the worktree
 await sandbox.cleanupWorktree(worktree);

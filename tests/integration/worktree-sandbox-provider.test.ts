@@ -88,6 +88,14 @@ describe('WorktreeSandboxProvider', () => {
     );
   });
 
+  test('snapshots a matching base and requires it for detached repositories', async () => {
+    expect((await provider.resolveBaseBranch(pinned)).unwrap()).toBe('main');
+    await git(repositoryPath, 'checkout', '--detach', pinned.startingCommit);
+    const detached = (await provider.pinStartingCommit(repository)).unwrap();
+    expect((await provider.resolveBaseBranch(detached)).isErr()).toBe(true);
+    expect((await provider.resolveBaseBranch(detached, 'main')).unwrap()).toBe('main');
+  });
+
   test('reconciles creation when the worktree exists but metadata was not recorded', async () => {
     const first = (await provider.createWorktree(pinned, 'interrupted-run')).unwrap();
     await unlink(join(managementRoot, 'runs', 'fixture', 'interrupted-run.json'));
@@ -149,6 +157,45 @@ describe('WorktreeSandboxProvider', () => {
     });
     expect(await git(worktree.path, 'rev-list', '--count', 'HEAD')).toBe('2');
     expect(await git(worktree.path, 'rev-parse', 'HEAD^{tree}')).toBe(prepared.tree);
+  });
+
+  test('pushes without force and rejects a conflicting remote delivery branch', async () => {
+    const remote = join(temporaryRoot, 'remote.git');
+    await git(temporaryRoot, 'init', '--bare', remote);
+    await git(repositoryPath, 'remote', 'add', 'origin', remote);
+    const worktree = (await provider.createWorktree(pinned, 'push-run')).unwrap();
+    await writeFile(join(worktree.path, 'tracked.txt'), 'delivered\n');
+    const prepared = (await provider.prepareCommit(worktree)).unwrap();
+    const committed = (
+      await provider.commitWorktree({
+        worktree,
+        expectedHead: prepared.head,
+        expectedTree: prepared.tree,
+        message: 'reviewed delivery',
+        identity: { name: 'Kouro', email: 'kouro@example.test' },
+        timestamp: '2026-07-26T01:02:03.000Z',
+      })
+    ).unwrap();
+
+    expect(
+      (
+        await provider.pushDeliveryBranch(worktree, 'origin', 'kouro/push-run', committed.commit)
+      ).isOk(),
+    ).toBe(true);
+    expect(
+      (
+        await provider.pushDeliveryBranch(worktree, 'origin', 'kouro/push-run', committed.commit)
+      ).isOk(),
+    ).toBe(true);
+    await git(remote, 'update-ref', 'refs/heads/kouro/push-run', pinned.startingCommit);
+    const conflict = await provider.pushDeliveryBranch(
+      worktree,
+      'origin',
+      'kouro/push-run',
+      committed.commit,
+    );
+    expect(conflict.isErr()).toBe(true);
+    if (conflict.isErr()) expect(conflict.error.kind).toBe(SandboxErrorKind.HeadConflict);
   });
 
   test('rejects a changed tree and refuses dirty cleanup unless forced', async () => {

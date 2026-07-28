@@ -7,6 +7,7 @@ const workflow = {
     counters: {
       testRepair: 3,
       reviewRepair: 2,
+      deliveryRepair: 2,
     },
     maxDurationMs: 8 * 60 * 60 * 1000,
     maxNodeInvocations: 30,
@@ -53,8 +54,9 @@ const workflow = {
       recoveryPolicy: 'resume_supported',
     },
     deliveryApproval: {
-      type: 'approval',
+      type: 'delivery_review',
       title: 'Approve merge-ready delivery',
+      proposalFrom: 'review',
     },
     complete: { type: 'complete' },
     failed: { type: 'complete', result: 'failed' },
@@ -171,6 +173,17 @@ const workflow = {
       id: 'deliveryApproval.approved.complete',
       from: { nodeId: 'deliveryApproval', outcome: 'approved' },
       toNodeId: 'complete',
+    },
+    {
+      id: 'deliveryApproval.changes_requested.implement',
+      from: { nodeId: 'deliveryApproval', outcome: 'changes_requested' },
+      toNodeId: 'implement',
+      condition: {
+        op: 'lt',
+        left: { scope: 'counter', name: 'deliveryRepair' },
+        right: 2,
+      },
+      increment: 'deliveryRepair',
     },
     {
       id: 'deliveryApproval.rejected.failed',

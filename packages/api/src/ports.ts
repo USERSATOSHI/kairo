@@ -3,6 +3,8 @@ import type {
   CreateRunRequest,
   CreateRunResponse,
   DeleteRunResponse,
+  PublishRunRequest,
+  PublishRunResponse,
   RepositorySummary,
   TicketProviderConfigurationView,
   TicketProjectView,
@@ -76,6 +78,19 @@ export interface LocalRunDeleter {
 }
 
 export interface LocalRunDeleterError {
+  readonly kind: number;
+  readonly message: string;
+}
+
+export interface LocalRunPublisher {
+  publish(
+    runId: string,
+    provider?: PublishRunRequest['provider'],
+    remote?: string,
+  ): Promise<Result<PublishRunResponse, LocalRunPublisherError>>;
+}
+
+export interface LocalRunPublisherError {
   readonly kind: number;
   readonly message: string;
 }

@@ -146,7 +146,11 @@ export function scheduleRun(
   )[0];
   if (pending) {
     const definition = definitionFor(artifact, pending);
-    if (definition.type === 'approval') {
+    if (definition.type === 'approval' || definition.type === 'delivery_review') {
+      const proposal = state.delivery?.proposal;
+      if (definition.type === 'delivery_review' && !proposal) {
+        return ok([]);
+      }
       return ok([
         {
           type: 'approval.request',
@@ -157,6 +161,12 @@ export function scheduleRun(
             artifactChecksums: approvalArtifactChecksums(state),
             resolvedAction: definition.title ?? '',
             repositoryHead: state.repositoryHead,
+            ...(definition.type === 'delivery_review' && proposal
+              ? {
+                  preparedTree: proposal.preparedTree,
+                  proposalChecksum: proposal.checksum,
+                }
+              : {}),
           },
         },
       ]);

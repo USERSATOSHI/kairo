@@ -2,6 +2,7 @@ import type {
   ApprovalBinding,
   ArtifactReference,
   CompiledWorkflowBundle,
+  DeliveryMetadata,
   RunEvent,
   RunState,
 } from '@kouro/domain';
@@ -106,13 +107,17 @@ export interface ApprovalView {
   readonly invocationSequence: number;
   readonly state: RunState['invocations'][number]['state'];
   readonly binding: ApprovalBinding;
+  readonly expectedEventSequence: number;
 }
 
 export interface ApprovalDecisionRequest {
-  readonly decision: 'grant' | 'reject';
+  readonly decision: 'grant' | 'reject' | 'request_changes';
   readonly actor: string;
   readonly reason: string;
   readonly idempotencyKey: string;
+  readonly metadata?: DeliveryMetadata;
+  readonly binding?: ApprovalBinding;
+  readonly expectedEventSequence?: number;
 }
 
 export interface ApprovalDecisionResponse {
@@ -129,6 +134,7 @@ export interface CreateRunRequest {
   readonly harnesses?: readonly string[];
   readonly harnessesByNode?: Readonly<Record<string, readonly string[]>>;
   readonly actor: string;
+  readonly base?: string;
 }
 
 export interface CreateRunResponse {
@@ -139,6 +145,17 @@ export interface CreateRunResponse {
 export interface DeleteRunResponse {
   readonly runId: string;
   readonly deleted: true;
+}
+
+export interface PublishRunRequest {
+  readonly provider?: 'github' | 'forgejo';
+  readonly remote?: string;
+}
+
+export interface PublishRunResponse {
+  readonly provider: 'github' | 'forgejo';
+  readonly number: number;
+  readonly url: string;
 }
 
 export interface LifecycleRequest {

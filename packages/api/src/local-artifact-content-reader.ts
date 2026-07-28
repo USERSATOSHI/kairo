@@ -19,6 +19,8 @@ function extensionFor(kind: ArtifactReference['kind']): string {
       return 'diff';
     case 'git_status':
       return 'txt';
+    case 'delivery_proposal':
+      return 'json';
   }
   throw new Error('Unsupported artifact kind');
 }

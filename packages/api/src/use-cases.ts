@@ -11,6 +11,8 @@ import type {
   LifecycleRequest,
   LifecycleResponse,
   RepositorySummary,
+  PublishRunRequest,
+  PublishRunResponse,
   RunDetails,
   RunSummary,
   WorkflowDetails,
@@ -18,7 +20,8 @@ import type {
   WorkflowNodeView,
   WorkflowSummary,
 } from '@kouro/api-contracts';
-import type { ArtifactReference, NodeInvocation } from '@kouro/domain';
+import type { ApprovalBinding, ArtifactReference, NodeInvocation } from '@kouro/domain';
+import { deliveryMetadataChecksum, validateDeliveryMetadata } from '@kouro/delivery';
 import {
   RunStoreErrorKind,
   type RunAggregate,
@@ -33,6 +36,7 @@ import type {
   InvocationActivityReader,
   LocalRunCreator,
   LocalRunDeleter,
+  LocalRunPublisher,
   ObservableRunStore,
   RepositoryQuery,
   TicketProviderConfigurationQuery,
@@ -47,6 +51,7 @@ export interface ApiServices {
   readonly repositories?: RepositoryQuery;
   readonly runCreator?: LocalRunCreator;
   readonly runDeleter?: LocalRunDeleter;
+  readonly runPublisher?: LocalRunPublisher;
   readonly tickets?: TicketReadServices;
   readonly ticketProviders?: TicketProviderConfigurationQuery;
 }
@@ -64,6 +69,19 @@ function pendingApprovalCount(invocations: readonly NodeInvocation[]): number {
   return invocations.filter(
     ({ state, approval }) => state === 'waiting_for_approval' && approval !== undefined,
   ).length;
+}
+
+function sameApprovalBinding(left: ApprovalBinding, right: ApprovalBinding): boolean {
+  return (
+    left.workflowChecksum === right.workflowChecksum &&
+    left.invocationSequence === right.invocationSequence &&
+    left.resolvedAction === right.resolvedAction &&
+    left.repositoryHead === right.repositoryHead &&
+    left.preparedTree === right.preparedTree &&
+    left.proposalChecksum === right.proposalChecksum &&
+    left.artifactChecksums.length === right.artifactChecksums.length &&
+    left.artifactChecksums.every((checksum, index) => checksum === right.artifactChecksums[index])
+  );
 }
 
 function summarizeRun(aggregate: RunAggregate): RunSummary {
@@ -324,6 +342,7 @@ export function listApprovals(
               invocationSequence: invocation.sequence,
               state: invocation.state,
               binding: invocation.approval,
+              expectedEventSequence: aggregate.nextEventSequence,
             },
           ]
         : [],
@@ -346,19 +365,79 @@ export function decideApproval(
   }
   const loaded = fromStore(services.runs.loadRun(runId));
   if (loaded.isErr()) return loaded;
-  const invocation = loaded
-    .unwrap()
-    .state.invocations.find(({ sequence }) => sequence === invocationSequence);
+  const aggregate = loaded.unwrap();
+  const invocation = aggregate.state.invocations.find(
+    ({ sequence }) => sequence === invocationSequence,
+  );
   if (invocation?.state !== 'waiting_for_approval' || !invocation.approval) {
+    const decision = aggregate.events.findLast(
+      (event) =>
+        (event.type === 'approval.granted' ||
+          event.type === 'approval.rejected' ||
+          event.type === 'approval.changes_requested') &&
+        event.binding.invocationSequence === invocationSequence,
+    );
     return apiErr(
       ApiErrorKind.Conflict,
       'approval_not_pending',
-      `Invocation ${invocationSequence} is not waiting for approval`,
+      decision && 'actor' in decision
+        ? `${decision.actor} already decided invocation ${invocationSequence}`
+        : `Invocation ${invocationSequence} is not waiting for approval`,
     );
+  }
+  if (
+    (request.expectedEventSequence !== undefined &&
+      request.expectedEventSequence !== aggregate.nextEventSequence) ||
+    (request.binding !== undefined && !sameApprovalBinding(request.binding, invocation.approval))
+  ) {
+    return apiErr(
+      ApiErrorKind.Conflict,
+      'approval_decision_stale',
+      'Another operator updated or decided this approval',
+    );
+  }
+  let binding = invocation.approval;
+  if (request.metadata) {
+    const proposal = aggregate.state.delivery?.proposal;
+    if (!proposal || proposal.invocationSequence !== invocationSequence) {
+      return apiErr(
+        ApiErrorKind.InvalidInput,
+        'delivery_metadata_not_allowed',
+        'Metadata can only be edited during delivery review',
+      );
+    }
+    const metadata = validateDeliveryMetadata(request.metadata);
+    if (metadata.isErr()) {
+      return apiErr(ApiErrorKind.InvalidInput, metadata.error.code, metadata.error.message);
+    }
+    const checksum = deliveryMetadataChecksum(
+      proposal.preparedHead,
+      proposal.preparedTree,
+      proposal.artifactChecksums,
+      metadata.value,
+    );
+    const updated = services.coordinator.updateDeliveryMetadata(
+      runId,
+      invocationSequence,
+      metadata.value,
+      checksum,
+      request.actor,
+      `${request.idempotencyKey}:metadata`,
+    );
+    if (updated.isErr()) {
+      return apiErr(
+        ApiErrorKind.Conflict,
+        'delivery_metadata_update_failed',
+        'Delivery metadata could not be updated',
+      );
+    }
+    binding =
+      updated.value.state.invocations.find(({ sequence }) => sequence === invocationSequence)
+        ?.approval ?? binding;
   }
   const decided = services.coordinator.decideApproval(
     runId,
-    invocation.approval,
+    binding,
     request.decision,
     request.actor,
     request.reason,
@@ -423,6 +502,28 @@ export async function deleteRun(
   return deleted.isErr()
     ? apiErr(ApiErrorKind.Conflict, 'run_deletion_failed', deleted.error.message)
     : deleted;
+}
+
+export async function publishRun(
+  services: ApiServices,
+  runId: string,
+  request: PublishRunRequest,
+): Promise<Result<PublishRunResponse, ApiError>> {
+  if (!services.runPublisher || (request.remote !== undefined && !request.remote.trim())) {
+    return apiErr(
+      ApiErrorKind.InvalidInput,
+      'run_publication_unavailable',
+      'Run publication is unavailable or the remote is invalid',
+    );
+  }
+  const published = await services.runPublisher.publish(
+    runId,
+    request.provider,
+    request.remote ?? 'origin',
+  );
+  return published.isErr()
+    ? apiErr(ApiErrorKind.Conflict, 'run_publication_failed', published.error.message)
+    : published;
 }
 
 export function controlRun(

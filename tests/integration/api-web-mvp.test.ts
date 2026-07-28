@@ -175,16 +175,24 @@ describe('M6 observable Elysia and web MVP', () => {
       expect.objectContaining({ id: 'delivery.diff', content: '+ observable diff' }),
     );
 
+    const approvalsResponse = await app.handle(
+      new Request('http://kouro.test/runs/observable-run/approvals'),
+    );
+    const approvals = await responseJson(approvalsResponse);
+    if (!Array.isArray(approvals) || !approvals[0]) throw new Error('Approval view missing');
+    const decisionBody = {
+      decision: 'grant',
+      actor: 'user:test',
+      reason: 'The recorded diff is ready',
+      idempotencyKey: 'web:approval:1',
+      binding: approvals[0].binding,
+      expectedEventSequence: approvals[0].expectedEventSequence,
+    };
     const approvalResponse = await app.handle(
       new Request('http://kouro.test/runs/observable-run/approvals/1', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          decision: 'grant',
-          actor: 'user:test',
-          reason: 'The recorded diff is ready',
-          idempotencyKey: 'web:approval:1',
-        }),
+        body: JSON.stringify(decisionBody),
       }),
     );
     expect(approvalResponse.status).toBe(200);
@@ -194,6 +202,14 @@ describe('M6 observable Elysia and web MVP', () => {
       status: 'running',
     });
     expect(store.loadRun('observable-run').unwrap().events.at(-1)?.type).toBe('approval.granted');
+    const staleResponse = await app.handle(
+      new Request('http://kouro.test/runs/observable-run/approvals/1', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...decisionBody, idempotencyKey: 'web:approval:stale' }),
+      }),
+    );
+    expect(staleResponse.status).toBe(409);
 
     expect(
       await responseJson(await app.handle(new Request('http://kouro.test/workflows'))),

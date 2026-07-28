@@ -1,6 +1,8 @@
 import type {
   ApprovalBinding,
   ArtifactReference,
+  DeliveryMetadata,
+  DeliveryProposal,
   JsonValue,
   NodeDefinition,
   NodeInvocation,
@@ -415,7 +417,7 @@ export class RunCoordinator {
   decideApproval(
     runId: string,
     binding: ApprovalBinding,
-    decision: 'grant' | 'reject',
+    decision: 'grant' | 'reject' | 'request_changes',
     actor: string,
     reason: string,
     idempotencyKey: string,
@@ -426,7 +428,9 @@ export class RunCoordinator {
     const event: RunEventInput =
       decision === 'grant'
         ? { type: 'approval.granted', binding, actor, reason }
-        : { type: 'approval.rejected', binding, actor, reason };
+        : decision === 'request_changes'
+          ? { type: 'approval.changes_requested', binding, actor, reason }
+          : { type: 'approval.rejected', binding, actor, reason };
     return fromStore(
       this.store.appendEvent({
         runId,
@@ -435,6 +439,67 @@ export class RunCoordinator {
         event,
       }),
     );
+  }
+
+  proposeDelivery(
+    runId: string,
+    proposal: DeliveryProposal,
+    idempotencyKey: string,
+  ): Result<RunAggregate, ExecutorError> {
+    return this.appendOperatorEvent(runId, idempotencyKey, {
+      type: 'delivery.proposed',
+      proposal,
+    });
+  }
+
+  updateDeliveryMetadata(
+    runId: string,
+    invocationSequence: number,
+    metadata: DeliveryMetadata,
+    checksum: `sha256:${string}`,
+    actor: string,
+    idempotencyKey: string,
+  ): Result<RunAggregate, ExecutorError> {
+    return this.appendOperatorEvent(runId, idempotencyKey, {
+      type: 'delivery.metadata_updated',
+      invocationSequence,
+      metadata,
+      checksum,
+      actor,
+    });
+  }
+
+  recordDeliveryCommit(
+    runId: string,
+    invocationSequence: number,
+    preparedTree: string,
+    commit: string,
+    branch: string,
+    idempotencyKey: string,
+  ): Result<RunAggregate, ExecutorError> {
+    return this.appendOperatorEvent(runId, idempotencyKey, {
+      type: 'delivery.committed',
+      invocationSequence,
+      preparedTree,
+      commit,
+      branch,
+    });
+  }
+
+  recordPublication(
+    runId: string,
+    event: Extract<
+      RunEventInput,
+      {
+        type:
+          | 'delivery.publication_started'
+          | 'delivery.publication_succeeded'
+          | 'delivery.publication_failed';
+      }
+    >,
+    idempotencyKey: string,
+  ): Result<RunAggregate, ExecutorError> {
+    return this.appendOperatorEvent(runId, idempotencyKey, event);
   }
 
   pauseRun(

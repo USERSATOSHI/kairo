@@ -4,6 +4,7 @@ import type {
   ApprovalBinding,
   ArtifactReference,
   CompiledWorkflowArtifact,
+  DeliveryMetadata,
   NodeAttempt,
   NodeInvocation,
   RunEvent,
@@ -20,6 +21,8 @@ function approvalBindingsEqual(left: ApprovalBinding, right: ApprovalBinding): b
     left.invocationSequence === right.invocationSequence &&
     left.resolvedAction === right.resolvedAction &&
     left.repositoryHead === right.repositoryHead &&
+    left.preparedTree === right.preparedTree &&
+    left.proposalChecksum === right.proposalChecksum &&
     left.artifactChecksums.length === right.artifactChecksums.length &&
     left.artifactChecksums.every((checksum, index) => checksum === right.artifactChecksums[index])
   );
@@ -32,6 +35,16 @@ function validArtifactReference(artifact: ArtifactReference): boolean {
     /^sha256:[0-9a-f]{64}$/.test(artifact.checksum) &&
     Number.isSafeInteger(artifact.size) &&
     artifact.size >= 0
+  );
+}
+
+function validDeliveryMetadata(metadata: DeliveryMetadata): boolean {
+  return (
+    Boolean(metadata.commitTitle.trim()) &&
+    !/[\r\n]/.test(metadata.commitTitle) &&
+    Boolean(metadata.pullRequestTitle.trim()) &&
+    !/[\r\n]/.test(metadata.pullRequestTitle) &&
+    typeof metadata.draft === 'boolean'
   );
 }
 
@@ -150,6 +163,79 @@ function reduceEvent(
     });
   }
 
+  if (event.type === 'delivery.publication_started') {
+    if (!state.delivery?.commit || !event.remote.trim()) {
+      return toRuntimeError(RuntimeErrorKind.IllegalStateTransition, {
+        entity: 'delivery-publication',
+        from: state.status,
+        event: event.type,
+      });
+    }
+    return ok({
+      ...state,
+      delivery: {
+        ...state.delivery,
+        publication: {
+          status: 'publishing',
+          provider: event.provider,
+          remote: event.remote,
+        },
+      },
+    });
+  }
+
+  if (event.type === 'delivery.publication_succeeded') {
+    if (
+      !state.delivery?.commit ||
+      state.delivery.publication.status !== 'publishing' ||
+      !event.remote.trim() ||
+      !event.url.trim() ||
+      !Number.isSafeInteger(event.number) ||
+      event.number <= 0
+    ) {
+      return toRuntimeError(RuntimeErrorKind.IllegalStateTransition, {
+        entity: 'delivery-publication',
+        from: state.status,
+        event: event.type,
+      });
+    }
+    return ok({
+      ...state,
+      delivery: {
+        ...state.delivery,
+        publication: {
+          status: 'published',
+          provider: event.provider,
+          remote: event.remote,
+          number: event.number,
+          url: event.url,
+        },
+      },
+    });
+  }
+
+  if (event.type === 'delivery.publication_failed') {
+    if (!state.delivery?.commit || !event.remote.trim() || !event.error.trim()) {
+      return toRuntimeError(RuntimeErrorKind.IllegalStateTransition, {
+        entity: 'delivery-publication',
+        from: state.status,
+        event: event.type,
+      });
+    }
+    return ok({
+      ...state,
+      delivery: {
+        ...state.delivery,
+        publication: {
+          status: 'failed',
+          provider: event.provider,
+          remote: event.remote,
+          error: event.error,
+        },
+      },
+    });
+  }
+
   if (state.status === 'succeeded' || state.status === 'failed' || state.status === 'cancelled') {
     return toRuntimeError(RuntimeErrorKind.IllegalStateTransition, {
       entity: 'run',
@@ -232,6 +318,8 @@ function reduceEvent(
     state.status === 'waiting_for_approval' &&
     event.type !== 'approval.granted' &&
     event.type !== 'approval.rejected' &&
+    event.type !== 'approval.changes_requested' &&
+    event.type !== 'delivery.metadata_updated' &&
     event.type !== 'invocation.skipped'
   ) {
     return toRuntimeError(RuntimeErrorKind.IllegalStateTransition, {
@@ -652,6 +740,105 @@ function reduceEvent(
     });
   }
 
+  if (event.type === 'delivery.proposed') {
+    const invocation = state.invocations.find(
+      ({ sequence }) => sequence === event.proposal.invocationSequence,
+    );
+    const definition = artifact.bundle.nodes.find(({ id }) => id === invocation?.nodeId);
+    if (
+      invocation?.state !== 'pending' ||
+      definition?.type !== 'delivery_review' ||
+      state.delivery?.commit !== undefined ||
+      !event.proposal.preparedHead.trim() ||
+      !event.proposal.preparedTree.trim() ||
+      !/^sha256:[0-9a-f]{64}$/.test(event.proposal.checksum) ||
+      !validDeliveryMetadata(event.proposal.metadata) ||
+      event.proposal.artifactChecksums.some((checksum) => !checksum.trim())
+    ) {
+      return toRuntimeError(RuntimeErrorKind.IllegalStateTransition, {
+        entity: 'delivery-proposal',
+        from: invocation?.state ?? 'unknown',
+        event: event.type,
+      });
+    }
+    return ok({
+      ...state,
+      delivery: {
+        proposal: event.proposal,
+        repairsUsed: state.delivery?.repairsUsed ?? 0,
+        publication: state.delivery?.publication ?? { status: 'not_published' },
+      },
+    });
+  }
+
+  if (event.type === 'delivery.metadata_updated') {
+    const invocation = state.invocations.find(
+      ({ sequence }) => sequence === event.invocationSequence,
+    );
+    if (
+      invocation?.state !== 'waiting_for_approval' ||
+      !state.delivery?.proposal ||
+      state.delivery.proposal.invocationSequence !== event.invocationSequence ||
+      !event.actor.trim() ||
+      !validDeliveryMetadata(event.metadata) ||
+      !/^sha256:[0-9a-f]{64}$/.test(event.checksum)
+    ) {
+      return toRuntimeError(RuntimeErrorKind.StaleApproval, {
+        invocationSequence: event.invocationSequence,
+        reason: 'delivery metadata update is stale or incomplete',
+      });
+    }
+    const proposal = {
+      ...state.delivery.proposal,
+      metadata: event.metadata,
+      checksum: event.checksum,
+    };
+    return ok({
+      ...state,
+      delivery: { ...state.delivery, proposal },
+      invocations: state.invocations.map((candidate) =>
+        candidate.sequence === invocation.sequence
+          ? {
+              ...candidate,
+              approval: candidate.approval
+                ? { ...candidate.approval, proposalChecksum: event.checksum }
+                : candidate.approval,
+            }
+          : candidate,
+      ),
+    });
+  }
+
+  if (event.type === 'delivery.committed') {
+    const invocation = state.invocations.find(
+      ({ sequence }) => sequence === event.invocationSequence,
+    );
+    if (
+      invocation?.state !== 'succeeded' ||
+      invocation.outcome !== 'approved' ||
+      !state.delivery?.proposal ||
+      state.delivery.proposal.preparedTree !== event.preparedTree ||
+      state.delivery.commit !== undefined ||
+      !event.commit.trim() ||
+      !event.branch.trim()
+    ) {
+      return toRuntimeError(RuntimeErrorKind.IllegalStateTransition, {
+        entity: 'delivery-commit',
+        from: invocation?.state ?? 'unknown',
+        event: event.type,
+      });
+    }
+    return ok({
+      ...state,
+      repositoryHead: event.commit,
+      delivery: {
+        ...state.delivery,
+        commit: event.commit,
+        branch: event.branch,
+      },
+    });
+  }
+
   if (event.type === 'approval.requested') {
     const invocation = state.invocations.find(
       ({ sequence }) => sequence === event.binding.invocationSequence,
@@ -662,16 +849,21 @@ function reduceEvent(
       });
     }
     const definition = artifact.bundle.nodes.find(({ id }) => id === invocation.nodeId);
+    const proposal = definition?.type === 'delivery_review' ? state.delivery?.proposal : undefined;
     const expected: ApprovalBinding = {
       workflowChecksum: artifact.checksum,
       invocationSequence: invocation.sequence,
       artifactChecksums: artifactChecksums(state),
       resolvedAction: definition?.title ?? '',
       repositoryHead: state.repositoryHead,
+      ...(proposal
+        ? { preparedTree: proposal.preparedTree, proposalChecksum: proposal.checksum }
+        : {}),
     };
     if (
       invocation.state !== 'pending' ||
-      definition?.type !== 'approval' ||
+      (definition?.type !== 'approval' && definition?.type !== 'delivery_review') ||
+      (definition.type === 'delivery_review' && !proposal) ||
       !approvalBindingsEqual(event.binding, expected)
     ) {
       return toRuntimeError(RuntimeErrorKind.StaleApproval, {
@@ -693,7 +885,11 @@ function reduceEvent(
     });
   }
 
-  if (event.type === 'approval.granted' || event.type === 'approval.rejected') {
+  if (
+    event.type === 'approval.granted' ||
+    event.type === 'approval.rejected' ||
+    event.type === 'approval.changes_requested'
+  ) {
     const invocation = state.invocations.find(
       ({ sequence }) => sequence === event.binding.invocationSequence,
     );
@@ -715,15 +911,46 @@ function reduceEvent(
         reason: 'approval decision is stale or incomplete',
       });
     }
+    const definition = artifact.bundle.nodes.find(({ id }) => id === invocation.nodeId);
+    if (
+      event.type === 'approval.changes_requested' &&
+      (definition?.type !== 'delivery_review' || (state.delivery?.repairsUsed ?? 0) >= 2)
+    ) {
+      return toRuntimeError(RuntimeErrorKind.IllegalStateTransition, {
+        entity: `invocation:${invocation.sequence}`,
+        from: invocation.state,
+        event: event.type,
+      });
+    }
+    const outcome =
+      event.type === 'approval.granted'
+        ? 'approved'
+        : event.type === 'approval.changes_requested'
+          ? 'changes_requested'
+          : 'rejected';
     const updated = replaceInvocation(state, invocation.sequence, (current) =>
       ok({
         ...current,
         state: 'succeeded',
-        outcome: event.type === 'approval.granted' ? 'approved' : 'rejected',
+        outcome,
+        output: { reason: event.reason },
       }),
     );
     if (updated.isErr()) return updated;
-    return ok({ ...updated.unwrap(), status: 'running' });
+    const next = updated.unwrap();
+    return ok({
+      ...next,
+      status: 'running',
+      ...(event.type === 'approval.changes_requested' && next.delivery
+        ? {
+            delivery: {
+              ...next.delivery,
+              proposal: undefined,
+              repairsUsed: next.delivery.repairsUsed + 1,
+            },
+          }
+        : {}),
+    });
   }
 
   if (event.type === 'run.completed') {

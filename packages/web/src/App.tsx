@@ -12,6 +12,7 @@ import type {
   TicketProviderConfigurationView,
   WorkflowNodeView,
 } from '@kouro/api-contracts';
+import type { DeliveryMetadata, DeliveryState } from '@kouro/domain';
 import {
   Background,
   Controls,
@@ -39,6 +40,7 @@ import {
   fetchTicketProjects,
   fetchTicketProviderConfigurations,
   fetchTickets,
+  publishRun,
   reconnectEvents,
   type ReplayedEvent,
 } from './api.ts';
@@ -730,13 +732,38 @@ function Artifacts({
 function ApprovalControl({
   approval,
   busy,
+  delivery,
+  diffArtifact,
   onDecision,
 }: {
   readonly approval: ApprovalView;
   readonly busy: boolean;
-  readonly onDecision: (decision: 'grant' | 'reject', reason: string) => void;
+  readonly delivery?: DeliveryState;
+  readonly diffArtifact?: ArtifactView;
+  readonly onDecision: (
+    decision: 'grant' | 'reject' | 'request_changes',
+    reason: string,
+    metadata?: DeliveryMetadata,
+  ) => void;
 }) {
   const [reason, setReason] = useState('');
+  const [metadata, setMetadata] = useState(delivery?.proposal?.metadata);
+  const [diff, setDiff] = useState('');
+  const [selectedFile, setSelectedFile] = useState(0);
+  useEffect(() => {
+    setMetadata(delivery?.proposal?.metadata);
+  }, [delivery?.proposal?.checksum]);
+  useEffect(() => {
+    if (!diffArtifact) return;
+    void fetchArtifact(approval.runId, diffArtifact.id).then((artifact) =>
+      setDiff(artifact.content ?? ''),
+    );
+  }, [approval.runId, diffArtifact?.id]);
+  const files = diff
+    .split(/(?=^diff --git )/m)
+    .filter((section) => section.startsWith('diff --git '));
+  const activeDiff = files[selectedFile] ?? diff;
+  const deliveryReview = approval.binding.preparedTree !== undefined && metadata !== undefined;
   return (
     <article className="approval-card">
       <div>
@@ -751,7 +778,70 @@ function ApprovalControl({
         <dd>{approval.binding.repositoryHead}</dd>
         <dt>Bound artifacts</dt>
         <dd>{approval.binding.artifactChecksums.length}</dd>
+        {approval.binding.preparedTree ? (
+          <>
+            <dt>Prepared tree</dt>
+            <dd>{approval.binding.preparedTree}</dd>
+          </>
+        ) : null}
       </dl>
+      {deliveryReview && metadata ? (
+        <div className="delivery-review">
+          <div className="changed-files">
+            {files.map((file, index) => (
+              <button key={file.slice(0, 80)} onClick={() => setSelectedFile(index)} type="button">
+                {file.match(/^diff --git a\/(.+?) b\//m)?.[1] ?? `Change ${index + 1}`}
+              </button>
+            ))}
+          </div>
+          <pre className="bound-diff">{activeDiff || 'The bound diff is empty.'}</pre>
+          <label>
+            Commit title
+            <input
+              value={metadata.commitTitle}
+              onChange={(event) =>
+                setMetadata({ ...metadata, commitTitle: event.target.value })
+              }
+            />
+          </label>
+          <label>
+            Commit body
+            <textarea
+              value={metadata.commitBody ?? ''}
+              onChange={(event) =>
+                setMetadata({ ...metadata, commitBody: event.target.value })
+              }
+            />
+          </label>
+          <label>
+            Pull request title
+            <input
+              value={metadata.pullRequestTitle}
+              onChange={(event) =>
+                setMetadata({ ...metadata, pullRequestTitle: event.target.value })
+              }
+            />
+          </label>
+          <label>
+            Pull request body
+            <textarea
+              value={metadata.pullRequestBody ?? ''}
+              onChange={(event) =>
+                setMetadata({ ...metadata, pullRequestBody: event.target.value })
+              }
+            />
+          </label>
+          <label>
+            <input
+              checked={metadata.draft}
+              onChange={(event) => setMetadata({ ...metadata, draft: event.target.checked })}
+              type="checkbox"
+            />
+            Draft pull request
+          </label>
+          <p>{delivery?.repairsUsed ?? 0} of 2 delivery repair returns used.</p>
+        </div>
+      ) : null}
       {approval.state === 'waiting_for_approval' ? (
         <>
           <label>
@@ -762,15 +852,24 @@ function ApprovalControl({
             <button
               className="reject"
               disabled={busy || !reason.trim()}
-              onClick={() => onDecision('reject', reason)}
+              onClick={() => onDecision('reject', reason, metadata)}
               type="button"
             >
-              Reject
+              Fail
             </button>
+            {deliveryReview && (delivery?.repairsUsed ?? 0) < 2 ? (
+              <button
+                disabled={busy || !reason.trim()}
+                onClick={() => onDecision('request_changes', reason, metadata)}
+                type="button"
+              >
+                Request changes
+              </button>
+            ) : null}
             <button
               className="approve"
               disabled={busy || !reason.trim()}
-              onClick={() => onDecision('grant', reason)}
+              onClick={() => onDecision('grant', reason, metadata)}
               type="button"
             >
               Approve
@@ -794,6 +893,15 @@ const autoRefreshEvents = new Set([
   'run.paused',
   'run.resumed',
   'approval.requested',
+  'approval.granted',
+  'approval.rejected',
+  'approval.changes_requested',
+  'delivery.proposed',
+  'delivery.metadata_updated',
+  'delivery.committed',
+  'delivery.publication_started',
+  'delivery.publication_succeeded',
+  'delivery.publication_failed',
 ]);
 
 function ExecutionConsole() {
@@ -947,8 +1055,9 @@ function ExecutionConsole() {
 
   async function submitDecision(
     approval: ApprovalView,
-    decision: 'grant' | 'reject',
+    decision: 'grant' | 'reject' | 'request_changes',
     reason: string,
+    metadata?: DeliveryMetadata,
   ): Promise<void> {
     if (!run) return;
     setBusy(true);
@@ -958,6 +1067,9 @@ function ExecutionConsole() {
         actor: 'web-user',
         reason,
         idempotencyKey: crypto.randomUUID(),
+        binding: approval.binding,
+        expectedEventSequence: approval.expectedEventSequence,
+        ...(metadata ? { metadata } : {}),
       });
       const [nextRun, nextApprovals, nextRuns] = await Promise.all([
         fetchRun(run.id),
@@ -1089,15 +1201,49 @@ function ExecutionConsole() {
                       <ApprovalControl
                         approval={approval}
                         busy={busy}
+                        delivery={run.state.delivery}
+                        diffArtifact={artifacts
+                          .filter(({ kind }) => kind === 'git_diff')
+                          .toSorted((left, right) => right.id.localeCompare(left.id))[0]}
                         key={approval.invocationSequence}
-                        onDecision={(decision, reason) =>
-                          void submitDecision(approval, decision, reason)
+                        onDecision={(decision, reason, metadata) =>
+                          void submitDecision(approval, decision, reason, metadata)
                         }
                       />
                     ))
                   ) : (
                     <p className="empty">This run has no approval records.</p>
                   )
+                ) : null}
+                {run.state.delivery?.commit &&
+                run.state.delivery.publication.status !== 'published' ? (
+                  <button
+                    disabled={busy}
+                    onClick={() => {
+                      setBusy(true);
+                      void publishRun(run.id)
+                        .then(() => fetchRun(run.id))
+                        .then(setRun)
+                        .catch((cause: unknown) =>
+                          setError(
+                            cause instanceof Error ? cause.message : 'Publication failed',
+                          ),
+                        )
+                        .finally(() => setBusy(false));
+                    }}
+                    type="button"
+                  >
+                    Publish PR
+                  </button>
+                ) : null}
+                {run.state.delivery?.publication.status === 'published' ? (
+                  <a
+                    href={run.state.delivery.publication.url}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    PR #{run.state.delivery.publication.number}
+                  </a>
                 ) : null}
               </div>
             </section>
