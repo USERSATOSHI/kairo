@@ -448,8 +448,10 @@ describe('M5 feature-development vertical slice', () => {
       ]);
       expect(implementationCalls[1]?.prompt).toContain('Workflow feedback from validate (failure)');
       expect(implementationCalls[1]?.prompt).toContain('"exitCode": 1');
+      expect(implementationCalls[1]?.prompt).not.toContain('Implement the approved plan');
       expect(implementationCalls[2]?.prompt).toContain('Workflow feedback from review (success)');
       expect(implementationCalls[2]?.prompt).toContain('"approved": false');
+      expect(implementationCalls[2]?.prompt).not.toContain('Implement the approved plan');
       expect(reviewCalls).toHaveLength(2);
       expect(
         reviewCalls.every(({ capabilities }) => capabilities.join() === 'repository.read'),

@@ -31,6 +31,7 @@ const validate = workflow.command('validate', {
 const deliveryMetadata = workflow.agent('deliveryMetadata', {
   role: 'delivery-metadata-proposer',
   prompt: './prompts/delivery.md',
+  outputSchema: './schemas/delivery-metadata.schema.ts',
   capabilities: ['repository.read'],
   recoveryPolicy: 'resume_supported',
 });

@@ -96,11 +96,7 @@ function reusableAgentSession(
     )?.resumeToken;
 }
 
-function promptWithSourceFeedback(
-  aggregate: RunAggregate,
-  invocationSequence: number,
-  basePrompt: string,
-): string {
+function sourceFeedback(aggregate: RunAggregate, invocationSequence: number): string | undefined {
   const activation = aggregate.events.find(
     (event) =>
       event.type === 'invocation.activated' && event.invocationSequence === invocationSequence,
@@ -109,21 +105,35 @@ function promptWithSourceFeedback(
     activation?.type !== 'invocation.activated' ||
     activation.sourceInvocationSequence === undefined
   ) {
-    return basePrompt;
+    return undefined;
   }
   const source = aggregate.state.invocations.find(
     ({ sequence }) => sequence === activation.sourceInvocationSequence,
   );
   if (!source || source.output === undefined) {
-    return basePrompt;
+    return undefined;
   }
-  return `${basePrompt}\n\nWorkflow feedback from ${source.nodeId} (${source.outcome ?? 'completed'}):\n${JSON.stringify(source.output, null, 2)}`;
+  return `Workflow feedback from ${source.nodeId} (${source.outcome ?? 'completed'}):\n${JSON.stringify(source.output, null, 2)}`;
 }
 
 function promptWithWorkItem(aggregate: RunAggregate, basePrompt: string): string {
   const workItem = aggregate.state.configuration.workItem;
   if (workItem === undefined) return basePrompt;
   return `${basePrompt}\n\nImmutable work item for this run:\n${JSON.stringify(workItem, null, 2)}`;
+}
+
+function promptForAgent(
+  aggregate: RunAggregate,
+  invocationSequence: number,
+  declaredPrompt: string,
+  resumesExistingSession: boolean,
+): string {
+  const feedback = sourceFeedback(aggregate, invocationSequence);
+  if (resumesExistingSession) {
+    return feedback ?? 'Continue the interrupted work.';
+  }
+  const basePrompt = promptWithWorkItem(aggregate, declaredPrompt);
+  return feedback ? `${basePrompt}\n\n${feedback}` : basePrompt;
 }
 
 function serializedAgentFailure(error: AgentExecutorError): {
@@ -893,8 +903,12 @@ export class RunCoordinator {
       : undefined;
     const declaredPrompt =
       aggregate.artifact.bundle.prompts?.[definition.prompt] ?? definition.prompt;
-    const basePrompt = promptWithWorkItem(aggregate, declaredPrompt);
-    const prompt = promptWithSourceFeedback(aggregate, invocationSequence, basePrompt);
+    const prompt = promptForAgent(
+      aggregate,
+      invocationSequence,
+      declaredPrompt,
+      resumeToken !== undefined,
+    );
     const executed = await this.agentExecutor.execute({
       runId: aggregate.runId,
       invocationSequence,

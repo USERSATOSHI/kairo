@@ -244,6 +244,25 @@ describe('M7 runnable local MVP and operator CLI', () => {
       expect(await Bun.file(resolve(output, name, 'kouro-sdk.ts')).exists()).toBe(false);
       const compiled = await compileAdwPackage(resolve(output, name));
       expect(compiled.isOk()).toBe(true);
+      if (compiled.isOk()) {
+        expect(compiled.unwrap().bundle.nodes).toContainEqual(
+          expect.objectContaining({
+            id: template === 'feature-development' ? 'review' : 'deliveryMetadata',
+            outputSchema: './schemas/delivery-metadata.schema.ts',
+          }),
+        );
+        expect(compiled.unwrap().bundle.schemas?.['./schemas/delivery-metadata.schema.ts']).toEqual(
+          expect.objectContaining({
+            required: ['deliveryMetadata'],
+            properties: expect.objectContaining({
+              deliveryMetadata: expect.objectContaining({
+                additionalProperties: false,
+                required: ['commitTitle', 'pullRequestTitle', 'draft'],
+              }),
+            }),
+          }),
+        );
+      }
       if (template === 'chore' && compiled.isOk()) {
         const bundle = compiled.unwrap().bundle;
         expect(bundle.counterLimits).toEqual({

@@ -35,6 +35,7 @@ const validate = workflow.command('validate', {
 const review = workflow.agent('review', {
   role: 'reviewer',
   prompt: './prompts/review.md',
+  outputSchema: './schemas/delivery-metadata.schema.ts',
   capabilities: ['repository.read'],
   recoveryPolicy: 'resume_supported',
 });
