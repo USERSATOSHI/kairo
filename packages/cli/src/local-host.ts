@@ -695,7 +695,11 @@ export class LocalKouroHost {
     const worktree = await this.durableWorktree(aggregate);
     const remoteUrl = await this.sandbox.remoteUrl(worktree, remote);
     if (remoteUrl.isErr()) {
-      return cliErr(CliErrorKind.Repository, 'remote_not_found', message(remoteUrl.error));
+      return cliErr(
+        CliErrorKind.Repository,
+        'remote_not_found',
+        `Remote ${remote} is not configured for ${configuration.repositoryPath}; add the repository remote before publishing`,
+      );
     }
     const repositoryPath = `${configured.owner}/${configured.repository}`;
     if (
