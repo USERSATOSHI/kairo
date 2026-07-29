@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { randomUUID } from 'node:crypto';
 
 import { createOpencode, type Config } from '@opencode-ai/sdk/v2';
 import { err, fromAsync, ok, type Result } from '@usersatoshi/results';
@@ -12,9 +13,11 @@ import type {
   HarnessError,
   HarnessExecution,
   HarnessExecutionRequest,
+  SubagentExecutionController,
 } from '@kouro/executors';
 import { processFailure } from './errors.ts';
 import { parseHarnessOutput } from './structured-output.ts';
+import { SUBAGENT_TOOL_NAME, subagentToolDescription } from './subagent-tool.ts';
 
 export interface OpenCodeSdkSession {
   readonly sessionId: string;
@@ -60,8 +63,50 @@ interface OpenCodeSandboxPlugin {
   dispose(): Promise<void>;
 }
 
+interface OpenCodeSubagentBridge {
+  readonly endpoint: string;
+  readonly token: string;
+  readonly description: string;
+  dispose(): void;
+}
+
+function createSubagentBridge(controller: SubagentExecutionController): OpenCodeSubagentBridge {
+  const token = randomUUID();
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    async fetch(incoming) {
+      if (
+        incoming.method !== 'POST' ||
+        incoming.headers.get('authorization') !== `Bearer ${token}`
+      ) {
+        return new Response('Unauthorized', { status: 401 });
+      }
+      const input = await incoming.json().catch(() => undefined);
+      if (
+        !isRecord(input) ||
+        typeof input.subagent !== 'string' ||
+        typeof input.task !== 'string'
+      ) {
+        return new Response('Invalid subagent request', { status: 400 });
+      }
+      const result = await controller.invoke(input.subagent, input.task, incoming.signal);
+      return new Response(JSON.stringify(result), {
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  return {
+    endpoint: new URL('/subagent', server.url).href,
+    token,
+    description: subagentToolDescription(controller),
+    dispose: () => server.stop(true),
+  };
+}
+
 async function createSandboxPlugin(
   request: HarnessExecutionRequest,
+  subagentBridge?: OpenCodeSubagentBridge,
 ): Promise<OpenCodeSandboxPlugin> {
   const directory = await mkdtemp(join(tmpdir(), 'kouro-opencode-sandbox-'));
   const path = join(directory, 'plugin.mjs');
@@ -70,6 +115,15 @@ async function createSandboxPlugin(
     workingDirectory: request.workingDirectory,
     writable: request.capabilities.some((capability) => capability.includes('write')),
     network: request.capabilities.some((capability) => capability.includes('network')),
+    ...(subagentBridge
+      ? {
+          subagents: {
+            endpoint: subagentBridge.endpoint,
+            token: subagentBridge.token,
+            description: subagentBridge.description,
+          },
+        }
+      : {}),
   };
   await writeFile(
     path,
@@ -90,7 +144,7 @@ function configFor(request: HarnessExecutionRequest, pluginUrl?: string): Config
     autoupdate: false,
     share: 'disabled',
     default_agent: 'kouro',
-    plugin: canExecute && pluginUrl ? [pluginUrl] : [],
+    plugin: pluginUrl ? [pluginUrl] : [],
     instructions: [],
     skills: { paths: [], urls: [] },
     agent: {
@@ -107,6 +161,7 @@ function configFor(request: HarnessExecutionRequest, pluginUrl?: string): Config
           webfetch: canNetwork,
           websearch: canNetwork,
           task: false,
+          [SUBAGENT_TOOL_NAME]: request.subagents !== undefined,
         },
         permission: {
           read: 'allow',
@@ -118,6 +173,7 @@ function configFor(request: HarnessExecutionRequest, pluginUrl?: string): Config
           webfetch: canNetwork ? 'allow' : 'deny',
           websearch: canNetwork ? 'allow' : 'deny',
           external_directory: 'deny',
+          [SUBAGENT_TOOL_NAME]: request.subagents ? 'allow' : 'deny',
           task: 'deny',
           question: 'deny',
           skill: 'deny',
@@ -138,7 +194,17 @@ const defaultSdk: OpenCodeAgentSdk = {
     if (canExecute && !new BubblewrapAgentSandbox().available()) {
       throw new Error('Bubblewrap is required for OpenCode command execution');
     }
-    const sandboxPlugin = canExecute ? await createSandboxPlugin(request) : undefined;
+    const subagentBridge = request.subagents ? createSubagentBridge(request.subagents) : undefined;
+    let sandboxPlugin: OpenCodeSandboxPlugin | undefined;
+    try {
+      sandboxPlugin =
+        canExecute || subagentBridge
+          ? await createSandboxPlugin(request, subagentBridge)
+          : undefined;
+    } catch (cause) {
+      subagentBridge?.dispose();
+      throw cause;
+    }
     const controller = new AbortController();
     let clientAndServer: Awaited<ReturnType<typeof createOpencode>>;
     try {
@@ -150,6 +216,7 @@ const defaultSdk: OpenCodeAgentSdk = {
       });
     } catch (cause) {
       await sandboxPlugin?.dispose();
+      subagentBridge?.dispose();
       throw cause;
     }
     const { client, server } = clientAndServer;
@@ -164,12 +231,14 @@ const defaultSdk: OpenCodeAgentSdk = {
     if (sessionResponse.error) {
       server.close();
       await sandboxPlugin?.dispose();
+      subagentBridge?.dispose();
       throw new Error(failureMessage(sessionResponse.error));
     }
     const sessionId = sessionResponse.data?.data.id;
     if (!sessionId) {
       server.close();
       await sandboxPlugin?.dispose();
+      subagentBridge?.dispose();
       throw new Error('OpenCode SDK returned no session ID');
     }
     return {
@@ -226,6 +295,7 @@ const defaultSdk: OpenCodeAgentSdk = {
         controller.abort();
         server.close();
         void sandboxPlugin?.dispose();
+        subagentBridge?.dispose();
       },
     };
   },

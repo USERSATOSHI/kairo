@@ -3,8 +3,11 @@ import { describe, expect, test } from 'bun:test';
 import {
   all,
   any,
+  CAPABILITY,
+  HARNESS,
   not,
   output,
+  RECOVERY_POLICY,
   WorkflowAuthoringError,
   WorkflowAuthoringErrorKind,
   WorkflowBuilder,
@@ -23,6 +26,28 @@ function expectAuthoringError(operation: () => unknown, kind: WorkflowAuthoringE
 }
 
 describe('class-based ADW authoring SDK', () => {
+  test('exports exact authoring constants', () => {
+    expect(CAPABILITY).toEqual({
+      REPOSITORY_READ: 'repository.read',
+      REPOSITORY_WRITE: 'repository.write',
+      TERMINAL_EXECUTE: 'terminal.execute',
+      NETWORK_ACCESS: 'network.access',
+    });
+    expect(HARNESS).toEqual({
+      CLAUDE_CODE: 'claude-code',
+      CODEX: 'codex',
+      OPENCODE: 'opencode',
+      PI: 'pi',
+    });
+    expect(RECOVERY_POLICY).toEqual({
+      REPLAY_SAFE: 'replay_safe',
+      VERIFY_THEN_REPLAY: 'verify_then_replay',
+      RESUME_SUPPORTED: 'resume_supported',
+      MANUAL_RECONCILIATION: 'manual_reconciliation',
+      NEVER_AUTOMATICALLY_RETRY: 'never_automatically_retry',
+    });
+  });
+
   test('emits the existing plain definition shape from fluent declarations', () => {
     const workflow = new WorkflowBuilder({ id: 'repair', version: '1.0.0' });
     workflow.permissions('repository.read', 'terminal.execute');
@@ -169,6 +194,61 @@ describe('class-based ADW authoring SDK', () => {
     });
   });
 
+  test('declares multiple bounded subagents without adding graph nodes', () => {
+    const workflow = new WorkflowBuilder({ id: 'subagents', version: '1.0.0' });
+    workflow.permissions(CAPABILITY.REPOSITORY_READ);
+    const architecture = workflow.subagent('architecture', {
+      role: 'architecture-scout',
+      prompt: './prompts/architecture.md',
+      capabilities: [CAPABILITY.REPOSITORY_READ],
+      maxInvocations: 2,
+      maxConcurrent: 2,
+    });
+    const tests = workflow.subagent('tests', {
+      role: 'test-scout',
+      prompt: './prompts/tests.md',
+      harness: HARNESS.PI,
+      models: { [HARNESS.PI]: 'anthropic/claude-sonnet' },
+      capabilities: [CAPABILITY.REPOSITORY_READ],
+      maxInvocations: 3,
+      maxConcurrent: 1,
+    });
+    const plan = workflow
+      .agent('plan', {
+        role: 'planner',
+        prompt: './prompts/plan.md',
+        capabilities: [CAPABILITY.REPOSITORY_READ],
+        recoveryPolicy: RECOVERY_POLICY.RESUME_SUPPORTED,
+      })
+      .uses(architecture, tests);
+    const complete = workflow.complete('complete');
+    workflow.startAt(plan);
+    plan.on('success').to(complete);
+
+    expect(workflow.build()).toMatchObject({
+      nodes: {
+        plan: {
+          type: 'agent',
+          allowedSubagents: ['architecture', 'tests'],
+        },
+        complete: { type: 'complete' },
+      },
+      subagents: {
+        architecture: {
+          role: 'architecture-scout',
+          maxInvocations: 2,
+          maxConcurrent: 2,
+        },
+        tests: {
+          role: 'test-scout',
+          harness: 'pi',
+          maxInvocations: 3,
+          maxConcurrent: 1,
+        },
+      },
+    });
+  });
+
   test('fails fast for duplicate declarations and entry assignment', () => {
     const workflow = new WorkflowBuilder({ id: 'duplicates', version: '1.0.0' });
     const start = workflow.command('start', {
@@ -176,6 +256,13 @@ describe('class-based ADW authoring SDK', () => {
       recoveryPolicy: 'replay_safe',
     });
     workflow.counter('attempts', 2);
+    workflow.subagent('scout', {
+      role: 'scout',
+      prompt: './scout.md',
+      capabilities: [CAPABILITY.REPOSITORY_READ],
+      maxInvocations: 1,
+      maxConcurrent: 1,
+    });
     workflow.startAt(start);
 
     expectAuthoringError(
@@ -185,6 +272,17 @@ describe('class-based ADW authoring SDK', () => {
     expectAuthoringError(
       () => workflow.counter('attempts', 3),
       WorkflowAuthoringErrorKind.DuplicateCounter,
+    );
+    expectAuthoringError(
+      () =>
+        workflow.subagent('scout', {
+          role: 'scout',
+          prompt: './scout.md',
+          capabilities: [CAPABILITY.REPOSITORY_READ],
+          maxInvocations: 1,
+          maxConcurrent: 1,
+        }),
+      WorkflowAuthoringErrorKind.DuplicateSubagent,
     );
     expectAuthoringError(() => workflow.startAt(start), WorkflowAuthoringErrorKind.DuplicateEntry);
   });
@@ -198,6 +296,19 @@ describe('class-based ADW authoring SDK', () => {
     });
     const secondNode = second.complete('second');
     const secondCounter = second.counter('attempts', 1);
+    const firstAgent = first.agent('agent', {
+      role: 'agent',
+      prompt: './agent.md',
+      capabilities: [CAPABILITY.REPOSITORY_READ],
+      recoveryPolicy: RECOVERY_POLICY.RESUME_SUPPORTED,
+    });
+    const secondSubagent = second.subagent('scout', {
+      role: 'scout',
+      prompt: './scout.md',
+      capabilities: [CAPABILITY.REPOSITORY_READ],
+      maxInvocations: 1,
+      maxConcurrent: 1,
+    });
 
     expectAuthoringError(
       () => first.startAt(secondNode),
@@ -210,6 +321,10 @@ describe('class-based ADW authoring SDK', () => {
     expectAuthoringError(
       () => firstNode.on('failure').increment(secondCounter),
       WorkflowAuthoringErrorKind.ForeignCounterHandle,
+    );
+    expectAuthoringError(
+      () => firstAgent.uses(secondSubagent),
+      WorkflowAuthoringErrorKind.ForeignSubagentHandle,
     );
   });
 
@@ -238,6 +353,13 @@ function compileTimeHandleContracts(): void {
     recoveryPolicy: 'replay_safe',
   });
   const complete = workflow.complete('complete');
+  const scout = workflow.subagent('scout', {
+    role: 'scout',
+    prompt: './scout.md',
+    capabilities: [CAPABILITY.REPOSITORY_READ],
+    maxInvocations: 1,
+    maxConcurrent: 1,
+  });
 
   command.on('success').increment(counter).to(complete);
 
@@ -247,6 +369,56 @@ function compileTimeHandleContracts(): void {
   command.on('failure').to(counter);
   // @ts-expect-error Node handles cannot be used as counters.
   command.on('failure').increment(complete);
+  // @ts-expect-error Subagents are not graph nodes.
+  workflow.startAt(scout);
+  // @ts-expect-error Subagents cannot declare graph transitions.
+  scout.on('success');
+  // @ts-expect-error Only agent-node handles authorize subagents.
+  command.uses(scout);
+
+  workflow.agent('portable', {
+    role: 'portable',
+    prompt: './portable.md',
+    models: {
+      [HARNESS.CODEX]: 'gpt-5.2-codex',
+      [HARNESS.OPENCODE]: 'openai/gpt-5.2',
+    },
+    recoveryPolicy: RECOVERY_POLICY.RESUME_SUPPORTED,
+  });
+  workflow.agent('pinned', {
+    role: 'pinned',
+    prompt: './pinned.md',
+    harness: HARNESS.PI,
+    models: { [HARNESS.PI]: 'anthropic/claude-sonnet' },
+    capabilities: [CAPABILITY.REPOSITORY_READ],
+    recoveryPolicy: RECOVERY_POLICY.RESUME_SUPPORTED,
+  });
+
+  // @ts-expect-error Workflow permissions use Kouro's declared capability vocabulary.
+  workflow.permissions('repository.admin');
+  workflow.agent('unknown-harness', {
+    role: 'invalid',
+    prompt: './invalid.md',
+    // @ts-expect-error Harness IDs are limited to the built-in harness registry.
+    harness: 'unknown',
+    recoveryPolicy: RECOVERY_POLICY.RESUME_SUPPORTED,
+  });
+  workflow.agent('mismatched-model', {
+    role: 'invalid',
+    prompt: './invalid.md',
+    harness: HARNESS.PI,
+    // @ts-expect-error A pinned harness accepts model configuration only for itself.
+    models: { [HARNESS.CODEX]: 'gpt-5.2-codex' },
+    recoveryPolicy: RECOVERY_POLICY.RESUME_SUPPORTED,
+  });
+  workflow.agent('invalid-opencode-model', {
+    role: 'invalid',
+    prompt: './invalid.md',
+    harness: HARNESS.OPENCODE,
+    // @ts-expect-error OpenCode model IDs require provider/model syntax.
+    models: { [HARNESS.OPENCODE]: 'gpt-5.2' },
+    recoveryPolicy: RECOVERY_POLICY.RESUME_SUPPORTED,
+  });
 }
 
 void compileTimeHandleContracts;

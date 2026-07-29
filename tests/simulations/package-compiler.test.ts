@@ -17,6 +17,8 @@ describe('M1 content-addressed TypeScript ADW compiler', () => {
     expect(compiled.unwrap().bundle.prompts).toEqual({
       './prompts/plan.md':
         'Produce a structured implementation plan for the requested repository change.\n',
+      './prompts/scout.md':
+        'Inspect the repository and return concise findings for the delegated task.\n',
     });
     expect(compiled.unwrap().bundle.schemas?.['./schemas/plan.schema.ts']).toEqual({
       type: 'object',
@@ -33,9 +35,20 @@ describe('M1 content-addressed TypeScript ADW compiler', () => {
     expect(compiled.unwrap().bundle.subworkflows?.validation?.checksum).toMatch(
       /^sha256:[a-f0-9]{64}$/,
     );
+    expect(compiled.unwrap().bundle.subagents).toEqual([
+      {
+        id: 'scout',
+        role: 'repository-scout',
+        prompt: './prompts/scout.md',
+        outputSchema: './schemas/scout.schema.ts',
+        capabilities: ['repository.read'],
+        maxInvocations: 2,
+        maxConcurrent: 2,
+      },
+    ]);
     expect(compiled.unwrap().bundle.semanticVersions).toEqual({
-      compiler: '0.1.0',
-      ir: '1',
+      compiler: '0.2.0',
+      ir: '2',
       expressions: '1',
     });
   });

@@ -12,6 +12,14 @@ workflow.subworkflow('validation', {
   version: '1.0.0',
 });
 
+const scout = workflow.subagent('scout', {
+  role: 'repository-scout',
+  prompt: './prompts/scout.md',
+  outputSchema: './schemas/scout.schema.ts',
+  capabilities: ['repository.read'],
+  maxInvocations: 2,
+  maxConcurrent: 2,
+});
 const plan = workflow.agent('plan', {
   role: 'planner',
   prompt: './prompts/plan.md',
@@ -19,6 +27,7 @@ const plan = workflow.agent('plan', {
   capabilities: ['repository.read'],
   recoveryPolicy: 'resume_supported',
 });
+plan.uses(scout);
 const approve = workflow.approval('approve', {
   title: 'Approve the plan',
 });

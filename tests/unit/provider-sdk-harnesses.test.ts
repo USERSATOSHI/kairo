@@ -5,6 +5,7 @@ import {
   type AgentControlChannel,
   type AgentHarness,
   type HarnessExecutionRequest,
+  type SubagentExecutionController,
 } from '@kouro/executors';
 import {
   type ClaudeAgentSdk,
@@ -16,6 +17,7 @@ import {
   type PiSdkSession,
   PiHarness,
 } from '@kouro/harnesses';
+import { invokePiSubagent } from '../../packages/harnesses/src/pi-sandbox-tools.ts';
 
 interface Deferred {
   readonly promise: Promise<void>;
@@ -346,5 +348,58 @@ describe('ADR-0029: provider SDK harness control', () => {
         permissionDecision: 'deny',
       },
     });
+  });
+
+  test('exposes declared subagents through Claude SDK MCP tools', async () => {
+    const sdk = new ControlledClaudeSdk('steer');
+    const control = steeringControls();
+    const result = await new ClaudeCodeHarness(sdk).execute({
+      ...request(control.controls),
+      subagents: {
+        definitions: [
+          { id: 'architecture', role: 'architecture-scout' },
+          { id: 'tests', role: 'test-scout' },
+        ],
+        invoke: () =>
+          Promise.resolve({
+            callId: 'architecture:1',
+            success: true,
+            output: { summary: 'done' },
+          }),
+      },
+    });
+
+    expect(result.isOk()).toBe(true);
+    expect(sdk.options?.allowedTools).toContain('mcp__kouro__subagent');
+    expect(sdk.options?.mcpServers).toHaveProperty('kouro');
+  });
+
+  test('maps Pi custom-tool calls to the normalized subagent controller', async () => {
+    const calls: unknown[] = [];
+    const controller: SubagentExecutionController = {
+      definitions: [{ id: 'scout', role: 'repository-scout' }],
+      invoke: (subagent, task) => {
+        calls.push({ subagent, task });
+        return Promise.resolve({
+          callId: 'scout:1',
+          success: true,
+          output: { files: ['src/index.ts'] },
+        });
+      },
+    };
+
+    const result = await invokePiSubagent(controller, 'scout', 'Find the entrypoint');
+
+    expect(calls).toEqual([{ subagent: 'scout', task: 'Find the entrypoint' }]);
+    expect(result.content).toEqual([
+      {
+        type: 'text',
+        text: JSON.stringify({
+          callId: 'scout:1',
+          success: true,
+          output: { files: ['src/index.ts'] },
+        }),
+      },
+    ]);
   });
 });

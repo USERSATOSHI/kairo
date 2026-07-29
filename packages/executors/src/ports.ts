@@ -192,6 +192,24 @@ export interface HarnessExecutionRequest {
   readonly onTranscriptChunk?: (chunk: string) => Promise<void>;
   readonly onResumeToken?: (token: string) => Promise<void>;
   readonly controls?: AgentControlChannel;
+  readonly subagents?: SubagentExecutionController;
+}
+
+export interface SubagentToolDefinition {
+  readonly id: string;
+  readonly role: string;
+}
+
+export interface SubagentInvocationResult {
+  readonly callId: string;
+  readonly success: boolean;
+  readonly output?: JsonValue;
+  readonly error?: string;
+}
+
+export interface SubagentExecutionController {
+  readonly definitions: readonly SubagentToolDefinition[];
+  invoke(subagentId: string, task: string, signal?: AbortSignal): Promise<SubagentInvocationResult>;
 }
 
 export interface HarnessExecution {

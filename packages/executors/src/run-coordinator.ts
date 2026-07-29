@@ -1049,6 +1049,21 @@ export class RunCoordinator {
       invocationSequence,
       attemptNumber,
     );
+    const subagentDefinitions = (definition.allowedSubagents ?? []).map((subagentId) => {
+      const subagent = aggregate.artifact.bundle.subagents?.find(({ id }) => id === subagentId);
+      if (!subagent) {
+        throw new Error(`Compiled agent references an unknown subagent: ${subagentId}`);
+      }
+      return {
+        ...subagent,
+        prompt: aggregate.artifact.bundle.prompts?.[subagent.prompt] ?? subagent.prompt,
+        ...(subagent.outputSchema
+          ? {
+              outputSchemaValue: aggregate.artifact.bundle.schemas?.[subagent.outputSchema],
+            }
+          : {}),
+      };
+    });
     const executed = await this.agentExecutor.execute({
       runId: aggregate.runId,
       invocationSequence,
@@ -1061,6 +1076,7 @@ export class RunCoordinator {
       ...(model ? { model } : {}),
       ...(outputSchema === undefined ? {} : { outputSchema }),
       ...(resumeToken ? { resumeToken } : {}),
+      ...(subagentDefinitions.length > 0 ? { subagentDefinitions } : {}),
       controls,
       onResumeToken: async (token: string) => {
         const loaded = fromStore(this.store.loadRun(aggregate.runId));

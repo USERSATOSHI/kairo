@@ -14,6 +14,11 @@ import {
 } from './codex-app-server-transport.ts';
 import { invalidResponse, processFailure } from './errors.ts';
 import { parseHarnessOutput } from './structured-output.ts';
+import {
+  SUBAGENT_TOOL_NAME,
+  subagentResultText,
+  subagentToolDescription,
+} from './subagent-tool.ts';
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -89,11 +94,11 @@ function writeAllowed(request: HarnessExecutionRequest): boolean {
   return request.capabilities.some((capability) => capability.includes('write'));
 }
 
-function answerServerRequest(
+async function answerServerRequest(
   transport: CodexAppServerTransport,
   request: HarnessExecutionRequest,
   message: CodexAppServerMessage,
-): void {
+): Promise<void> {
   if (message.id === undefined || !message.method) return;
   if (message.method === 'item/commandExecution/requestApproval') {
     transport.respond(message.id, { decision: commandAllowed(request) ? 'accept' : 'decline' });
@@ -109,6 +114,26 @@ function answerServerRequest(
   }
   if (message.method === 'item/tool/requestUserInput') {
     transport.respond(message.id, { answers: {} });
+    return;
+  }
+  if (
+    message.method === 'item/tool/call' &&
+    request.subagents &&
+    isRecord(message.params) &&
+    message.params.tool === SUBAGENT_TOOL_NAME &&
+    isRecord(message.params.arguments)
+  ) {
+    const subagent =
+      typeof message.params.arguments.subagent === 'string'
+        ? message.params.arguments.subagent
+        : '';
+    const task =
+      typeof message.params.arguments.task === 'string' ? message.params.arguments.task : '';
+    const result = await request.subagents.invoke(subagent, task);
+    transport.respond(message.id, {
+      contentItems: [{ type: 'inputText', text: subagentResultText(result) }],
+      success: result.success,
+    });
     return;
   }
   transport.respond(message.id, { action: 'decline', content: null });
@@ -133,8 +158,22 @@ function observeTurn(
     resolveCompletion(result);
   }
   const unsubscribe = transport.subscribe((message) => {
-    if (message.method?.includes('request') && message.id !== undefined) {
-      answerServerRequest(transport, request, message);
+    if (
+      message.id !== undefined &&
+      (message.method?.includes('request') || message.method === 'item/tool/call')
+    ) {
+      void answerServerRequest(transport, request, message).catch((cause: unknown) => {
+        if (message.id === undefined) return;
+        transport.respond(message.id, {
+          contentItems: [
+            {
+              type: 'inputText',
+              text: `Subagent tool failed: ${unknownErrorMessage(cause)}`,
+            },
+          ],
+          success: false,
+        });
+      });
       return;
     }
     if (message.method === 'item/agentMessage/delta' && isRecord(message.params)) {
@@ -222,6 +261,26 @@ async function openThread(
     cwd: request.workingDirectory,
     ...(request.model ? { model: request.model } : {}),
     approvalPolicy: 'on-request',
+    ...(!resumeToken && request.subagents
+      ? {
+          dynamicTools: [
+            {
+              type: 'function',
+              name: SUBAGENT_TOOL_NAME,
+              description: subagentToolDescription(request.subagents),
+              inputSchema: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  subagent: { type: 'string', minLength: 1 },
+                  task: { type: 'string', minLength: 1 },
+                },
+                required: ['subagent', 'task'],
+              },
+            },
+          ],
+        }
+      : {}),
   });
   if (thread.isErr()) return thread;
   const threadId = threadIdFrom(thread.unwrap());

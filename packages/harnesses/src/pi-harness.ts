@@ -95,7 +95,12 @@ const defaultSdk: PiAgentSdk = {
       modelRuntime,
       ...(model ? { model } : {}),
       tools: toolsFor(request.capabilities),
-      customTools: createPiSandboxTools(request.workingDirectory, request.capabilities, sandbox),
+      customTools: createPiSandboxTools(
+        request.workingDirectory,
+        request.capabilities,
+        sandbox,
+        request.subagents,
+      ),
       sessionManager: await sessionManagerFor(request.workingDirectory, resumeToken),
       resourceLoader,
     });

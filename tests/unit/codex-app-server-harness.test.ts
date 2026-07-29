@@ -13,7 +13,7 @@ import {
 } from '@kouro/harnesses';
 import { ok, type Result } from '@usersatoshi/results';
 
-type CompletionMode = 'start' | 'steer' | 'interrupt';
+type CompletionMode = 'start' | 'steer' | 'interrupt' | 'tool';
 
 class FakeAppServerTransport implements CodexAppServerTransport {
   readonly requests: { readonly method: string; readonly params: unknown }[] = [];
@@ -33,6 +33,22 @@ class FakeAppServerTransport implements CodexAppServerTransport {
     }
     if (method === 'turn/start') {
       if (this.completionMode === 'start') queueMicrotask(() => this.complete('completed'));
+      if (this.completionMode === 'tool') {
+        queueMicrotask(() =>
+          this.emit({
+            id: 77,
+            method: 'item/tool/call',
+            params: {
+              threadId: 'thread-1',
+              turnId: 'turn-1',
+              callId: 'call-1',
+              namespace: null,
+              tool: 'subagent',
+              arguments: { subagent: 'scout', task: 'Inspect tests' },
+            },
+          }),
+        );
+      }
       return Promise.resolve(ok({ turn: { id: 'turn-1' } }));
     }
     if (method === 'turn/steer') {
@@ -52,6 +68,9 @@ class FakeAppServerTransport implements CodexAppServerTransport {
 
   respond(id: number | string, result: unknown): void {
     this.responses.push({ id, result });
+    if (this.completionMode === 'tool' && id === 77) {
+      queueMicrotask(() => this.complete('completed'));
+    }
   }
 
   subscribe(listener: (message: CodexAppServerMessage) => void): () => void {
@@ -185,6 +204,58 @@ describe('ADR-0028: Codex App Server harness', () => {
       threadId: 'thread-1',
       expectedTurnId: 'turn-1',
       input: [{ type: 'text', text: 'Preserve compatibility.' }],
+    });
+  });
+
+  test('exposes and answers the normalized subagent dynamic tool', async () => {
+    const factory = new FakeAppServerFactory({ summary: 'delegated' }, 'tool');
+    const calls: unknown[] = [];
+    const result = await new CodexHarness(factory).execute(
+      request({
+        subagents: {
+          definitions: [{ id: 'scout', role: 'test-scout' }],
+          invoke: (subagent, task) => {
+            calls.push({ subagent, task });
+            return Promise.resolve({
+              callId: 'scout:1',
+              success: true,
+              output: { files: ['test.ts'] },
+            });
+          },
+        },
+      }),
+    );
+
+    expect(result.isOk()).toBe(true);
+    expect(calls).toEqual([{ subagent: 'scout', task: 'Inspect tests' }]);
+    expect(
+      factory.transport.requests.find(({ method }) => method === 'thread/start')?.params,
+    ).toMatchObject({
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'subagent',
+          inputSchema: {
+            required: ['subagent', 'task'],
+          },
+        },
+      ],
+    });
+    expect(factory.transport.responses).toContainEqual({
+      id: 77,
+      result: {
+        contentItems: [
+          {
+            type: 'inputText',
+            text: JSON.stringify({
+              callId: 'scout:1',
+              success: true,
+              output: { files: ['test.ts'] },
+            }),
+          },
+        ],
+        success: true,
+      },
     });
   });
 

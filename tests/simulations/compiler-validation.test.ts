@@ -51,6 +51,164 @@ describe('M1 compiler validation', () => {
     }
   });
 
+  test('validates bounded subagent authorization and capability subsets', () => {
+    const valid = compileWorkflow(
+      workflowSource({
+        entryNodeId: 'plan',
+        permissions: ['repository.read'],
+        nodes: [
+          {
+            id: 'plan',
+            type: 'agent',
+            role: 'planner',
+            prompt: 'Plan.',
+            recoveryPolicy: 'resume_supported',
+            capabilities: ['repository.read'],
+            allowedSubagents: ['tests', 'architecture'],
+          },
+          { id: 'complete', type: 'complete' },
+        ],
+        subagents: [
+          {
+            id: 'tests',
+            role: 'test-scout',
+            prompt: 'Find tests.',
+            capabilities: ['repository.read'],
+            maxInvocations: 3,
+            maxConcurrent: 2,
+          },
+          {
+            id: 'architecture',
+            role: 'architecture-scout',
+            prompt: 'Map architecture.',
+            capabilities: ['repository.read'],
+            maxInvocations: 2,
+            maxConcurrent: 2,
+          },
+        ],
+        transitions: [
+          {
+            id: 'plan.success.complete',
+            from: { nodeId: 'plan', outcome: 'success' },
+            toNodeId: 'complete',
+          },
+        ],
+      }),
+    );
+    expect(valid.isOk()).toBe(true);
+    if (valid.isOk()) {
+      expect(valid.unwrap().bundle.subagents?.map(({ id }) => id)).toEqual([
+        'architecture',
+        'tests',
+      ]);
+      expect(valid.unwrap().bundle.nodes.find(({ id }) => id === 'plan')?.allowedSubagents).toEqual(
+        ['architecture', 'tests'],
+      );
+    }
+
+    for (const [subagents, kind] of [
+      [
+        [
+          {
+            id: 'scout',
+            role: 'scout',
+            prompt: 'Scout.',
+            capabilities: ['repository.write'],
+            maxInvocations: 1,
+            maxConcurrent: 1,
+          },
+        ],
+        CompilerErrorKind.InvalidSubagentConfiguration,
+      ],
+      [
+        [
+          {
+            id: 'scout',
+            role: 'scout',
+            prompt: 'Scout.',
+            capabilities: ['repository.read'],
+            maxInvocations: 1,
+            maxConcurrent: 2,
+          },
+        ],
+        CompilerErrorKind.InvalidSubagentConfiguration,
+      ],
+    ] as const) {
+      const result = compileWorkflow(
+        workflowSource({
+          entryNodeId: 'plan',
+          permissions: ['repository.read', 'repository.write'],
+          nodes: [
+            {
+              id: 'plan',
+              type: 'agent',
+              role: 'planner',
+              prompt: 'Plan.',
+              recoveryPolicy: 'resume_supported',
+              capabilities: ['repository.read'],
+              allowedSubagents: ['scout'],
+            },
+            { id: 'complete', type: 'complete' },
+          ],
+          subagents,
+          transitions: [
+            {
+              id: 'plan.success.complete',
+              from: { nodeId: 'plan', outcome: 'success' },
+              toNodeId: 'complete',
+            },
+          ],
+        }),
+      );
+      expect(result.isErr()).toBe(true);
+      if (result.isErr()) expect(result.error.kind).toBe(kind);
+    }
+  });
+
+  test('rejects unknown and capability-escalating subagent authorization', () => {
+    const definition = {
+      id: 'scout',
+      role: 'scout',
+      prompt: 'Scout.',
+      capabilities: ['repository.read'],
+      maxInvocations: 1,
+      maxConcurrent: 1,
+    } as const;
+    for (const [allowedSubagents, subagents, kind] of [
+      [['missing'], [definition], CompilerErrorKind.UnknownSubagent],
+      [['scout'], [definition], CompilerErrorKind.SubagentCapabilityEscalation],
+    ] as const) {
+      const result = compileWorkflow(
+        workflowSource({
+          entryNodeId: 'plan',
+          permissions: ['repository.read'],
+          nodes: [
+            {
+              id: 'plan',
+              type: 'agent',
+              role: 'planner',
+              prompt: 'Plan.',
+              recoveryPolicy: 'resume_supported',
+              capabilities: [],
+              allowedSubagents,
+            },
+            { id: 'complete', type: 'complete' },
+          ],
+          subagents,
+          transitions: [
+            {
+              id: 'plan.success.complete',
+              from: { nodeId: 'plan', outcome: 'success' },
+              toNodeId: 'complete',
+            },
+          ],
+        }),
+      );
+      expect(result.isErr()).toBe(true);
+      if (result.isErr()) expect(result.error.kind).toBe(kind);
+    }
+  });
+
   test('rejects invalid expression references', () => {
     const result = compileWorkflow(
       workflowSource({

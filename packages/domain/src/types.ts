@@ -79,9 +79,22 @@ export interface SourceNodeDefinition {
   readonly outputSchema?: string;
   readonly harness?: string;
   readonly models?: Readonly<Record<string, string>>;
+  readonly allowedSubagents?: readonly string[];
   readonly clearContext?: boolean;
   readonly result?: 'succeeded' | 'failed';
   readonly skipOutcome?: string;
+}
+
+export interface SourceSubagentDefinition {
+  readonly id: string;
+  readonly role: string;
+  readonly prompt: string;
+  readonly outputSchema?: string;
+  readonly harness?: string;
+  readonly models?: Readonly<Record<string, string>>;
+  readonly capabilities: readonly string[];
+  readonly maxInvocations: number;
+  readonly maxConcurrent: number;
 }
 
 export interface NodeDefinition extends SourceNodeDefinition {
@@ -116,6 +129,7 @@ export interface WorkflowSourceBundle {
   };
   readonly entryNodeId: string;
   readonly nodes: readonly SourceNodeDefinition[];
+  readonly subagents?: readonly SourceSubagentDefinition[];
   readonly transitions: readonly SourceTransition[];
   readonly counterLimits: Readonly<Record<string, number>>;
   readonly runLimits?: {

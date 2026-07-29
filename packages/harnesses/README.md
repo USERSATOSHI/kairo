@@ -47,6 +47,8 @@ const harness = new ClaudeCodeHarness();
 - Read tools are always available. Write and command tools require the matching
   compiled capabilities.
 - Project, user, and local settings are not loaded into the SDK query.
+- Authorized workflow subagents are exposed through one Kouro-owned in-process
+  MCP tool; provider-native delegation stays disabled.
 
 ### CodexHarness
 
@@ -72,6 +74,8 @@ const harness = new CodexHarness();
   compiled execute/write capabilities.
 - Streams App Server notifications into the attempt transcript and parses the
   final agent message through Kouro's independent structured-output validator.
+- Exposes authorized workflow subagents as a thread-scoped dynamic tool and
+  answers tool calls through the normalized executor controller.
 
 Kouro may call `resume()` for a later graph invocation of the same agent node,
 not only for interruption recovery. The durable session token retains the
@@ -93,6 +97,10 @@ directory access. Its read, write, command, and network permissions come from
 the compiled capabilities. The server and event subscription are always
 disposed when the attempt ends.
 
+When the workflow authorizes subagents, the generated plugin adds one custom
+tool backed by an authenticated loopback bridge to the normalized executor
+controller. The provider's native task delegation remains disabled.
+
 The OpenCode SDK supervises the local `opencode` executable, so that executable
 must still be installed and authenticated.
 
@@ -109,6 +117,9 @@ always present, edit/write require a write capability, and Bash requires an
 execute capability. Provider configuration and extensions remain available,
 while skills, prompt templates, and themes are disabled. Schemas are included
 in the normalized prompt and independently validated by Kouro.
+
+Authorized workflow subagents are added as one in-process custom tool. The
+child execution remains owned by Kouro and never receives that tool itself.
 
 ### ScriptedFakeHarness
 

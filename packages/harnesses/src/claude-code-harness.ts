@@ -1,6 +1,13 @@
-import { query, type Options, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import {
+  createSdkMcpServer,
+  query,
+  tool,
+  type Options,
+  type SDKUserMessage,
+} from '@anthropic-ai/claude-agent-sdk';
 import { err, fromAsync, ok, type Result } from '@usersatoshi/results';
 import { BubblewrapAgentSandbox } from '@kouro/sandbox-worktree';
+import { z } from 'zod';
 
 import type {
   AgentHarness,
@@ -10,6 +17,11 @@ import type {
 } from '@kouro/executors';
 import { invalidResponse, processFailure } from './errors.ts';
 import { parseHarnessOutput } from './structured-output.ts';
+import {
+  SUBAGENT_TOOL_NAME,
+  subagentResultText,
+  subagentToolDescription,
+} from './subagent-tool.ts';
 
 export interface ClaudeSdkQuery extends AsyncIterable<unknown> {
   interrupt(): Promise<unknown>;
@@ -160,6 +172,40 @@ function resultFrom(
 
 function optionsFor(request: HarnessExecutionRequest, resumeToken?: string): Options {
   const tools = toolsFor(request.capabilities);
+  const subagentServer = request.subagents
+    ? createSdkMcpServer({
+        name: 'kouro',
+        version: '1',
+        alwaysLoad: true,
+        tools: [
+          tool(
+            SUBAGENT_TOOL_NAME,
+            subagentToolDescription(request.subagents),
+            {
+              subagent: z.string().min(1),
+              task: z.string().min(1),
+            },
+            async ({ subagent, task }) => {
+              const result = await request.subagents?.invoke(subagent, task);
+              if (!result) {
+                return {
+                  content: [{ type: 'text' as const, text: 'Subagents are unavailable' }],
+                  isError: true,
+                };
+              }
+              return {
+                content: [{ type: 'text' as const, text: subagentResultText(result) }],
+                isError: !result.success,
+              };
+            },
+            { alwaysLoad: true },
+          ),
+        ],
+      })
+    : undefined;
+  if (subagentServer) {
+    tools.push(`mcp__kouro__${SUBAGENT_TOOL_NAME}`);
+  }
   const outputSchema = isRecord(request.outputSchema) ? { ...request.outputSchema } : undefined;
   const canWrite = hasCapability(request.capabilities, 'write');
   const canExecute = hasCapability(request.capabilities, 'execute');
@@ -168,6 +214,7 @@ function optionsFor(request: HarnessExecutionRequest, resumeToken?: string): Opt
     cwd: request.workingDirectory,
     tools,
     allowedTools: tools,
+    ...(subagentServer ? { mcpServers: { kouro: subagentServer } } : {}),
     permissionMode: 'dontAsk',
     settingSources: [],
     hooks: {

@@ -24,6 +24,8 @@
     "@kouro/executors": "0.1.11",
     "@kouro/sandbox-worktree": "0.1.11",
     "@opencode-ai/sdk": "^1.18.9",
-    "@usersatoshi/results": "^1.0.0"
+    "@usersatoshi/results": "^1.0.0",
+    "typebox": "1.1.38",
+    "zod": "^4.4.3"
   }
 }

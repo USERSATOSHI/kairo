@@ -24,6 +24,11 @@ export const enum CompilerErrorKind {
   SubworkflowCycle = 20,
   InvalidTransition = 21,
   InvalidRunLimit = 22,
+  InvalidSubagentId = 23,
+  DuplicateSubagent = 24,
+  InvalidSubagentConfiguration = 25,
+  UnknownSubagent = 26,
+  SubagentCapabilityEscalation = 27,
 }
 
 export type CompilerError =
@@ -130,6 +135,30 @@ export type CompilerError =
       readonly kind: CompilerErrorKind.InvalidRunLimit;
       readonly limit: 'maxDurationMs' | 'maxNodeInvocations';
       readonly value: number;
+    }
+  | {
+      readonly kind: CompilerErrorKind.InvalidSubagentId;
+      readonly subagentId: string;
+    }
+  | {
+      readonly kind: CompilerErrorKind.DuplicateSubagent;
+      readonly subagentId: string;
+    }
+  | {
+      readonly kind: CompilerErrorKind.InvalidSubagentConfiguration;
+      readonly subagentId: string;
+      readonly reason: string;
+    }
+  | {
+      readonly kind: CompilerErrorKind.UnknownSubagent;
+      readonly nodeId: string;
+      readonly subagentId: string;
+    }
+  | {
+      readonly kind: CompilerErrorKind.SubagentCapabilityEscalation;
+      readonly nodeId: string;
+      readonly subagentId: string;
+      readonly capability: string;
     };
 
 export function toErr<K extends CompilerError['kind']>(

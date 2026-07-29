@@ -8,6 +8,7 @@ import type {
   JsonValue,
   RecoveryPolicy,
   SourceNodeDefinition,
+  SourceSubagentDefinition,
   SourceTransition,
   WorkflowSourceBundle,
 } from '@kouro/domain';
@@ -15,6 +16,7 @@ import { CompilerErrorKind, toCompilerError, type CompilerError } from './errors
 import { canonicalJson, compareCanonicalText, sha256 } from './canonical.ts';
 
 const NODE_ID_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
+const SUBAGENT_CAPABILITIES = new Set(['repository.read']);
 
 function isRecoveryPolicy(value: unknown): value is RecoveryPolicy {
   return (
@@ -90,6 +92,22 @@ function nodeConfigurationError(node: SourceNodeDefinition): string | undefined 
   if (node.models !== undefined && node.type !== 'agent') {
     return 'models is supported only on agent nodes';
   }
+  if (node.allowedSubagents !== undefined && node.type !== 'agent') {
+    return 'allowedSubagents is supported only on agent nodes';
+  }
+  if (
+    node.allowedSubagents?.some(
+      (subagentId) => typeof subagentId !== 'string' || !subagentId.trim(),
+    )
+  ) {
+    return 'allowedSubagents must contain non-empty subagent IDs';
+  }
+  if (
+    node.allowedSubagents &&
+    new Set(node.allowedSubagents).size !== node.allowedSubagents.length
+  ) {
+    return 'allowedSubagents must not contain duplicates';
+  }
   if (node.models !== undefined) {
     if (
       typeof node.models !== 'object' ||
@@ -136,6 +154,51 @@ function nodeConfigurationError(node: SourceNodeDefinition): string | undefined 
     default:
       return 'node type is unsupported';
   }
+}
+
+function subagentConfigurationError(subagent: SourceSubagentDefinition): string | undefined {
+  if (typeof subagent.role !== 'string' || !subagent.role.trim()) return 'role is required';
+  if (typeof subagent.prompt !== 'string' || !subagent.prompt.trim()) return 'prompt is required';
+  if (
+    !Array.isArray(subagent.capabilities) ||
+    subagent.capabilities.length !== 1 ||
+    !SUBAGENT_CAPABILITIES.has(subagent.capabilities[0] ?? '')
+  ) {
+    return 'capabilities must contain exactly repository.read';
+  }
+  if (
+    subagent.harness !== undefined &&
+    (typeof subagent.harness !== 'string' || !subagent.harness.trim())
+  ) {
+    return 'harness must be a non-empty harness ID';
+  }
+  if (subagent.models !== undefined) {
+    if (
+      typeof subagent.models !== 'object' ||
+      subagent.models === null ||
+      Array.isArray(subagent.models) ||
+      Object.keys(subagent.models).length === 0
+    ) {
+      return 'models must be a non-empty harness-to-model object';
+    }
+    if (
+      Object.entries(subagent.models).some(
+        ([harnessId, model]) => !harnessId.trim() || typeof model !== 'string' || !model.trim(),
+      )
+    ) {
+      return 'models must contain non-empty harness IDs and model identifiers';
+    }
+  }
+  if (!Number.isSafeInteger(subagent.maxInvocations) || subagent.maxInvocations <= 0) {
+    return 'maxInvocations must be a positive safe integer';
+  }
+  if (!Number.isSafeInteger(subagent.maxConcurrent) || subagent.maxConcurrent <= 0) {
+    return 'maxConcurrent must be a positive safe integer';
+  }
+  if (subagent.maxConcurrent > subagent.maxInvocations) {
+    return 'maxConcurrent must not exceed maxInvocations';
+  }
+  return undefined;
 }
 
 function unreachableNodes(
@@ -316,6 +379,42 @@ function validateNodes(
   return ok(nodeIds);
 }
 
+function validateSubagents(subagents: readonly SourceSubagentDefinition[]): Result<
+  ReadonlyMap<string, SourceSubagentDefinition>,
+  Extract<
+    CompilerError,
+    {
+      kind:
+        | CompilerErrorKind.InvalidSubagentId
+        | CompilerErrorKind.DuplicateSubagent
+        | CompilerErrorKind.InvalidSubagentConfiguration;
+    }
+  >
+> {
+  const definitions = new Map<string, SourceSubagentDefinition>();
+  for (const subagent of subagents) {
+    if (!NODE_ID_PATTERN.test(subagent.id)) {
+      return toCompilerError(CompilerErrorKind.InvalidSubagentId, {
+        subagentId: subagent.id,
+      });
+    }
+    if (definitions.has(subagent.id)) {
+      return toCompilerError(CompilerErrorKind.DuplicateSubagent, {
+        subagentId: subagent.id,
+      });
+    }
+    const configurationError = subagentConfigurationError(subagent);
+    if (configurationError) {
+      return toCompilerError(CompilerErrorKind.InvalidSubagentConfiguration, {
+        subagentId: subagent.id,
+        reason: configurationError,
+      });
+    }
+    definitions.set(subagent.id, subagent);
+  }
+  return ok(definitions);
+}
+
 function validateEntryNode(
   entryNodeId: string,
   nodeIds: ReadonlySet<string>,
@@ -358,6 +457,7 @@ function validateRunLimits(
 
 function validatePermissions(
   nodes: readonly SourceNodeDefinition[],
+  subagents: readonly SourceSubagentDefinition[],
   permissions: readonly string[],
 ): Result<void, Extract<CompilerError, { kind: CompilerErrorKind.PermissionNotDeclared }>> {
   const declaredPermissions = new Set(permissions);
@@ -368,6 +468,52 @@ function validatePermissions(
           nodeId: node.id,
           permission,
         });
+      }
+    }
+  }
+  for (const subagent of subagents) {
+    for (const permission of subagent.capabilities) {
+      if (!declaredPermissions.has(permission)) {
+        return toCompilerError(CompilerErrorKind.PermissionNotDeclared, {
+          nodeId: `subagent:${subagent.id}`,
+          permission,
+        });
+      }
+    }
+  }
+  return ok(undefined);
+}
+
+function validateSubagentAuthorization(
+  nodes: readonly SourceNodeDefinition[],
+  subagents: ReadonlyMap<string, SourceSubagentDefinition>,
+): Result<
+  void,
+  Extract<
+    CompilerError,
+    {
+      kind: CompilerErrorKind.UnknownSubagent | CompilerErrorKind.SubagentCapabilityEscalation;
+    }
+  >
+> {
+  for (const node of nodes) {
+    const parentCapabilities = new Set(node.capabilities ?? []);
+    for (const subagentId of node.allowedSubagents ?? []) {
+      const subagent = subagents.get(subagentId);
+      if (!subagent) {
+        return toCompilerError(CompilerErrorKind.UnknownSubagent, {
+          nodeId: node.id,
+          subagentId,
+        });
+      }
+      for (const capability of subagent.capabilities) {
+        if (!parentCapabilities.has(capability)) {
+          return toCompilerError(CompilerErrorKind.SubagentCapabilityEscalation, {
+            nodeId: node.id,
+            subagentId,
+            capability,
+          });
+        }
       }
     }
   }
@@ -498,6 +644,8 @@ function validate(source: WorkflowSourceBundle): Result<void, CompilerError> {
   const nodes = validateNodes(source.nodes);
   if (nodes.isErr()) return nodes;
   const nodeIds = nodes.unwrap();
+  const subagents = validateSubagents(source.subagents ?? []);
+  if (subagents.isErr()) return subagents;
 
   const entry = validateEntryNode(source.entryNodeId, nodeIds);
   if (entry.isErr()) return entry;
@@ -508,8 +656,14 @@ function validate(source: WorkflowSourceBundle): Result<void, CompilerError> {
   const runLimits = validateRunLimits(source);
   if (runLimits.isErr()) return runLimits;
 
-  const permissions = validatePermissions(source.nodes, source.permissions ?? []);
+  const permissions = validatePermissions(
+    source.nodes,
+    source.subagents ?? [],
+    source.permissions ?? [],
+  );
   if (permissions.isErr()) return permissions;
+  const authorization = validateSubagentAuthorization(source.nodes, subagents.unwrap());
+  if (authorization.isErr()) return authorization;
 
   const transitions = validateTransitions(source.transitions, nodeIds, source.counterLimits);
   if (transitions.isErr()) return transitions;
@@ -576,11 +730,20 @@ export function compileWorkflow(
       return {
         ...node,
         ...(node.capabilities ? { capabilities: node.capabilities.toSorted() } : {}),
+        ...(node.allowedSubagents
+          ? { allowedSubagents: node.allowedSubagents.toSorted(compareCanonicalText) }
+          : {}),
         priority: node.priority ?? 0,
         ordinal,
       };
     })
     .toSorted((left, right) => left.ordinal - right.ordinal);
+  const subagents = (source.subagents ?? [])
+    .map((subagent) => ({
+      ...subagent,
+      capabilities: subagent.capabilities.toSorted(compareCanonicalText),
+    }))
+    .toSorted((left, right) => compareCanonicalText(left.id, right.id));
   const transitions: CompiledTransition[] = source.transitions.toSorted((left, right) =>
     compareCanonicalText(left.id, right.id),
   );
@@ -588,6 +751,7 @@ export function compileWorkflow(
   const bundle: CompiledWorkflowBundle = {
     ...source,
     nodes,
+    ...(subagents.length > 0 ? { subagents } : {}),
     transitions,
     permissions: (source.permissions ?? []).toSorted(),
   };

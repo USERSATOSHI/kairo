@@ -9,8 +9,46 @@ import {
   createLsTool,
   createReadTool,
   createWriteTool,
+  defineTool,
 } from '@earendil-works/pi-coding-agent';
+import type { SubagentExecutionController } from '@kouro/executors';
 import { BubblewrapAgentSandbox } from '@kouro/sandbox-worktree';
+import { Type } from 'typebox';
+import {
+  SUBAGENT_TOOL_NAME,
+  subagentResultText,
+  subagentToolDescription,
+} from './subagent-tool.ts';
+
+export function createPiSubagentTool(subagents: SubagentExecutionController) {
+  return defineTool({
+    name: SUBAGENT_TOOL_NAME,
+    label: 'Subagent',
+    description: subagentToolDescription(subagents),
+    promptSnippet: 'Delegate bounded tasks to declared workflow subagents.',
+    executionMode: 'parallel',
+    parameters: Type.Object({
+      subagent: Type.String({ minLength: 1 }),
+      task: Type.String({ minLength: 1 }),
+    }),
+    async execute(_toolCallId, { subagent, task }, signal) {
+      return invokePiSubagent(subagents, subagent, task, signal);
+    },
+  });
+}
+
+export async function invokePiSubagent(
+  subagents: SubagentExecutionController,
+  subagent: string,
+  task: string,
+  signal?: AbortSignal,
+) {
+  const result = await subagents.invoke(subagent, task, signal);
+  return {
+    content: [{ type: 'text' as const, text: subagentResultText(result) }],
+    details: undefined,
+  };
+}
 
 function failure(error: unknown): Error {
   return new Error(
@@ -171,6 +209,7 @@ export function createPiSandboxTools(
   root: string,
   capabilities: readonly string[],
   sandbox: BubblewrapAgentSandbox,
+  subagents?: SubagentExecutionController,
 ) {
   const writable = capabilities.some((capability) => capability.includes('write'));
   const executable = capabilities.some((capability) => capability.includes('execute'));
@@ -184,5 +223,6 @@ export function createPiSandboxTools(
       ? [createSandboxedEditTool(root, sandbox), createSandboxedWriteTool(root, sandbox)]
       : []),
     ...(executable ? [createSandboxedBashTool(root, sandbox, writable, network)] : []),
+    ...(subagents ? [createPiSubagentTool(subagents)] : []),
   ];
 }

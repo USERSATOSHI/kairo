@@ -151,6 +151,15 @@ On success, it:
 4. Writes the harness transcript and agent output as artifacts
 5. Returns `AgentAttemptExecution` with output, resume token, and artifacts
 
+An agent node may authorize several compiled subagent definitions. The
+executor gives the parent harness one normalized `subagent` tool, enforces
+per-definition invocation and concurrency limits, and executes each child
+through the same harness registry. Child output is schema-validated and its
+stable call ID, harness/model selection, status, and transcript are appended to
+the parent transcript artifact. Children are subordinate read-only effects of
+the parent attempt, not independently scheduled graph attempts, and do not
+receive a nested subagent controller.
+
 When a graph activates the same agent node again, `RunCoordinator` resumes its
 latest successful session for the selected harness unless the node declares
 `clearContext: true`. Durable output from the source invocation is appended to

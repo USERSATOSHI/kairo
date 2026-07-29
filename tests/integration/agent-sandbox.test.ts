@@ -5,7 +5,10 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 
 import { BubblewrapAgentSandbox, SandboxErrorKind } from '@kouro/sandbox-worktree';
-import { createOpenCodeSandboxPlugin } from '../../packages/harnesses/src/opencode-sandbox-plugin.ts';
+import {
+  createOpenCodeSandboxPlugin,
+  invokeOpenCodeSubagent,
+} from '../../packages/harnesses/src/opencode-sandbox-plugin.ts';
 
 describe('ADR-0030: Bubblewrap agent tool sandbox', () => {
   test('rejects lexical and symbolic-link escapes from the worktree', async () => {
@@ -99,5 +102,58 @@ describe('ADR-0030: Bubblewrap agent tool sandbox', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test('exposes the authenticated OpenCode subagent tool', async () => {
+    const calls: unknown[] = [];
+    const configuration = {
+      endpoint: 'http://127.0.0.1:7777/subagent',
+      token: 'secret',
+    };
+    const result = await invokeOpenCodeSubagent(
+      configuration,
+      {
+        subagent: 'scout',
+        task: 'Inspect tests',
+      },
+      (input, init) => {
+        if (typeof init.body !== 'string') {
+          throw new Error('Expected the OpenCode bridge body to be JSON text');
+        }
+        calls.push({
+          input,
+          authorization: new Headers(init.headers).get('authorization'),
+          body: JSON.parse(init.body),
+        });
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ callId: 'scout:1', success: true, output: { found: true } }),
+          ),
+        );
+      },
+    );
+    const plugin = await createOpenCodeSandboxPlugin({
+      workingDirectory: '/tmp/worktree',
+      writable: false,
+      network: false,
+      subagents: {
+        ...configuration,
+        description: 'Delegate to a scout.',
+      },
+    })();
+
+    expect(plugin.tool.subagent).toBeDefined();
+    expect(JSON.parse(result)).toEqual({
+      callId: 'scout:1',
+      success: true,
+      output: { found: true },
+    });
+    expect(calls).toEqual([
+      {
+        input: 'http://127.0.0.1:7777/subagent',
+        authorization: 'Bearer secret',
+        body: { subagent: 'scout', task: 'Inspect tests' },
+      },
+    ]);
   });
 });

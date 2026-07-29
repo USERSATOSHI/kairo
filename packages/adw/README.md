@@ -21,7 +21,14 @@ instances never cross into the compiler or runtime.
 ## Authoring a workflow
 
 ```typescript
-import { all, output, WorkflowBuilder } from '@kouro/adw';
+import {
+  all,
+  CAPABILITY,
+  HARNESS,
+  output,
+  RECOVERY_POLICY,
+  WorkflowBuilder,
+} from '@kouro/adw';
 
 const workflow = new WorkflowBuilder({
   id: 'feature-development',
@@ -29,9 +36,9 @@ const workflow = new WorkflowBuilder({
 });
 
 workflow.permissions(
-  'repository.read',
-  'repository.write',
-  'terminal.execute',
+  CAPABILITY.REPOSITORY_READ,
+  CAPABILITY.REPOSITORY_WRITE,
+  CAPABILITY.TERMINAL_EXECUTE,
 );
 workflow.runLimits({
   maxDurationMs: 8 * 60 * 60 * 1000,
@@ -44,36 +51,51 @@ workflow.subworkflow('validation', {
 
 const testRepairs = workflow.counter('testRepair', 3);
 const reviewRepairs = workflow.counter('reviewRepair', 2);
+const architectureScout = workflow.subagent('architectureScout', {
+  role: 'architecture-scout',
+  prompt: './prompts/architecture-scout.md',
+  capabilities: [CAPABILITY.REPOSITORY_READ],
+  maxInvocations: 2,
+  maxConcurrent: 2,
+});
+const testScout = workflow.subagent('testScout', {
+  role: 'test-scout',
+  prompt: './prompts/test-scout.md',
+  capabilities: [CAPABILITY.REPOSITORY_READ],
+  maxInvocations: 3,
+  maxConcurrent: 1,
+});
 const plan = workflow.agent('plan', {
   role: 'planner',
   prompt: './prompts/plan.md',
   outputSchema: './schemas/plan.schema.ts',
-  capabilities: ['repository.read'],
-  recoveryPolicy: 'resume_supported',
+  capabilities: [CAPABILITY.REPOSITORY_READ],
+  recoveryPolicy: RECOVERY_POLICY.RESUME_SUPPORTED,
 });
+plan.uses(architectureScout, testScout);
 const approval = workflow.approval('planApproval', {
   title: 'Approve implementation plan',
 });
 const implement = workflow.agent('implement', {
   role: 'implementer',
   prompt: './prompts/implement.md',
-  capabilities: ['repository.read', 'repository.write'],
-  recoveryPolicy: 'resume_supported',
+  capabilities: [CAPABILITY.REPOSITORY_READ, CAPABILITY.REPOSITORY_WRITE],
+  recoveryPolicy: RECOVERY_POLICY.RESUME_SUPPORTED,
 });
 const validate = workflow.command('validate', {
   command: 'bun run lint && bun run format && bun test',
-  capabilities: ['repository.read', 'terminal.execute'],
-  recoveryPolicy: 'replay_safe',
+  capabilities: [CAPABILITY.REPOSITORY_READ, CAPABILITY.TERMINAL_EXECUTE],
+  recoveryPolicy: RECOVERY_POLICY.REPLAY_SAFE,
 });
 const review = workflow.agent('review', {
   role: 'reviewer',
   prompt: './prompts/review.md',
-  harness: 'codex',
+  harness: HARNESS.CODEX,
   models: {
-    codex: 'gpt-5.2-codex',
+    [HARNESS.CODEX]: 'gpt-5.2-codex',
   },
-  capabilities: ['repository.read'],
-  recoveryPolicy: 'resume_supported',
+  capabilities: [CAPABILITY.REPOSITORY_READ],
+  recoveryPolicy: RECOVERY_POLICY.RESUME_SUPPORTED,
 });
 const delivery = workflow.deliveryReview('delivery', {
   title: 'Review exact delivery',
@@ -109,9 +131,22 @@ delivery.on('approved').to(complete);
 export default workflow.build();
 ```
 
-The five declaration methods are `agent`, `approval`, `deliveryReview`,
-`command`, and `complete`. The first four return transition-capable handles. A complete-node
-handle has no `on` method, so terminal transitions are rejected by TypeScript.
+The five node declaration methods are `agent`, `approval`, `deliveryReview`,
+`command`, and `complete`. The first four return transition-capable handles. A
+complete-node handle has no `on` method, so terminal transitions are rejected
+by TypeScript.
+
+`subagent` declares a bounded child role rather than a graph node. Only an
+agent handle has `uses(...subagents)`, and it accepts multiple definitions. A
+parent may call each authorized role repeatedly or concurrently within that
+definition's `maxInvocations` and `maxConcurrent` limits. Subagent handles
+cannot be passed to `startAt`, transitions, or `uses` on command nodes.
+
+Subagents initially support only `repository.read`. Their capabilities must
+also be present in the workflow permissions and in every parent agent that
+authorizes them. Children receive no subagent tool, so delegation is exactly
+one level deep. Use ordinary graph nodes when a stage needs durable retries,
+transitions, approvals, write/execute authority, or independent recovery.
 
 `deliveryReview` is the only authoring boundary that asks Kouro to prepare and
 commit a reviewed tree. `proposalFrom` must name an agent node. A workflow
@@ -132,6 +167,14 @@ Kouro resolves the entry after selecting the harness, so fallback harnesses can
 use different provider-specific model identifiers. The map is included in the
 compiled checksum. If the selected harness has no entry, the harness uses its
 configured default.
+
+The SDK exports `HARNESS`, `CAPABILITY`, and `RECOVERY_POLICY` constants so
+workflow declarations receive autocomplete without repeating protocol strings.
+Their corresponding `HarnessId`, `Capability`, and `RecoveryPolicy` types are
+literal unions. `HarnessModelMap` and `HarnessCapabilityMap` document the
+dependent authoring contracts. A node pinned with `harness` accepts a model
+entry only for that harness; an unpinned node may declare entries for multiple
+harnesses. OpenCode model IDs use its required `provider/model` syntax.
 
 `startAt(handle)` assigns the single entry node. `build()` returns the existing
 `WorkflowAuthoringDefinition`; it does not compile the workflow.
@@ -231,7 +274,7 @@ and subworkflows.
 | `WorkflowBuilder` | Stateful authoring builder |
 | `WorkflowAuthoringError`, `WorkflowAuthoringErrorKind` | Fail-fast authoring errors |
 | `output`, `all`, `any`, `not` | Pure expression helpers |
-| Node, counter, and transition handle types | Fluent authoring contracts |
+| Node, subagent, counter, and transition handle types | Fluent authoring contracts |
 | `compileWorkflow` | Pure workflow compiler |
 | `compileAdwPackage` | ADW package and resource compiler |
 | `COMPILER_VERSION`, `IR_VERSION`, `EXPRESSION_VERSION` | Format versions |

@@ -35,6 +35,13 @@ the authoring definition, compiler inputs, and compiled bundles also remain
 plain data. Runtime and compiler packages never receive builder or handle
 instances.
 
+The SDK exposes constants and literal unions for Kouro's built-in harness IDs,
+normalized capabilities, and recovery policies. Harness-keyed capability and
+model maps encode dependent authoring fields: a pinned agent may configure a
+model only for its selected harness, while an unpinned agent may configure
+models for any built-in fallback harness. These constraints apply only to the
+TypeScript authoring boundary; the compiled data representation is unchanged.
+
 The previous `defineWorkflow`, `node`, and `on` exports are removed without a
 compatibility layer. This is an intentional source-level SDK break with no
 compiled-format migration.
@@ -64,6 +71,8 @@ breaking, so the old surface is removed immediately.
 ## Consequences
 
 - ADWs gain typed node and counter references and fluent transition authoring.
+- Known protocol values and harness-dependent model configuration are checked
+  while authoring instead of being guessed from unconstrained strings.
 - Complete-node handles cannot declare transitions at compile time.
 - Builder ownership mistakes and incomplete authoring fail close to their
   source.

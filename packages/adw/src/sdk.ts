@@ -2,23 +2,116 @@ import type {
   Expression,
   JsonPrimitive,
   JsonValue,
-  RecoveryPolicy,
+  RecoveryPolicy as DomainRecoveryPolicy,
   SourceTransition,
 } from '@kouro/domain';
 
-export interface AgentNodeAuthoring {
+/** Built-in workflow capabilities understood by Kouro's execution boundary. */
+export const CAPABILITY = Object.freeze({
+  REPOSITORY_READ: 'repository.read',
+  REPOSITORY_WRITE: 'repository.write',
+  TERMINAL_EXECUTE: 'terminal.execute',
+  NETWORK_ACCESS: 'network.access',
+} as const);
+
+export type Capability = (typeof CAPABILITY)[keyof typeof CAPABILITY];
+
+/** Supported side-effect recovery classifications. */
+export const RECOVERY_POLICY = Object.freeze({
+  REPLAY_SAFE: 'replay_safe',
+  VERIFY_THEN_REPLAY: 'verify_then_replay',
+  RESUME_SUPPORTED: 'resume_supported',
+  MANUAL_RECONCILIATION: 'manual_reconciliation',
+  NEVER_AUTOMATICALLY_RETRY: 'never_automatically_retry',
+} as const satisfies Readonly<Record<string, DomainRecoveryPolicy>>);
+
+export type RecoveryPolicy = (typeof RECOVERY_POLICY)[keyof typeof RECOVERY_POLICY];
+
+/** Harness IDs provided by Kouro's local composition. */
+export const HARNESS = Object.freeze({
+  CLAUDE_CODE: 'claude-code',
+  CODEX: 'codex',
+  OPENCODE: 'opencode',
+  PI: 'pi',
+} as const);
+
+export type HarnessId = (typeof HARNESS)[keyof typeof HARNESS];
+
+/**
+ * Capability vocabulary accepted by each built-in harness.
+ *
+ * The entries currently share Kouro's normalized capability language. Keeping
+ * the relationship explicit lets a future harness narrow its accepted
+ * capabilities without weakening every agent declaration.
+ */
+export interface HarnessCapabilityMap {
+  readonly 'claude-code': Capability;
+  readonly codex: Capability;
+  readonly opencode: Capability;
+  readonly pi: Capability;
+}
+
+/** Model identifier syntax accepted by each built-in harness. */
+export interface HarnessModelMap {
+  readonly 'claude-code': string;
+  readonly codex: string;
+  readonly opencode: `${string}/${string}`;
+  readonly pi: string;
+}
+
+export type HarnessModels<Harness extends HarnessId = HarnessId> = Readonly<
+  Partial<Pick<HarnessModelMap, Harness>>
+>;
+
+interface AgentNodeAuthoringBase<Harness extends HarnessId> {
   readonly type: 'agent';
   readonly role: string;
   readonly prompt: string;
   readonly outputSchema?: string;
-  readonly harness?: string;
-  readonly models?: Readonly<Record<string, string>>;
   readonly clearContext?: boolean;
-  readonly capabilities?: readonly string[];
+  readonly allowedSubagents?: readonly string[];
+  readonly capabilities?: readonly HarnessCapabilityMap[Harness][];
   readonly priority?: number;
   readonly recoveryPolicy: RecoveryPolicy;
   readonly skipOutcome?: string;
 }
+
+export interface PortableAgentNodeAuthoring extends AgentNodeAuthoringBase<HarnessId> {
+  readonly harness?: never;
+  readonly models?: HarnessModels;
+}
+
+export type PinnedAgentNodeAuthoring = {
+  readonly [Harness in HarnessId]: AgentNodeAuthoringBase<Harness> & {
+    readonly harness: Harness;
+    readonly models?: HarnessModels<Harness>;
+  };
+}[HarnessId];
+
+export type AgentNodeAuthoring = PortableAgentNodeAuthoring | PinnedAgentNodeAuthoring;
+
+interface SubagentAuthoringBase {
+  readonly role: string;
+  readonly prompt: string;
+  readonly outputSchema?: string;
+  readonly capabilities: readonly [typeof CAPABILITY.REPOSITORY_READ];
+  readonly maxInvocations: number;
+  readonly maxConcurrent: number;
+}
+
+export interface PortableSubagentAuthoring extends SubagentAuthoringBase {
+  readonly harness?: never;
+  readonly models?: HarnessModels;
+}
+
+export type PinnedSubagentAuthoring = {
+  readonly [Harness in HarnessId]: SubagentAuthoringBase & {
+    readonly harness: Harness;
+    readonly models?: HarnessModels<Harness>;
+  };
+}[HarnessId];
+
+export type SubagentAuthoring = PortableSubagentAuthoring | PinnedSubagentAuthoring;
 
 export interface ApprovalNodeAuthoring {
   readonly type: 'approval';
@@ -37,7 +130,7 @@ export interface DeliveryReviewNodeAuthoring {
 export interface CommandNodeAuthoring {
   readonly type: 'command';
   readonly command: string;
-  readonly capabilities?: readonly string[];
+  readonly capabilities?: readonly Capability[];
   readonly priority?: number;
   readonly recoveryPolicy: RecoveryPolicy;
   readonly skipOutcome?: string;
@@ -62,7 +155,7 @@ export interface WorkflowAuthoringDefinition {
   readonly entry: string;
   readonly nodes: Readonly<Record<string, NodeAuthoring>>;
   readonly transitions: readonly SourceTransition[];
-  readonly permissions?: readonly string[];
+  readonly permissions?: readonly Capability[];
   readonly defaults?: Readonly<Record<string, JsonValue>>;
   readonly limits?: {
     readonly counters?: Readonly<Record<string, number>>;
@@ -78,6 +171,7 @@ export interface WorkflowAuthoringDefinition {
       }
     >
   >;
+  readonly subagents?: Readonly<Record<string, SubagentAuthoring>>;
 }
 
 export interface WorkflowBuilderOptions {
@@ -98,8 +192,10 @@ export interface SubworkflowAuthoring {
 export const enum WorkflowAuthoringErrorKind {
   DuplicateNode = 'duplicate_node',
   DuplicateCounter = 'duplicate_counter',
+  DuplicateSubagent = 'duplicate_subagent',
   ForeignNodeHandle = 'foreign_node_handle',
   ForeignCounterHandle = 'foreign_counter_handle',
+  ForeignSubagentHandle = 'foreign_subagent_handle',
   DuplicateEntry = 'duplicate_entry',
   IncompleteTransition = 'incomplete_transition',
   MissingEntry = 'missing_entry',
@@ -118,13 +214,23 @@ export class WorkflowAuthoringError extends Error {
 
 export interface NodeHandle {
   readonly id: string;
+  readonly kind: 'node';
 }
 
 export interface TransitionNodeHandle extends NodeHandle {
   on(outcome: string): TransitionStart;
 }
 
+export interface AgentNodeHandle extends TransitionNodeHandle {
+  uses(...subagents: readonly SubagentHandle[]): this;
+}
+
 export interface CompleteNodeHandle extends NodeHandle {}
+
+export interface SubagentHandle {
+  readonly id: string;
+  readonly kind: 'subagent';
+}
 
 export interface CounterHandle {
   readonly name: string;
@@ -151,7 +257,14 @@ interface BuilderContext {
   beginTransition(node: NodeHandle, outcome: string): TransitionDraftBuilder;
   addTransition(draft: TransitionDraft, target: NodeHandle): void;
   assertCounterOwnership(counter: CounterHandle): void;
+  authorizeSubagents(node: AgentNodeHandle, subagents: readonly SubagentHandle[]): void;
 }
+
+type AgentNodeConfig = AgentNodeAuthoring extends infer Node
+  ? Node extends AgentNodeAuthoring
+    ? Omit<Node, 'type' | 'allowedSubagents'>
+    : never
+  : never;
 
 interface TransitionDraft {
   readonly from: NodeHandle;
@@ -162,6 +275,8 @@ interface TransitionDraft {
 }
 
 class AuthoredNodeHandle implements TransitionNodeHandle {
+  readonly kind = 'node';
+
   constructor(
     readonly id: string,
     private readonly context: BuilderContext,
@@ -172,7 +287,33 @@ class AuthoredNodeHandle implements TransitionNodeHandle {
   }
 }
 
+class AuthoredAgentNodeHandle implements AgentNodeHandle {
+  readonly kind = 'node';
+
+  constructor(
+    readonly id: string,
+    private readonly context: BuilderContext,
+  ) {}
+
+  on(outcome: string): TransitionStart {
+    return this.context.beginTransition(this, outcome);
+  }
+
+  uses(...subagents: readonly SubagentHandle[]): this {
+    this.context.authorizeSubagents(this, subagents);
+    return this;
+  }
+}
+
 class AuthoredCompleteNodeHandle implements CompleteNodeHandle {
+  readonly kind = 'node';
+
+  constructor(readonly id: string) {}
+}
+
+class AuthoredSubagentHandle implements SubagentHandle {
+  readonly kind = 'subagent';
+
   constructor(readonly id: string) {}
 }
 
@@ -235,14 +376,16 @@ export class WorkflowBuilder implements BuilderContext {
   private readonly transitions: SourceTransition[] = [];
   private readonly pendingTransitions = new Set<TransitionDraft>();
   private readonly subworkflows = new Map<string, SubworkflowAuthoring>();
+  private readonly subagents = new Map<string, SubagentAuthoring>();
+  private readonly subagentHandles = new Set<SubagentHandle>();
   private entryHandle: NodeHandle | undefined;
-  private declaredPermissions: readonly string[] | undefined;
+  private declaredPermissions: readonly Capability[] | undefined;
   private declaredDefaults: Readonly<Record<string, JsonValue>> | undefined;
   private declaredRunLimits: RunLimitsAuthoring | undefined;
 
   constructor(private readonly options: WorkflowBuilderOptions) {}
 
-  permissions(...permissions: readonly string[]): this {
+  permissions(...permissions: readonly Capability[]): this {
     this.declaredPermissions = [...permissions];
     return this;
   }
@@ -275,8 +418,25 @@ export class WorkflowBuilder implements BuilderContext {
     return this;
   }
 
-  agent(name: string, config: Omit<AgentNodeAuthoring, 'type'>): TransitionNodeHandle {
-    return this.addTransitionNode(name, { type: 'agent', ...config });
+  subagent(name: string, definition: SubagentAuthoring): SubagentHandle {
+    if (this.subagents.has(name)) {
+      throw authoringError(
+        WorkflowAuthoringErrorKind.DuplicateSubagent,
+        `Subagent "${name}" is already declared`,
+      );
+    }
+    const handle = new AuthoredSubagentHandle(name);
+    this.subagents.set(name, { ...definition });
+    this.subagentHandles.add(handle);
+    return handle;
+  }
+
+  agent(name: string, config: AgentNodeConfig): AgentNodeHandle {
+    this.assertUniqueNode(name);
+    const handle = new AuthoredAgentNodeHandle(name, this);
+    this.nodes.set(name, { type: 'agent', ...config });
+    this.nodeHandles.add(handle);
+    return handle;
   }
 
   approval(name: string, config: Omit<ApprovalNodeAuthoring, 'type'>): TransitionNodeHandle {
@@ -346,6 +506,7 @@ export class WorkflowBuilder implements BuilderContext {
       ...(this.subworkflows.size > 0
         ? { subworkflows: Object.fromEntries(this.subworkflows) }
         : {}),
+      ...(this.subagents.size > 0 ? { subagents: Object.fromEntries(this.subagents) } : {}),
     };
   }
 
@@ -382,6 +543,28 @@ export class WorkflowBuilder implements BuilderContext {
         `Counter "${counter.name}" belongs to another workflow builder`,
       );
     }
+  }
+
+  authorizeSubagents(node: AgentNodeHandle, subagents: readonly SubagentHandle[]): void {
+    this.assertNodeOwnership(node);
+    for (const subagent of subagents) {
+      if (!this.subagentHandles.has(subagent)) {
+        throw authoringError(
+          WorkflowAuthoringErrorKind.ForeignSubagentHandle,
+          `Subagent "${subagent.id}" belongs to another workflow builder`,
+        );
+      }
+    }
+    const authored = this.nodes.get(node.id);
+    if (authored?.type !== 'agent') {
+      throw new Error(`Agent handle does not reference an authored agent: ${node.id}`);
+    }
+    this.nodes.set(node.id, {
+      ...authored,
+      allowedSubagents: [
+        ...new Set([...(authored.allowedSubagents ?? []), ...subagents.map(({ id }) => id)]),
+      ],
+    });
   }
 
   private addTransitionNode(name: string, node: NodeAuthoring): TransitionNodeHandle {

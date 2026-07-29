@@ -8,6 +8,7 @@ import type {
   CompiledWorkflowArtifact,
   JsonValue,
   SourceNodeDefinition,
+  SourceSubagentDefinition,
   WorkflowSourceBundle,
 } from '@kouro/domain';
 import { compareCanonicalText, sha256 } from './canonical.ts';
@@ -15,8 +16,8 @@ import { compileWorkflow } from './compiler.ts';
 import { CompilerErrorKind, toErr, toCompilerError, type CompilerError } from './errors.ts';
 import type { WorkflowAuthoringDefinition } from './sdk.ts';
 
-export const COMPILER_VERSION = '0.1.0';
-export const IR_VERSION = '1';
+export const COMPILER_VERSION = '0.2.0';
+export const IR_VERSION = '2';
 export const EXPRESSION_VERSION = '1';
 
 interface AdwManifest {
@@ -165,6 +166,24 @@ function validateDefinition(
       return toCompilerError(CompilerErrorKind.DefinitionInvalid, {
         file,
         reason: 'every transition must be structurally valid',
+      });
+    }
+  }
+  if (value.subagents !== undefined && !isRecord(value.subagents)) {
+    return toCompilerError(CompilerErrorKind.DefinitionInvalid, {
+      file,
+      reason: 'subagents must be an object',
+    });
+  }
+  for (const [subagentId, subagent] of Object.entries(value.subagents ?? {})) {
+    if (
+      !isRecord(subagent) ||
+      typeof subagent.role !== 'string' ||
+      typeof subagent.prompt !== 'string'
+    ) {
+      return toCompilerError(CompilerErrorKind.DefinitionInvalid, {
+        file,
+        reason: `subagent ${subagentId} must be a subagent object`,
       });
     }
   }
@@ -362,6 +381,20 @@ async function compilePackage(
     }
     nodes.push({ id, ...node });
   }
+  const subagents: SourceSubagentDefinition[] = [];
+  for (const [id, authoringSubagent] of Object.entries(definition.subagents ?? {}).toSorted(
+    ([left], [right]) => compareCanonicalText(left, right),
+  )) {
+    const prompt = await readResource(absolutePackage, authoringSubagent.prompt);
+    if (prompt.isErr()) return prompt;
+    prompts[authoringSubagent.prompt] = prompt.unwrap().content;
+    if (authoringSubagent.outputSchema) {
+      const schema = await resolveSchema(absolutePackage, authoringSubagent.outputSchema);
+      if (schema.isErr()) return schema;
+      schemas[authoringSubagent.outputSchema] = schema.unwrap();
+    }
+    subagents.push({ id, ...authoringSubagent });
+  }
 
   const subworkflows: Record<
     string,
@@ -407,6 +440,7 @@ async function compilePackage(
     },
     entryNodeId: definition.entry,
     nodes,
+    ...(subagents.length > 0 ? { subagents } : {}),
     transitions: definition.transitions,
     counterLimits: definition.limits?.counters ?? {},
     ...(definition.limits?.maxDurationMs === undefined &&

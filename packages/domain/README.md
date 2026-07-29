@@ -44,6 +44,7 @@ interface WorkflowSourceBundle {
   semanticVersions: { compiler: string; ir: string; expressions: string };
   entryNodeId: string;
   nodes: readonly SourceNodeDefinition[];
+  subagents?: readonly SourceSubagentDefinition[];
   transitions: readonly SourceTransition[];
   counterLimits: Record<string, number>;
   runLimits?: { maxDurationMs?: number; maxNodeInvocations?: number };
@@ -72,6 +73,12 @@ harness choice; omitted pins are resolved from durable run configuration.
 An optional non-empty `models` map selects a model by resolved harness ID. The
 resolved value is recorded on the attempt, and a missing entry preserves the
 harness's configured default.
+
+Agent source nodes may authorize `allowedSubagents`. Each referenced
+`SourceSubagentDefinition` is a bounded reusable child role, not a graph node:
+it has no ordinal or transitions and cannot become the workflow entry.
+Compiler IR version 2 adds these optional declarations while retaining the
+ability to read previously compiled IR version 1 bundles.
 
 `WorkItemSnapshot` is the immutable requested change bound at run creation. It
 records normalized inline or provider-backed ticket content, its external
