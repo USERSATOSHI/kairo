@@ -291,13 +291,15 @@ Available starter templates:
 
 | Template | Intended use |
 | --- | --- |
-| `feature-development` | Plan, approve, implement, and validate a feature |
-| `bug-fix` | Reproduce, fix, and validate a defect |
-| `hotfix` | Assess, implement, and validate an urgent correction |
+| `feature-development` | Scout, plan, approve, implement, and validate a feature |
+| `bug-fix` | Scout, reproduce, fix, and validate a defect |
+| `hotfix` | Scout, assess, implement, and validate an urgent correction |
 | `chore` | Implement and validate focused maintenance work |
 
 Use `--output <directory>` to create the workflow somewhere other than
 `.kouro`. Kouro refuses to overwrite an existing workflow directory.
+Feature, bug-fix, and hotfix planners can invoke bounded read-only repository
+and test scouts. The chore template keeps its direct maintenance flow.
 
 ## Run operations
 

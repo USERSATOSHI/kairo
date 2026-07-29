@@ -109,15 +109,17 @@ to `feature-development`.
 
 Available templates:
 
-- `feature-development` — plan, approve, implement, and validate a feature
-- `hotfix` — assess, implement, and validate an urgent correction
-- `bug-fix` — reproduce, fix, and validate a defect
+- `feature-development` — scout, plan, approve, implement, and validate a feature
+- `hotfix` — scout, assess, implement, and validate an urgent correction
+- `bug-fix` — scout, reproduce, fix, and validate a defect
 - `chore` — implement and validate a focused maintenance task
 
 Each generated entrypoint imports `WorkflowBuilder` from `@kouro/adw`. Install
 that package in the repository before compiling the workflow. Templates can be
 extended through node handles and fluent transitions instead of editing raw
-node and transition records.
+node and transition records. Feature, hotfix, and bug-fix planning agents may
+invoke bounded read-only repository and test scouts; chore intentionally keeps
+its direct maintenance flow.
 
 The command refuses to replace an existing folder.
 

@@ -237,7 +237,7 @@ describe('M7 runnable local MVP and operator CLI', () => {
           .join(' '),
       );
       const entrypoint = await readFile(resolve(output, name, 'kouro.adw.ts'), 'utf8');
-      expect(entrypoint).toContain("import { WorkflowBuilder } from '@kouro/adw'");
+      expect(entrypoint).toContain("WorkflowBuilder } from '@kouro/adw'");
       expect(entrypoint).toContain('workflow.startAt(');
       expect(entrypoint).toContain(".on('success').to(");
       expect(entrypoint).toContain('export default workflow.build()');
@@ -245,13 +245,54 @@ describe('M7 runnable local MVP and operator CLI', () => {
       const compiled = await compileAdwPackage(resolve(output, name));
       expect(compiled.isOk()).toBe(true);
       if (compiled.isOk()) {
-        expect(compiled.unwrap().bundle.nodes).toContainEqual(
+        const bundle = compiled.unwrap().bundle;
+        expect(bundle.nodes).toContainEqual(
           expect.objectContaining({
             id: template === 'feature-development' ? 'review' : 'deliveryMetadata',
             outputSchema: './schemas/delivery-metadata.schema.ts',
           }),
         );
-        expect(compiled.unwrap().bundle.schemas?.['./schemas/delivery-metadata.schema.ts']).toEqual(
+        if (template === 'chore') {
+          expect(bundle.subagents).toBeUndefined();
+        } else {
+          const planningNode = {
+            'feature-development': 'plan',
+            hotfix: 'assess',
+            'bug-fix': 'reproduce',
+          }[template];
+          expect(bundle.nodes).toContainEqual(
+            expect.objectContaining({
+              id: planningNode,
+              allowedSubagents: ['repositoryScout', 'testScout'],
+            }),
+          );
+          expect(bundle.subagents).toEqual([
+            {
+              id: 'repositoryScout',
+              role: 'repository-scout',
+              prompt: './prompts/repository-scout.md',
+              outputSchema: './schemas/scout.schema.ts',
+              capabilities: ['repository.read'],
+              maxInvocations: 2,
+              maxConcurrent: 2,
+            },
+            {
+              id: 'testScout',
+              role: 'test-scout',
+              prompt: './prompts/test-scout.md',
+              outputSchema: './schemas/scout.schema.ts',
+              capabilities: ['repository.read'],
+              maxInvocations: 2,
+              maxConcurrent: 2,
+            },
+          ]);
+          expect(bundle.schemas?.['./schemas/scout.schema.ts']).toEqual(
+            expect.objectContaining({
+              required: ['summary', 'findings'],
+            }),
+          );
+        }
+        expect(bundle.schemas?.['./schemas/delivery-metadata.schema.ts']).toEqual(
           expect.objectContaining({
             required: ['deliveryMetadata'],
             properties: expect.objectContaining({
@@ -262,12 +303,31 @@ describe('M7 runnable local MVP and operator CLI', () => {
             }),
           }),
         );
+        for (const [nodeId, command] of [
+          ['lint', 'bun run lint'],
+          ['format', 'bun run format'],
+          ['typecheck', 'bun run typecheck'],
+          ['test', 'bun test --pass-with-no-tests'],
+        ] as const) {
+          expect(bundle.nodes).toContainEqual(
+            expect.objectContaining({
+              id: nodeId,
+              type: 'command',
+              command,
+              capabilities: ['repository.read', 'terminal.execute'],
+              recoveryPolicy: 'replay_safe',
+            }),
+          );
+        }
       }
       if (template === 'chore' && compiled.isOk()) {
         const bundle = compiled.unwrap().bundle;
         expect(bundle.counterLimits).toEqual({
           deliveryRepairs: 2,
-          validationRepairs: 3,
+          formatRepairs: 3,
+          lintRepairs: 3,
+          testRepairs: 3,
+          typecheckRepairs: 3,
         });
         expect(bundle.runLimits?.maxNodeInvocations).toBe(20);
         expect(bundle.entryNodeId).toBe('dependencies');
@@ -297,19 +357,19 @@ describe('M7 runnable local MVP and operator CLI', () => {
           toNodeId: 'failed',
         });
         expect(bundle.transitions).toContainEqual({
-          id: 'validate.failure.implement',
-          from: { nodeId: 'validate', outcome: 'failure' },
+          id: 'lint.failure.implement',
+          from: { nodeId: 'lint', outcome: 'failure' },
           toNodeId: 'implement',
           condition: {
             op: 'lt',
-            left: { scope: 'counter', name: 'validationRepairs' },
+            left: { scope: 'counter', name: 'lintRepairs' },
             right: 3,
           },
-          increment: 'validationRepairs',
+          increment: 'lintRepairs',
         });
         expect(bundle.transitions).toContainEqual({
-          id: 'validate.failure.failed',
-          from: { nodeId: 'validate', outcome: 'failure' },
+          id: 'lint.failure.failed',
+          from: { nodeId: 'lint', outcome: 'failure' },
           toNodeId: 'failed',
           default: true,
         });
@@ -357,8 +417,8 @@ describe('M7 runnable local MVP and operator CLI', () => {
 const complete = workflow.complete('complete');`,
       )
       .replace(
-        "validate.on('success').to(deliveryMetadata);",
-        `validate.on('success').to(inspect);
+        "test.on('success').to(deliveryMetadata);",
+        `test.on('success').to(inspect);
 inspect.on('success').to(deliveryMetadata);
 inspect.on('failure').to(failed);`,
       );
@@ -370,7 +430,7 @@ inspect.on('failure').to(failed);`,
     if (compiled.isOk()) {
       expect(compiled.unwrap().bundle.nodes.some(({ id }) => id === 'inspect')).toBe(true);
       expect(
-        compiled.unwrap().bundle.transitions.some(({ id }) => id === 'validate.success.inspect'),
+        compiled.unwrap().bundle.transitions.some(({ id }) => id === 'test.success.inspect'),
       ).toBe(true);
     }
   });
