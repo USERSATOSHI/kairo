@@ -1,6 +1,8 @@
 # `@kouro/harnesses` — Agent Harness and Artifact Writer Implementations
 
-Infrastructure implementations of the normalized agent-harness and artifact writer ports declared in `@kouro/executors`. Bridges Kouro's workflow orchestration with real-world AI coding agents (Claude Code, OpenAI Codex CLI, OpenCode, and Pi) and filesystem artifact storage.
+Infrastructure implementations of the normalized agent-harness and artifact
+writer ports declared in `@kouro/executors`. Bridges Kouro's workflow
+orchestration with provider agent runtimes and filesystem artifact storage.
 
 ## Architecture
 
@@ -10,10 +12,10 @@ Application layer (executors)
 AgentHarness | AgentHarnessRegistry | ArtifactWriter
     ↓
 @kouro/harnesses (infrastructure implementations)
-  ├── ClaudeCodeHarness — wraps the `claude` CLI
-  ├── CodexHarness — wraps the `codex` CLI
-  ├── OpenCodeHarness — wraps the `opencode` CLI
-  ├── PiHarness — wraps the `pi` CLI
+  ├── ClaudeCodeHarness — Claude Agent SDK
+  ├── CodexHarness — speaks the `codex app-server` protocol
+  ├── OpenCodeHarness — OpenCode SDK and supervised local server
+  ├── PiHarness — in-process Pi AgentSession SDK
   ├── ScriptedFakeHarness — test double for scripted results
   ├── HarnessRegistry — in-memory harness registry
   ├── LocalArtifactWriter — filesystem artifact persistence
@@ -25,26 +27,30 @@ AgentHarness | AgentHarnessRegistry | ArtifactWriter
 
 ### ClaudeCodeHarness
 
-Wraps Anthropic's `claude` CLI tool (Claude Code):
+Runs Claude Code through Anthropic's Agent SDK:
 
 ```typescript
 import { ClaudeCodeHarness } from '@kouro/harnesses';
 
 const harness = new ClaudeCodeHarness();
-// or with a custom process runner:
-const harness = new ClaudeCodeHarness(new BunProcessRunner());
 ```
 
 **Execution model:**
-- **`execute()`**: Generates a fresh UUID session token, invokes `claude -p --output-format json --session-id <uuid> --permission-mode dontAsk --tools <tools> <prompt>`
-- **`resume()`**: Invokes `claude -p --resume <token> --output-format json --permission-mode dontAsk --tools <tools> <prompt>`
-- If `outputSchema` is present, passes `--json-schema <schema-json>` to Claude
-- Parses the JSON result, extracting `structured_output` or `result`, and captures `session_id` as the resume token
-- Maps capabilities to tools: write capabilities grant `Read,Glob,Grep,Edit,Write,Bash`; read-only grants `Read,Glob,Grep`
+
+- **`execute()`** starts a streaming SDK query and persists the provider's
+  session ID as soon as it is reported.
+- **`resume()`** passes the exact durable session ID back to the SDK.
+- Pending Kouro steering is supplied as streaming user input; interruption
+  calls the active query's native `interrupt()` control.
+- `outputSchema` becomes the SDK's JSON-schema output format, and Kouro still
+  validates the returned value independently.
+- Read tools are always available. Write and command tools require the matching
+  compiled capabilities.
+- Project, user, and local settings are not loaded into the SDK query.
 
 ### CodexHarness
 
-Wraps OpenAI's `codex` CLI tool (Codex CLI):
+Runs OpenAI Codex through the local `codex app-server` JSON-RPC protocol:
 
 ```typescript
 import { CodexHarness } from '@kouro/harnesses';
@@ -53,34 +59,56 @@ const harness = new CodexHarness();
 ```
 
 **Execution model:**
-- **`execute()`**: Invokes `codex exec --json -s <sandbox> -- <prompt>`
-- **`resume()`**: Invokes `codex exec resume --json <token> <prompt>`
-- If `outputSchema` is present, writes the schema to a temp file and passes `--output-schema <path>`
-- Parses output as JSONL, looking for `thread.started` (to capture `thread_id` as resume token) and `item.completed` with `item.type === 'agent_message'` (to capture final text)
-- Maps capabilities to sandbox mode: `workspace-write` or `read-only`
+
+- Starts one App Server process per active attempt and performs the required
+  `initialize` / `initialized` handshake.
+- **`execute()`** starts a thread; **`resume()`** resumes its exact durable
+  thread ID.
+- Starts a turn with the compiled model, output schema, working directory, and
+  capability-derived `readOnly` or `workspaceWrite` sandbox policy.
+- Maps durable Kouro steering and interrupt controls to `turn/steer` and
+  `turn/interrupt`.
+- Answers command and file-change approval requests from the workflow's
+  compiled execute/write capabilities.
+- Streams App Server notifications into the attempt transcript and parses the
+  final agent message through Kouro's independent structured-output validator.
 
 Kouro may call `resume()` for a later graph invocation of the same agent node,
 not only for interruption recovery. The durable session token retains the
 agent's engineering context; `clearContext: true` on the node forces
 `execute()` instead.
 
+The App Server sandbox restricts Codex's own tools. Kouro's worktree sandbox
+and durable permission checks remain the outer isolation and authorization
+boundary.
+
 ### OpenCodeHarness
 
-Runs `opencode run --format json --pure`, captures the session ID and final text
-event, and resumes with `--session <token>`. Read-only capabilities select
-OpenCode's `plan` agent; write or command capabilities select `build`. Schemas
-are included in the normalized prompt and independently validated by Kouro.
+Uses `@opencode-ai/sdk` to start a loopback-only OpenCode server for each active
+attempt. A fresh execution creates a session in the worktree; resume opens the
+exact durable session ID. Kouro maps steering to the SDK's `steer` delivery and
+interruption to the session interrupt API. The generated `kouro` agent disables
+ambient plugins, instructions, skills, task delegation, questions, and external
+directory access. Its read, write, command, and network permissions come from
+the compiled capabilities. The server and event subscription are always
+disposed when the attempt ends.
+
+The OpenCode SDK supervises the local `opencode` executable, so that executable
+must still be installed and authenticated.
 
 ### PiHarness
 
-Runs Pi in JSON mode with an exact session ID, project instructions enabled,
-and configured extensions enabled so custom provider packages such as
-`pi-llama-cpp` remain available. It resumes with `--session <token>`. Pi's
-built-in tool allowlist is derived from declared capabilities: read tools are
+Creates an in-process Pi `AgentSession` through
+`@earendil-works/pi-coding-agent`. New durable tokens use the exact session JSONL
+path; legacy Pi session IDs are resolved through the current project's session
+index before resume. Kouro calls `session.steer()` and `session.abort()` for
+live controls and disposes the session subscription afterward.
+
+Pi's tool allowlist is derived from declared capabilities: read tools are
 always present, edit/write require a write capability, and Bash requires an
-execute capability. Skills, prompt templates, and themes remain disabled.
-Schemas are included in the normalized prompt and independently validated by
-Kouro.
+execute capability. Provider configuration and extensions remain available,
+while skills, prompt templates, and themes are disabled. Schemas are included
+in the normalized prompt and independently validated by Kouro.
 
 ### ScriptedFakeHarness
 
@@ -195,9 +223,10 @@ AgentExecutor.execute()  (from @kouro/executors)
   │
   ├── selected AgentHarness.execute(request) or resume(request, token)
   │     │
-  │     └── BunProcessRunner.run(provider command, args, cwd)
-  │           │
-  │           └── Bun.spawn → parse output → HarnessExecution
+  │     └── Provider SDK/App Server session
+  │           ├── stream transcript and persist resume token
+  │           ├── apply durable steering or interruption
+  │           └── normalize final output → HarnessExecution
   │
   ├── validateStructuredOutput(output, schema)
   │
@@ -207,15 +236,15 @@ AgentExecutor.execute()  (from @kouro/executors)
 ```
 
 When `HarnessExecutionRequest.model` is set, each adapter passes an explicit
-model option to its CLI:
+model to its provider runtime:
 
-- Claude Code: `--model <model>`
-- Codex: `--model <model>`
-- OpenCode: `--model <provider/model>`
-- Pi: `--model <provider/model>`
+- Claude Agent SDK: `<model>`
+- Codex App Server: `<model>`
+- OpenCode SDK: `<provider>/<model>`
+- Pi SDK: `<provider>/<model>` or a unique model ID
 
-The same option is used for fresh and resumed execution. When `model` is
-omitted, the adapter leaves model selection to the CLI.
+The same selection is used for fresh and resumed execution. When `model` is
+omitted, the adapter leaves model selection to the provider runtime.
 
 ## Exported API
 
@@ -225,6 +254,9 @@ omitted, the adapter leaves model selection to the CLI.
 | `CodexHarness` | class | `codex-harness.ts` |
 | `OpenCodeHarness` | class | `opencode-harness.ts` |
 | `PiHarness` | class | `pi-harness.ts` |
+| `ClaudeAgentSdk`, `ClaudeSdkQuery` | interfaces | `claude-code-harness.ts` |
+| `OpenCodeAgentSdk`, `OpenCodeSdkSession` | interfaces | `opencode-harness.ts` |
+| `PiAgentSdk`, `PiSdkSession` | interfaces | `pi-harness.ts` |
 | `ScriptedFakeHarness` | class | `scripted-fake-harness.ts` |
 | `HarnessRegistry` | class | `registry.ts` |
 | `LocalArtifactWriter` | class | `local-artifact-writer.ts` |
@@ -242,3 +274,7 @@ omitted, the adapter leaves model selection to the CLI.
 | `@kouro/executors` | Port interfaces (`AgentHarness`, `HarnessRegistry`, etc.) |
 | `@kouro/domain` | `ArtifactReference` type |
 | `@usersatoshi/results` | `Result<T, E>` type |
+| `@anthropic-ai/claude-agent-sdk` | Claude streaming session and controls |
+| `@anthropic-ai/sdk` | Claude Agent SDK peer dependency |
+| `@opencode-ai/sdk` | OpenCode server/client and session controls |
+| `@earendil-works/pi-coding-agent` | In-process Pi agent sessions |

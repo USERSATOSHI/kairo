@@ -61,7 +61,7 @@ import { reduceRun } from '@kouro/runtime';
 const stateResult = reduceRun(artifact, events);
 ```
 
-The reducer is an **event-sourcing state machine** — it handles all 20 event types:
+The reducer is an **event-sourcing state machine** — it handles all 23 event types:
 
 | Event | State Effect |
 |-------|-------------|
@@ -73,6 +73,8 @@ The reducer is an **event-sourcing state machine** — it handles all 20 event t
 | `attempt.started` | Adds `NodeAttempt` to invocation |
 | `attempt.failed` | Marks attempt failed, supports fallback retry |
 | `attempt.interrupted` | Marks attempt interrupted |
+| `agent.steering_requested` | Adds durable pending guidance to the active agent attempt |
+| `agent.steering_applied` / `agent.steering_rejected` | Records provider delivery without changing graph state |
 | `invocation.completed` | Marks invocation succeeded with outcome/output |
 | `invocation.skipped` | Marks invocation succeeded with skip outcome (validates skip binding) |
 | `approval.requested` / `granted` / `rejected` | Manages approval state transitions |

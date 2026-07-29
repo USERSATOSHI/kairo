@@ -20,6 +20,7 @@ import {
   type AgentExecutorError,
 } from './agent-executor.ts';
 import type {
+  AgentControlChannel,
   CommandRunner,
   Clock,
   CreateRunInput,
@@ -27,6 +28,7 @@ import type {
   RunStore,
   RunStoreError,
 } from './ports.ts';
+import { RunStoreErrorKind } from './ports.ts';
 
 const systemClock: Clock = {
   now(): string {
@@ -38,6 +40,34 @@ function fromStore<T>(result: Result<T, RunStoreError>): Result<T, ExecutorError
   return result.isErr()
     ? toExecutorError(ExecutorErrorKind.RunStore, { error: result.error })
     : result;
+}
+
+function appendLatestEvent(
+  store: RunStore,
+  runId: string,
+  idempotencyKey: string,
+  event: RunEventInput,
+): Result<RunAggregate, ExecutorError> {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const loaded = fromStore(store.loadRun(runId));
+    if (loaded.isErr()) return loaded;
+    const appended = store.appendEvent({
+      runId,
+      expectedSequence: loaded.unwrap().nextEventSequence,
+      idempotencyKey,
+      event,
+    });
+    if (appended.isOk() || appended.error.kind !== RunStoreErrorKind.EventSequenceConflict) {
+      return fromStore(appended);
+    }
+  }
+  return toExecutorError(ExecutorErrorKind.RunStore, {
+    error: {
+      kind: RunStoreErrorKind.DatabaseFailure,
+      operation: 'appendLatestEvent',
+      message: 'Event sequence remained unstable after bounded retries',
+    },
+  });
 }
 
 function definitionFor(
@@ -219,6 +249,74 @@ function recordResumeToken(
       },
     }),
   );
+}
+
+function activeAgentControlChannel(
+  store: RunStore,
+  runId: string,
+  invocationSequence: number,
+  attemptNumber: number,
+): AgentControlChannel {
+  function loadAttempt(): {
+    readonly aggregate: RunAggregate;
+    readonly invocation: NodeInvocation;
+    readonly attempt: NonNullable<NodeInvocation['attempts'][number]>;
+  } {
+    const loaded = store.loadRun(runId);
+    if (loaded.isErr()) throw new Error('Agent control state could not be loaded');
+    const aggregate = loaded.unwrap();
+    const invocation = aggregate.state.invocations.find(
+      ({ sequence }) => sequence === invocationSequence,
+    );
+    const attempt = invocation?.attempts.find(({ number }) => number === attemptNumber);
+    if (!invocation || !attempt) throw new Error('Active agent attempt no longer exists');
+    return { aggregate, invocation, attempt };
+  }
+
+  async function appendSteeringOutcome(
+    requestSequence: number,
+    outcome: 'applied' | 'rejected',
+    reason?: string,
+  ): Promise<void> {
+    const appended = appendLatestEvent(
+      store,
+      runId,
+      `agent:steering:${requestSequence}:${outcome}`,
+      outcome === 'applied'
+        ? {
+            type: 'agent.steering_applied',
+            invocationSequence,
+            attemptNumber,
+            requestSequence,
+          }
+        : {
+            type: 'agent.steering_rejected',
+            invocationSequence,
+            attemptNumber,
+            requestSequence,
+            reason: reason ?? 'Agent runtime rejected steering',
+          },
+    );
+    if (appended.isErr()) throw new Error('Agent steering outcome could not be recorded');
+  }
+
+  return {
+    async read() {
+      const { invocation, attempt } = loadAttempt();
+      return {
+        steering: (attempt.steering ?? [])
+          .filter(({ state }) => state === 'pending')
+          .map(({ requestSequence, message }) => ({ requestSequence, message })),
+        interruptRequested: invocation.state === 'interrupted',
+      };
+    },
+    steeringApplied(requestSequence: number) {
+      return appendSteeringOutcome(requestSequence, 'applied');
+    },
+    steeringRejected(requestSequence: number, reason: string) {
+      return appendSteeringOutcome(requestSequence, 'rejected', reason);
+    },
+  };
 }
 
 function publishAgentArtifacts(
@@ -583,6 +681,42 @@ export class RunCoordinator {
     );
   }
 
+  steerInvocation(
+    runId: string,
+    invocationSequence: number,
+    actor: string,
+    message: string,
+    idempotencyKey: string,
+  ): Result<RunAggregate, ExecutorError> {
+    const loaded = fromStore(this.store.loadRun(runId));
+    if (loaded.isErr()) return loaded;
+    const aggregate = loaded.unwrap();
+    const invocation = aggregate.state.invocations.find(
+      ({ sequence }) => sequence === invocationSequence,
+    );
+    const attempt = invocation?.attempts.at(-1);
+    if (!attempt) {
+      return toExecutorError(ExecutorErrorKind.InvalidInput, {
+        field: 'invocationSequence',
+        reason: `invocation ${invocationSequence} has no active attempt`,
+      });
+    }
+    return fromStore(
+      this.store.appendEvent({
+        runId,
+        expectedSequence: aggregate.nextEventSequence,
+        idempotencyKey,
+        event: {
+          type: 'agent.steering_requested',
+          invocationSequence,
+          attemptNumber: attempt.number,
+          actor,
+          message,
+        },
+      }),
+    );
+  }
+
   retryInvocation(
     runId: string,
     invocationSequence: number,
@@ -909,6 +1043,12 @@ export class RunCoordinator {
       declaredPrompt,
       resumeToken !== undefined,
     );
+    const controls = activeAgentControlChannel(
+      this.store,
+      aggregate.runId,
+      invocationSequence,
+      attemptNumber,
+    );
     const executed = await this.agentExecutor.execute({
       runId: aggregate.runId,
       invocationSequence,
@@ -921,12 +1061,46 @@ export class RunCoordinator {
       ...(model ? { model } : {}),
       ...(outputSchema === undefined ? {} : { outputSchema }),
       ...(resumeToken ? { resumeToken } : {}),
+      controls,
+      onResumeToken: async (token: string) => {
+        const loaded = fromStore(this.store.loadRun(aggregate.runId));
+        if (loaded.isErr()) throw new Error('Agent session token state could not be loaded');
+        const current = loaded.unwrap();
+        const invocation = current.state.invocations.find(
+          ({ sequence }) => sequence === invocationSequence,
+        );
+        const attempt = invocation?.attempts.find(({ number }) => number === attemptNumber);
+        if (attempt?.resumeToken === token) return;
+        if (attempt?.resumeToken !== undefined) {
+          throw new Error('Agent session token changed during an attempt');
+        }
+        const recorded = appendLatestEvent(
+          this.store,
+          aggregate.runId,
+          `agent:resume-token:${invocationSequence}:${attemptNumber}`,
+          {
+            type: 'attempt.resume_token_recorded',
+            invocationSequence,
+            attemptNumber,
+            resumeToken: token,
+          },
+        );
+        if (recorded.isErr()) throw new Error('Agent session token could not be recorded');
+      },
     });
+
+    const refreshed = fromStore(this.store.loadRun(aggregate.runId));
+    if (refreshed.isErr()) return refreshed;
+    let current = refreshed.unwrap();
+    const currentInvocation = current.state.invocations.find(
+      ({ sequence }) => sequence === invocationSequence,
+    );
+    if (currentInvocation?.state !== 'active') return ok(current);
 
     if (executed.isErr()) {
       return appendAgentFailure(
         this.store,
-        aggregate,
+        current,
         invocationSequence,
         attemptNumber,
         executed.error,
@@ -935,8 +1109,10 @@ export class RunCoordinator {
     }
 
     const result = executed.unwrap();
-    let current = aggregate;
-    if (result.resumeToken && result.resumeToken !== resumeToken) {
+    const currentAttempt = currentInvocation.attempts.find(
+      ({ number }) => number === attemptNumber,
+    );
+    if (result.resumeToken && currentAttempt?.resumeToken !== result.resumeToken) {
       const recorded = recordResumeToken(
         this.store,
         current,

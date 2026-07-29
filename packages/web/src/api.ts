@@ -1,10 +1,13 @@
 import type {
+  AgentSteeringRequest,
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
   ApprovalView,
   ArtifactView,
   DeleteRunResponse,
   InvocationActivityView,
+  LifecycleRequest,
+  LifecycleResponse,
   PublishRunResponse,
   RunDetails,
   RunSummary,
@@ -22,6 +25,14 @@ export interface ReplayedEvent {
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function apiErrorMessage(value: unknown): string | undefined {
+  if (!isRecord(value) || !isRecord(value.error) || typeof value.error.message !== 'string') {
+    return undefined;
+  }
+  const message = value.error.message.trim();
+  return message || undefined;
 }
 
 function isRunSummary(value: unknown): value is RunSummary {
@@ -93,6 +104,10 @@ function isApprovalDecisionResponse(value: unknown): value is ApprovalDecisionRe
   );
 }
 
+function isLifecycleResponse(value: unknown): value is LifecycleResponse {
+  return isRecord(value) && typeof value.runId === 'string' && typeof value.status === 'string';
+}
+
 function isTicketListItem(value: unknown): value is TicketListItem {
   return (
     isRecord(value) &&
@@ -135,8 +150,16 @@ function isTicketProviderConfiguration(value: unknown): value is TicketProviderC
 }
 
 async function json(response: Response): Promise<unknown> {
-  if (!response.ok) throw new Error(`Kouro API request failed (${response.status})`);
-  return response.json();
+  const value: unknown = await response.json().catch(() => undefined);
+  if (!response.ok) {
+    const detail = apiErrorMessage(value);
+    throw new Error(
+      detail
+        ? `Kouro API request failed (${response.status}): ${detail}`
+        : `Kouro API request failed (${response.status})`,
+    );
+  }
+  return value;
 }
 
 export async function fetchRuns(): Promise<readonly RunSummary[]> {
@@ -277,6 +300,46 @@ export async function decideApproval(
   return value;
 }
 
+export async function controlRun(
+  runId: string,
+  action: 'pause' | 'resume' | 'cancel',
+  request: LifecycleRequest,
+): Promise<LifecycleResponse> {
+  const value = await json(
+    await fetch(`/api/runs/${encodeURIComponent(runId)}/${action}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(request),
+    }),
+  );
+  if (!isLifecycleResponse(value) || value.runId !== runId) {
+    throw new Error('Kouro API returned a malformed run control response');
+  }
+  return value;
+}
+
+export async function controlInvocation(
+  runId: string,
+  invocationSequence: number,
+  action: 'steer' | 'interrupt' | 'retry' | 'skip',
+  request: LifecycleRequest | AgentSteeringRequest,
+): Promise<LifecycleResponse> {
+  const value = await json(
+    await fetch(
+      `/api/runs/${encodeURIComponent(runId)}/invocations/${invocationSequence}/${action}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(request),
+      },
+    ),
+  );
+  if (!isLifecycleResponse(value) || value.runId !== runId) {
+    throw new Error('Kouro API returned a malformed invocation control response');
+  }
+  return value;
+}
+
 export function reconnectEvents(
   runId: string,
   after: number,
@@ -311,6 +374,9 @@ export function reconnectEvents(
     'attempt.failed',
     'attempt.interrupted',
     'attempt.interrupt_requested',
+    'agent.steering_requested',
+    'agent.steering_applied',
+    'agent.steering_rejected',
     'invocation.retry_requested',
     'invocation.skipped',
     'invocation.completed',

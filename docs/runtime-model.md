@@ -68,6 +68,15 @@ M7 lifecycle controls preserve these distinctions:
   actor, reason, workflow, artifact set, and repository HEAD;
 - cancellation is terminal.
 
+Live agent control preserves the same durable boundary:
+
+- steering is first recorded against the exact active invocation and attempt;
+- the active harness forwards it to the provider turn and records applied or
+  rejected delivery;
+- interruption is first recorded, then forwarded to the provider turn;
+- neither operation lets the provider schedule nodes, alter graph structure,
+  increase limits, or bypass approvals.
+
 ## Event ordering
 
 Events are supplied in strictly increasing sequence order. Reduction fails with

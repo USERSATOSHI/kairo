@@ -102,6 +102,8 @@ export class AgentExecutor {
               this.observeActivity(() => this.activity?.append(activitySession, chunk)),
           }
         : {}),
+      ...(input.onResumeToken ? { onResumeToken: input.onResumeToken } : {}),
+      ...(input.controls ? { controls: input.controls } : {}),
     };
     const execution = await (async () => {
       try {

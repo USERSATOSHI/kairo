@@ -223,11 +223,17 @@ export function createKouroApp(services: ApiServices) {
         params: t.Object({
           runId: t.String(),
           invocationSequence: t.String(),
-          action: t.Union([t.Literal('interrupt'), t.Literal('retry'), t.Literal('skip')]),
+          action: t.Union([
+            t.Literal('interrupt'),
+            t.Literal('retry'),
+            t.Literal('skip'),
+            t.Literal('steer'),
+          ]),
         }),
         body: t.Object({
           actor: t.String({ minLength: 1 }),
-          reason: t.String({ minLength: 1 }),
+          reason: t.Optional(t.String({ minLength: 1 })),
+          message: t.Optional(t.String({ minLength: 1 })),
           idempotencyKey: t.String({ minLength: 1 }),
         }),
       },

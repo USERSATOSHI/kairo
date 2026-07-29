@@ -84,3 +84,6 @@ These invariants are the acceptance boundary for the deterministic simulator.
     invocation, artifacts, selected outcome, and repository HEAD.
 43. A local run snapshots its ADW, harness order, permissions, repository,
     worktree, delivery branch, and operator before execution.
+44. Agent steering binds to one active invocation and attempt, is recorded
+    before delivery, and never changes graph structure, permissions, limits, or
+    scheduler counters.

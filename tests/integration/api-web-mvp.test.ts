@@ -33,7 +33,12 @@ function approvalWorkflow(): WorkflowSourceBundle {
     semanticVersions: { compiler: '0.1.0', ir: '1', expressions: '1' },
     entryNodeId: 'approve',
     nodes: [
-      { id: 'approve', type: 'approval', title: 'Ship the change' },
+      {
+        id: 'approve',
+        type: 'approval',
+        title: 'Ship the change',
+        skipOutcome: 'rejected',
+      },
       { id: 'complete', type: 'complete' },
       { id: 'failed', type: 'complete', result: 'failed' },
     ],
@@ -174,7 +179,11 @@ describe('M6 observable Elysia and web MVP', () => {
     expect(await responseJson(runResponse)).toEqual(
       expect.objectContaining({
         nodes: expect.arrayContaining([
-          expect.objectContaining({ id: 'approve', latestState: 'waiting_for_approval' }),
+          expect.objectContaining({
+            id: 'approve',
+            latestState: 'waiting_for_approval',
+            skipOutcome: 'rejected',
+          }),
         ]),
         edges: expect.arrayContaining([
           expect.objectContaining({ id: 'approve.approved.complete' }),

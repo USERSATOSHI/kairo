@@ -280,6 +280,26 @@ function isRunEvent(value: unknown): value is RunEvent {
         typeof value.actor === 'string' &&
         typeof value.reason === 'string'
       );
+    case 'agent.steering_requested':
+      return (
+        hasNumber(value, 'invocationSequence') &&
+        hasNumber(value, 'attemptNumber') &&
+        typeof value.actor === 'string' &&
+        typeof value.message === 'string'
+      );
+    case 'agent.steering_applied':
+      return (
+        hasNumber(value, 'invocationSequence') &&
+        hasNumber(value, 'attemptNumber') &&
+        hasNumber(value, 'requestSequence')
+      );
+    case 'agent.steering_rejected':
+      return (
+        hasNumber(value, 'invocationSequence') &&
+        hasNumber(value, 'attemptNumber') &&
+        hasNumber(value, 'requestSequence') &&
+        typeof value.reason === 'string'
+      );
     case 'invocation.retry_requested':
       return (
         hasNumber(value, 'invocationSequence') &&

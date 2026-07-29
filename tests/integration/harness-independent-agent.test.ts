@@ -16,18 +16,24 @@ import {
   type AgentHarness,
   type CommandRunner,
   type CommandRunnerError,
+  type HarnessExecutionRequest,
 } from '@kouro/executors';
 import {
   BunProcessRunner,
+  type ClaudeAgentSdk,
   ClaudeCodeHarness,
+  type CodexAppServerMessage,
+  type CodexAppServerTransport,
+  type CodexAppServerTransportFactory,
   CodexHarness,
   HarnessRegistry,
   LocalArtifactWriter,
+  type OpenCodeAgentSdk,
   OpenCodeHarness,
+  type PiAgentSdk,
+  type PiSdkSession,
   PiHarness,
   ScriptedFakeHarness,
-  type ProcessOutput,
-  type ProcessRunner,
 } from '@kouro/harnesses';
 import { SqliteEventStore } from '@kouro/persistence-sqlite';
 import { err, ok, type Result } from '@usersatoshi/results';
@@ -38,24 +44,171 @@ class UnusedCommandRunner implements CommandRunner {
   }
 }
 
-class ScriptedProcessRunner implements ProcessRunner {
+class ScriptedCodexAppServerFactory implements CodexAppServerTransportFactory {
+  readonly calls: { readonly method: string; readonly params: unknown }[] = [];
+
+  constructor(
+    private readonly output: unknown,
+    private readonly threadId = 'codex-session',
+  ) {}
+
+  open(): Promise<Result<CodexAppServerTransport, never>> {
+    const listeners = new Set<(message: CodexAppServerMessage) => void>();
+    const transcript: string[] = [];
+    const emit = (message: CodexAppServerMessage): void => {
+      transcript.push(JSON.stringify(message));
+      for (const listener of listeners) listener(message);
+    };
+    return Promise.resolve(
+      ok({
+        request: (method: string, params: unknown) => {
+          this.calls.push({ method, params });
+          if (method === 'thread/start' || method === 'thread/resume') {
+            return Promise.resolve(ok({ thread: { id: this.threadId } }));
+          }
+          if (method === 'turn/start') {
+            queueMicrotask(() =>
+              emit({
+                method: 'turn/completed',
+                params: {
+                  turn: {
+                    id: 'codex-turn',
+                    status: 'completed',
+                    items: [
+                      {
+                        type: 'agentMessage',
+                        text: JSON.stringify(this.output),
+                      },
+                    ],
+                  },
+                },
+              }),
+            );
+            return Promise.resolve(ok({ turn: { id: 'codex-turn' } }));
+          }
+          return Promise.resolve(ok({}));
+        },
+        notify: (method: string, params: unknown) => {
+          this.calls.push({ method, params });
+        },
+        respond: () => undefined,
+        subscribe: (listener: (message: CodexAppServerMessage) => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+        transcript: () => transcript.join('\n'),
+        dispose: () => Promise.resolve(),
+      }),
+    );
+  }
+}
+
+class ScriptedClaudeSdk implements ClaudeAgentSdk {
+  readonly calls: { readonly options: Readonly<Record<string, unknown>> }[] = [];
+
+  constructor(
+    private readonly output: unknown,
+    private readonly sessionId = 'claude-session',
+  ) {}
+
+  query(
+    input: Parameters<ClaudeAgentSdk['query']>[0],
+    options: Parameters<ClaudeAgentSdk['query']>[1],
+  ) {
+    this.calls.push({ options });
+    const output = this.output;
+    const sessionId = this.sessionId;
+    return {
+      async *[Symbol.asyncIterator]() {
+        for await (const message of input) {
+          void message;
+          break;
+        }
+        yield {
+          type: 'result',
+          subtype: 'success',
+          result: JSON.stringify(output),
+          structured_output: output,
+          session_id: sessionId,
+        };
+      },
+      interrupt: () => Promise.resolve(),
+      close: () => undefined,
+    };
+  }
+}
+
+class ScriptedOpenCodeSdk implements OpenCodeAgentSdk {
   readonly calls: {
-    readonly command: string;
-    readonly args: readonly string[];
-    readonly workingDirectory: string;
+    readonly request: HarnessExecutionRequest;
+    readonly resumeToken?: string;
   }[] = [];
 
-  constructor(private readonly outputs: readonly ProcessOutput[]) {}
+  constructor(
+    private readonly output: unknown,
+    private readonly sessionId = 'opencode-session',
+  ) {}
 
-  run(
-    command: string,
-    args: readonly string[],
-    workingDirectory: string,
-  ): Promise<Result<ProcessOutput, never>> {
-    this.calls.push({ command, args, workingDirectory });
-    const output = this.outputs[this.calls.length - 1];
-    if (!output) throw new Error(`No process result scripted for ${command}`);
-    return Promise.resolve(ok(output));
+  create(
+    request: HarnessExecutionRequest,
+    resumeToken?: string,
+  ): Promise<{
+    readonly sessionId: string;
+    prompt(text: string): Promise<void>;
+    steer(text: string): Promise<void>;
+    interrupt(): Promise<void>;
+    messages(): Promise<readonly unknown[]>;
+    subscribe(listener: (event: unknown) => Promise<void>): Promise<() => Promise<void>>;
+    close(): void;
+  }> {
+    this.calls.push({ request, ...(resumeToken ? { resumeToken } : {}) });
+    return Promise.resolve({
+      sessionId: this.sessionId,
+      prompt: () => Promise.resolve(),
+      steer: () => Promise.resolve(),
+      interrupt: () => Promise.resolve(),
+      messages: () =>
+        Promise.resolve([
+          {
+            type: 'assistant',
+            structured: this.output,
+            content: [{ type: 'text', text: JSON.stringify(this.output) }],
+          },
+        ]),
+      subscribe: () => Promise.resolve(() => Promise.resolve()),
+      close: () => undefined,
+    });
+  }
+}
+
+class ScriptedPiSdk implements PiAgentSdk {
+  readonly calls: {
+    readonly request: HarnessExecutionRequest;
+    readonly resumeToken?: string;
+  }[] = [];
+
+  constructor(
+    private readonly output: unknown,
+    private readonly sessionId = 'pi-session',
+  ) {}
+
+  create(request: HarnessExecutionRequest, resumeToken?: string): Promise<PiSdkSession> {
+    this.calls.push({ request, ...(resumeToken ? { resumeToken } : {}) });
+    return Promise.resolve({
+      sessionId: this.sessionId,
+      sessionFile: `/sessions/${this.sessionId}.jsonl`,
+      messages: [
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: JSON.stringify(this.output) }],
+        },
+      ],
+      prompt: () => Promise.resolve(),
+      steer: () => Promise.resolve(),
+      abort: () => Promise.resolve(),
+      subscribe: () => () => undefined,
+      dispose: () => undefined,
+    });
   }
 }
 
@@ -396,118 +549,50 @@ describe('M4 harness-independent agent execution', () => {
 
   test('the same compiled ADW completes through all supported harness adapters', async () => {
     const output = { summary: 'Plan', steps: ['Inspect', 'Implement'] };
-    const claudeRunner = new ScriptedProcessRunner([
-      {
-        exitCode: 0,
-        stdout: JSON.stringify({
-          is_error: false,
-          structured_output: output,
-          session_id: 'claude-session',
-        }),
-        stderr: '',
-      },
-    ]);
-    const codexRunner = new ScriptedProcessRunner([
-      {
-        exitCode: 0,
-        stdout: [
-          JSON.stringify({ type: 'thread.started', thread_id: 'codex-session' }),
-          JSON.stringify({
-            type: 'item.completed',
-            item: { type: 'agent_message', text: JSON.stringify(output) },
-          }),
-        ].join('\n'),
-        stderr: '',
-      },
-    ]);
-    const openCodeRunner = new ScriptedProcessRunner([
-      {
-        exitCode: 0,
-        stdout: [
-          JSON.stringify({
-            type: 'step_start',
-            sessionID: 'opencode-session',
-            part: { type: 'step-start' },
-          }),
-          JSON.stringify({
-            type: 'text',
-            sessionID: 'opencode-session',
-            part: { type: 'text', text: JSON.stringify(output) },
-          }),
-        ].join('\n'),
-        stderr: '',
-      },
-    ]);
-    const piRunner = new ScriptedProcessRunner([
-      {
-        exitCode: 0,
-        stdout: [
-          JSON.stringify({ type: 'session', version: 3, id: 'pi-session' }),
-          JSON.stringify({
-            type: 'message_end',
-            message: {
-              role: 'assistant',
-              content: [{ type: 'text', text: JSON.stringify(output) }],
-              stopReason: 'stop',
-            },
-          }),
-        ].join('\n'),
-        stderr: '',
-      },
-    ]);
+    const claudeSdk = new ScriptedClaudeSdk(output);
+    const codexRunner = new ScriptedCodexAppServerFactory(output);
+    const openCodeSdk = new ScriptedOpenCodeSdk(output);
+    const piSdk = new ScriptedPiSdk(output);
 
-    const claude = await runAdapter(new ClaudeCodeHarness(claudeRunner), 'claude-run');
+    const claude = await runAdapter(new ClaudeCodeHarness(claudeSdk), 'claude-run');
     const codex = await runAdapter(new CodexHarness(codexRunner), 'codex-run');
-    const openCode = await runAdapter(new OpenCodeHarness(openCodeRunner), 'opencode-run');
-    const pi = await runAdapter(new PiHarness(piRunner), 'pi-run');
+    const openCode = await runAdapter(new OpenCodeHarness(openCodeSdk), 'opencode-run');
+    const pi = await runAdapter(new PiHarness(piSdk), 'pi-run');
 
     for (const result of [claude, codex, openCode, pi]) {
       expect(result.unwrap().state.status).toBe('succeeded');
       expect(result.unwrap().state.invocations[0]?.output).toEqual(output);
       expect(result.unwrap().state.invocations[0]?.attempts[0]?.artifacts).toHaveLength(2);
     }
-    expect(claudeRunner.calls[0]?.args).toContain('--json-schema');
-    expect(claudeRunner.calls[0]?.args).toContain('claude-model');
-    expect(codexRunner.calls[0]?.args).toContain('--output-schema');
-    expect(codexRunner.calls[0]?.args).toContain('codex-model');
-    expect(openCodeRunner.calls[0]?.args).toContain('plan');
-    expect(openCodeRunner.calls[0]?.args).toContain('provider/opencode-model');
-    expect(openCodeRunner.calls[0]?.args.at(-1)).toContain('Return only JSON matching this schema');
-    expect(piRunner.calls[0]?.args).toContain('read,grep,find,ls');
-    expect(piRunner.calls[0]?.args).toContain('provider/pi-model');
-    expect(piRunner.calls[0]?.args.at(-1)).toContain('Return only JSON matching this schema');
+    expect(claude.unwrap().state.invocations[0]?.attempts[0]?.resumeToken).toBe('claude-session');
+    expect(codex.unwrap().state.invocations[0]?.attempts[0]?.resumeToken).toBe('codex-session');
+    expect(openCode.unwrap().state.invocations[0]?.attempts[0]?.resumeToken).toBe(
+      'opencode-session',
+    );
+    expect(pi.unwrap().state.invocations[0]?.attempts[0]?.resumeToken).toBe(
+      '/sessions/pi-session.jsonl',
+    );
+    expect(claudeSdk.calls[0]?.options).toMatchObject({
+      model: 'claude-model',
+      outputFormat: { type: 'json_schema' },
+      tools: ['Read', 'Glob', 'Grep'],
+    });
+    expect(codexRunner.calls.map(({ method }) => method)).toContain('turn/start');
+    expect(codexRunner.calls.find(({ method }) => method === 'turn/start')?.params).toMatchObject({
+      model: 'codex-model',
+      outputSchema: expect.any(Object),
+      sandboxPolicy: { type: 'readOnly', networkAccess: false },
+    });
+    expect(openCodeSdk.calls[0]?.request.model).toBe('provider/opencode-model');
+    expect(openCodeSdk.calls[0]?.request.outputSchema).toBeDefined();
+    expect(piSdk.calls[0]?.request.capabilities).toEqual(['repository.read']);
+    expect(piSdk.calls[0]?.request.model).toBe('provider/pi-model');
   });
 
   test('OpenCode and Pi resume the exact recorded session', async () => {
     const output = { summary: 'Resumed', steps: ['Finish'] };
-    const openCodeRunner = new ScriptedProcessRunner([
-      {
-        exitCode: 0,
-        stdout: JSON.stringify({
-          type: 'text',
-          sessionID: 'opencode-session',
-          part: { type: 'text', text: JSON.stringify(output) },
-        }),
-        stderr: '',
-      },
-    ]);
-    const piRunner = new ScriptedProcessRunner([
-      {
-        exitCode: 0,
-        stdout: [
-          JSON.stringify({ type: 'session', version: 3, id: 'pi-session' }),
-          JSON.stringify({
-            type: 'message_end',
-            message: {
-              role: 'assistant',
-              content: [{ type: 'text', text: JSON.stringify(output) }],
-              stopReason: 'stop',
-            },
-          }),
-        ].join('\n'),
-        stderr: '',
-      },
-    ]);
+    const openCodeSdk = new ScriptedOpenCodeSdk(output);
+    const piSdk = new ScriptedPiSdk(output);
     const request = {
       runId: 'resume-adapters',
       invocationSequence: 1,
@@ -520,68 +605,28 @@ describe('M4 harness-independent agent execution', () => {
     };
 
     expect(
-      (await new OpenCodeHarness(openCodeRunner).resume(request, 'opencode-session')).unwrap()
-        .output,
+      (await new OpenCodeHarness(openCodeSdk).resume(request, 'opencode-session')).unwrap().output,
     ).toEqual(output);
-    expect((await new PiHarness(piRunner).resume(request, 'pi-session')).unwrap().output).toEqual(
+    expect((await new PiHarness(piSdk).resume(request, 'pi-session')).unwrap().output).toEqual(
       output,
     );
-    expect(openCodeRunner.calls[0]?.args).toEqual([
-      'run',
-      '--format',
-      'json',
-      '--pure',
-      '--session',
-      'opencode-session',
-      '--agent',
-      'build',
-      '--model',
-      'provider/resume-model',
-      expect.any(String),
-    ]);
-    expect(piRunner.calls[0]?.args).toEqual([
-      '--mode',
-      'json',
-      '--session',
-      'pi-session',
-      '--approve',
-      '--no-skills',
-      '--no-prompt-templates',
-      '--no-themes',
-      '--tools',
-      'read,grep,find,ls,edit,write,bash',
-      '--model',
-      'provider/resume-model',
-      expect.any(String),
-    ]);
+    expect(openCodeSdk.calls[0]).toMatchObject({
+      resumeToken: 'opencode-session',
+      request: { model: 'provider/resume-model' },
+    });
+    expect(piSdk.calls[0]).toMatchObject({
+      resumeToken: 'pi-session',
+      request: {
+        capabilities: ['repository.read', 'repository.write', 'terminal.execute'],
+        model: 'provider/resume-model',
+      },
+    });
   });
 
   test('Claude Code and Codex preserve explicit models when resuming', async () => {
     const output = { summary: 'Resumed', steps: ['Finish'] };
-    const claudeRunner = new ScriptedProcessRunner([
-      {
-        exitCode: 0,
-        stdout: JSON.stringify({
-          is_error: false,
-          structured_output: output,
-          session_id: 'claude-session',
-        }),
-        stderr: '',
-      },
-    ]);
-    const codexRunner = new ScriptedProcessRunner([
-      {
-        exitCode: 0,
-        stdout: [
-          JSON.stringify({ type: 'thread.started', thread_id: 'codex-session' }),
-          JSON.stringify({
-            type: 'item.completed',
-            item: { type: 'agent_message', text: JSON.stringify(output) },
-          }),
-        ].join('\n'),
-        stderr: '',
-      },
-    ]);
+    const claudeSdk = new ScriptedClaudeSdk(output);
+    const codexRunner = new ScriptedCodexAppServerFactory(output);
     const request = {
       runId: 'resume-model-adapters',
       invocationSequence: 1,
@@ -594,7 +639,7 @@ describe('M4 harness-independent agent execution', () => {
 
     expect(
       (
-        await new ClaudeCodeHarness(claudeRunner).resume(
+        await new ClaudeCodeHarness(claudeSdk).resume(
           { ...request, model: 'claude-resume-model' },
           'claude-session',
         )
@@ -608,8 +653,19 @@ describe('M4 harness-independent agent execution', () => {
         )
       ).unwrap().output,
     ).toEqual(output);
-    expect(claudeRunner.calls[0]?.args).toContain('claude-resume-model');
-    expect(codexRunner.calls[0]?.args).toContain('codex-resume-model');
+    expect(claudeSdk.calls[0]?.options).toMatchObject({
+      model: 'claude-resume-model',
+      resume: 'claude-session',
+    });
+    expect(
+      codexRunner.calls.find(({ method }) => method === 'thread/resume')?.params,
+    ).toMatchObject({
+      threadId: 'codex-session',
+      model: 'codex-resume-model',
+    });
+    expect(codexRunner.calls.find(({ method }) => method === 'turn/start')?.params).toMatchObject({
+      model: 'codex-resume-model',
+    });
   });
 
   test('workflow pins override run routing and unpinned agents use node routes', async () => {

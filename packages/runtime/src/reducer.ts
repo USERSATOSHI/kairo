@@ -653,6 +653,92 @@ function reduceEvent(
     });
   }
 
+  if (event.type === 'agent.steering_requested') {
+    return replaceInvocation(state, event.invocationSequence, (invocation) => {
+      const definition = artifact.bundle.nodes.find(({ id }) => id === invocation.nodeId);
+      const attempt = invocation.attempts.at(-1);
+      if (
+        definition?.type !== 'agent' ||
+        invocation.state !== 'active' ||
+        !attempt ||
+        attempt.state !== 'running' ||
+        attempt.number !== event.attemptNumber ||
+        !event.actor.trim() ||
+        !event.message.trim()
+      ) {
+        return toRuntimeError(RuntimeErrorKind.IllegalStateTransition, {
+          entity: `attempt:${event.attemptNumber}`,
+          from: invocation.state,
+          event: event.type,
+        });
+      }
+      return ok({
+        ...invocation,
+        attempts: invocation.attempts.map((candidate) =>
+          candidate.number === attempt.number
+            ? {
+                ...candidate,
+                steering: [
+                  ...(candidate.steering ?? []),
+                  {
+                    requestSequence: event.sequence,
+                    actor: event.actor,
+                    message: event.message,
+                    state: 'pending' as const,
+                  },
+                ],
+              }
+            : candidate,
+        ),
+      });
+    });
+  }
+
+  if (event.type === 'agent.steering_applied' || event.type === 'agent.steering_rejected') {
+    return replaceInvocation(state, event.invocationSequence, (invocation) => {
+      const attempt = invocation.attempts.at(-1);
+      const steering = attempt?.steering?.find(
+        ({ requestSequence }) => requestSequence === event.requestSequence,
+      );
+      if (
+        !attempt ||
+        attempt.number !== event.attemptNumber ||
+        steering?.state !== 'pending' ||
+        (event.type === 'agent.steering_rejected' && !event.reason.trim())
+      ) {
+        return toRuntimeError(RuntimeErrorKind.IllegalStateTransition, {
+          entity: `steering:${event.requestSequence}`,
+          from: invocation.state,
+          event: event.type,
+        });
+      }
+      return ok({
+        ...invocation,
+        attempts: invocation.attempts.map((candidate) =>
+          candidate.number === attempt.number
+            ? {
+                ...candidate,
+                steering: candidate.steering?.map((request) =>
+                  request.requestSequence === event.requestSequence
+                    ? {
+                        ...request,
+                        state:
+                          event.type === 'agent.steering_applied'
+                            ? ('applied' as const)
+                            : ('rejected' as const),
+                        ...(event.type === 'agent.steering_rejected'
+                          ? { reason: event.reason }
+                          : {}),
+                      }
+                    : request,
+                ),
+              }
+            : candidate,
+        ),
+      });
+    });
+  }
+
   if (event.type === 'invocation.retry_requested') {
     return replaceInvocation(state, event.invocationSequence, (invocation) => {
       const definition = artifact.bundle.nodes.find(({ id }) => id === invocation.nodeId);

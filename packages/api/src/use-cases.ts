@@ -1,4 +1,5 @@
 import type {
+  AgentSteeringRequest,
   ApprovalDecisionRequest,
   ApprovalDecisionResponse,
   ApprovalView,
@@ -118,6 +119,8 @@ function workflowNodes(aggregate: RunAggregate): readonly WorkflowNodeView[] {
       title: node.title ?? node.id,
       ordinal: node.ordinal,
       invocations: invocations.map(({ sequence }) => sequence),
+      ...(node.recoveryPolicy ? { recoveryPolicy: node.recoveryPolicy } : {}),
+      ...(node.skipOutcome ? { skipOutcome: node.skipOutcome } : {}),
       ...(latest ? { latestState: latest.state } : {}),
     };
   });
@@ -561,18 +564,36 @@ export function controlInvocation(
   services: ApiServices,
   runId: string,
   invocationSequence: number,
-  action: 'interrupt' | 'retry' | 'skip',
-  request: LifecycleRequest,
+  action: 'interrupt' | 'retry' | 'skip' | 'steer',
+  request: LifecycleRequest | AgentSteeringRequest,
 ): Result<LifecycleResponse, ApiError> {
-  if (!request.actor.trim() || !request.reason?.trim() || !request.idempotencyKey.trim()) {
+  if (!request.actor.trim() || !request.idempotencyKey.trim()) {
     return apiErr(
       ApiErrorKind.InvalidInput,
       'invalid_lifecycle_request',
-      'actor, reason, and idempotencyKey are required',
+      'actor and idempotencyKey are required',
     );
   }
   const loaded = fromStore(services.runs.loadRun(runId));
   if (loaded.isErr()) return loaded;
+  if (action === 'steer') {
+    if (!('message' in request) || !request.message.trim()) {
+      return apiErr(ApiErrorKind.InvalidInput, 'invalid_steering_request', 'message is required');
+    }
+    const steered = services.coordinator.steerInvocation(
+      runId,
+      invocationSequence,
+      request.actor,
+      request.message,
+      request.idempotencyKey,
+    );
+    return steered.isErr()
+      ? apiErr(ApiErrorKind.Conflict, 'invocation_action_failed', 'Invocation could not be steered')
+      : ok({ runId, status: steered.unwrap().state.status });
+  }
+  if (!('reason' in request) || !request.reason?.trim()) {
+    return apiErr(ApiErrorKind.InvalidInput, 'invalid_lifecycle_request', 'reason is required');
+  }
   const result =
     action === 'interrupt'
       ? services.coordinator.interruptInvocation(

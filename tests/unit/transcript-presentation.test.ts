@@ -36,6 +36,25 @@ describe('transcript presentation', () => {
     ).toBe(current);
   });
 
+  test('selects a run-level delivery diff by its encoded invocation', () => {
+    const current: ArtifactView = {
+      id: '7:0:git_diff',
+      runId: 'run-1',
+      attemptNumber: 0,
+      kind: 'git_diff',
+      mediaType: 'text/x-diff',
+      checksum: 'sha256:7',
+      size: 7,
+    };
+
+    expect(
+      approvalDiffArtifact(
+        [gitDiffArtifact('6:0:git_diff', 6), current, gitDiffArtifact('8:0:git_diff', 8)],
+        7,
+      ),
+    ).toBe(current);
+  });
+
   test('shows user, reasoning, and agent messages', () => {
     const transcript = [
       JSON.stringify({

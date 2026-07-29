@@ -394,7 +394,7 @@ pre,
   display: grid;
   min-width: 0;
   min-height: 0;
-  grid-template-rows: auto minmax(180px, 1fr) var(--inspector-height);
+  grid-template-rows: auto minmax(180px, 1fr) var(--inspector-height) 24px;
   overflow: hidden;
   background: var(--canvas);
 }
@@ -452,6 +452,51 @@ pre,
   flex: 0 0 auto;
   align-items: center;
   gap: 12px;
+}
+
+.run-controls,
+.recovery-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.run-controls {
+  padding-right: 12px;
+  border-right: 1px solid var(--border);
+}
+
+.run-controls button,
+.recovery-actions button,
+.primary-button {
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #21262d;
+  padding: 6px 12px;
+  color: #c9d1d9;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.run-controls .primary-button,
+.primary-button {
+  border-color: #1f6feb;
+  background: #238636;
+  color: #fff;
+}
+
+.run-controls .danger-button,
+.recovery-actions .danger-button {
+  border-color: rgb(248 81 73 / 48%);
+  background: transparent;
+  color: #ff7b72;
+}
+
+.run-controls .primary-button:hover:not(:disabled),
+.primary-button:hover:not(:disabled) {
+  background: #2ea043;
 }
 
 .run-stat {
@@ -762,6 +807,180 @@ button:disabled {
   padding: 24px 28px 32px;
 }
 
+.operator-console {
+  display: grid;
+  grid-template-columns: minmax(360px, 1.35fr) minmax(280px, 0.65fr);
+  gap: 12px;
+}
+
+.control-target,
+.agent-session-card,
+.recovery-console {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--canvas-subtle);
+}
+
+.control-target {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 12px 16px;
+}
+
+.control-target > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.control-target strong,
+.control-target small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.control-target small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.control-target label,
+.recovery-console label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.control-target select,
+.recovery-console input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--canvas-inset);
+  padding: 8px 10px;
+  color: var(--text);
+}
+
+.agent-session-card,
+.recovery-console {
+  padding: 16px;
+}
+
+.agent-session-card {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.agent-session-card header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.agent-session-card h3 {
+  margin: 2px 0 0;
+  font-size: 14px;
+}
+
+.agent-session-card p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.session-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--border-muted);
+  padding-top: 12px;
+}
+
+.session-actions small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-live,
+.connection-idle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.connection-live::before,
+.connection-idle::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-subtle);
+  content: '';
+}
+
+.connection-live {
+  color: #56d364;
+}
+
+.connection-live::before {
+  background: var(--success);
+  box-shadow: 0 0 0 3px var(--success-muted);
+}
+
+.recovery-console {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.recovery-actions {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.recovery-actions button {
+  width: 100%;
+  text-align: left;
+}
+
+.ide-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  overflow: hidden;
+  background: #1f6feb;
+  padding: 0 12px;
+  color: #fff;
+  font-size: 10px;
+  line-height: 24px;
+  white-space: nowrap;
+}
+
+.ide-status-bar span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-spacer {
+  flex: 1 1 auto;
+}
+
 .empty,
 .loading {
   color: var(--text-muted);
@@ -1070,6 +1289,128 @@ button:disabled {
   min-height: 0;
   overflow: auto;
   padding: 20px;
+}
+
+.modal-content.agent-session-content {
+  overflow: hidden;
+  padding: 0;
+}
+
+.agent-session {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  grid-template-rows: minmax(0, 1fr) auto;
+  background:
+    radial-gradient(circle at 50% 0, rgb(56 139 253 / 6%), transparent 38%),
+    var(--canvas);
+}
+
+.agent-session-stream {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px clamp(16px, 3vw, 42px) 32px;
+  scroll-behavior: smooth;
+}
+
+.agent-session-stream .transcript-viewer {
+  width: min(920px, 100%);
+  margin: 0 auto;
+}
+
+.agent-composer {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  background: rgb(13 17 23 / 96%);
+  padding: 12px clamp(16px, 3vw, 42px) 14px;
+  box-shadow: 0 -12px 32px rgb(1 4 9 / 36%);
+}
+
+.agent-composer-status,
+.composer-hint,
+.composer-input {
+  width: min(920px, 100%);
+  margin: 0 auto;
+}
+
+.agent-composer-status,
+.composer-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.agent-composer-status small,
+.composer-hint small {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.composer-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  border: 1px solid #30363d;
+  border-radius: 10px;
+  background: #0d1117;
+  padding: 10px;
+  box-shadow: 0 8px 30px rgb(1 4 9 / 36%);
+}
+
+.composer-input:focus-within {
+  border-color: #388bfd;
+  box-shadow:
+    0 0 0 2px rgb(56 139 253 / 14%),
+    0 8px 30px rgb(1 4 9 / 36%);
+}
+
+.composer-input textarea {
+  min-height: 64px;
+  resize: none;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  padding: 2px 4px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.composer-input textarea::placeholder {
+  color: var(--text-subtle);
+}
+
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-actions button {
+  min-height: 34px;
+}
+
+.stop-button {
+  min-height: 32px;
+  border: 1px solid rgb(248 81 73 / 48%);
+  border-radius: var(--radius);
+  background: transparent;
+  padding: 6px 12px;
+  color: #ff7b72;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.composer-hint span {
+  color: #ff7b72;
+  font-size: 10px;
 }
 
 .approval-card {
@@ -2025,7 +2366,7 @@ button:disabled {
 
   .workspace {
     min-height: calc(100vh - 56px);
-    grid-template-rows: auto minmax(330px, 52vh) minmax(300px, auto) !important;
+    grid-template-rows: auto minmax(330px, 52vh) minmax(300px, auto) 24px !important;
     overflow: visible;
   }
 
@@ -2067,6 +2408,31 @@ button:disabled {
   .run-header-actions {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .operator-console {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .control-target {
+    grid-column: 1;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .control-target label {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .session-actions,
+  .agent-composer-status,
+  .composer-hint {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .session-actions button {
+    width: 100%;
   }
 
   .run-stat {
@@ -2159,6 +2525,26 @@ button:disabled {
 
   .modal-content {
     padding: 14px;
+  }
+
+  .modal-content.agent-session-content {
+    padding: 0;
+  }
+
+  .agent-session-stream {
+    padding: 16px 12px 24px;
+  }
+
+  .agent-composer {
+    padding: 10px 12px 12px;
+  }
+
+  .composer-input {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .composer-actions {
+    justify-content: flex-end;
   }
 
   .tool-results {
@@ -2255,6 +2641,18 @@ button:disabled {
     flex-direction: column;
   }
 
+  .run-controls {
+    width: 100%;
+    padding-right: 0;
+    padding-bottom: 10px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .run-controls button {
+    flex: 1 1 0;
+  }
+
   .graph-toolbar {
     right: 8px;
     flex-wrap: wrap;
@@ -2271,6 +2669,12 @@ button:disabled {
 
   .danger-button {
     width: 100%;
+  }
+
+  .ide-status-bar span:nth-child(3),
+  .ide-status-bar span:nth-child(4),
+  .ide-status-bar span:nth-child(6) {
+    display: none;
   }
 
   .approval-card dl {

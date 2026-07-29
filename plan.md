@@ -500,8 +500,8 @@ Deliver:
 - a `packages/cli/` package with a distributable `kouro` binary, stable help,
   version output, typed errors, and predictable local data/configuration paths;
 - commands to run a local ADW, list and inspect runs, approve or reject gates,
-  pause and resume scheduling, interrupt active attempts, request policy-eligible
-  retries or skips, and serve the local application;
+  pause and resume scheduling, steer or interrupt active attempts, request
+  policy-eligible retries or skips, and serve the local application;
 - a long-lived local application host that composes SQLite, worktrees, artifact
   storage, harnesses, the coordinator loop, API, and built web assets;
 - a worker loop that recovers active runs after restart and advances them until
@@ -530,6 +530,7 @@ kouro status <run-id>
 kouro approve <run-id> <invocation> --reason <text>
 kouro reject <run-id> <invocation> --reason <text>
 kouro pause|resume|cancel <run-id>
+kouro steer <run-id> <invocation> --message <text>
 kouro interrupt|retry|skip <run-id> <invocation> --reason <text>
 kouro serve
 ```

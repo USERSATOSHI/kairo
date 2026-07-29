@@ -14,6 +14,9 @@ export const enum SandboxErrorKind {
   TreeConflict = 10,
   LockTimeout = 11,
   CorruptMetadata = 12,
+  RuntimeUnavailable = 13,
+  BoundaryViolation = 14,
+  CommandFailure = 15,
 }
 
 export type SandboxError =
@@ -82,6 +85,23 @@ export type SandboxError =
   | {
       readonly kind: SandboxErrorKind.CorruptMetadata;
       readonly path: string;
+    }
+  | {
+      readonly kind: SandboxErrorKind.RuntimeUnavailable;
+      readonly runtime: string;
+      readonly message: string;
+    }
+  | {
+      readonly kind: SandboxErrorKind.BoundaryViolation;
+      readonly operation: 'read' | 'write' | 'execute';
+      readonly root: string;
+      readonly path: string;
+      readonly reason: string;
+    }
+  | {
+      readonly kind: SandboxErrorKind.CommandFailure;
+      readonly operation: string;
+      readonly message: string;
     };
 
 export function toErr<K extends SandboxError['kind']>(

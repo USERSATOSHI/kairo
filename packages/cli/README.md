@@ -55,6 +55,7 @@ bun run kouro resume <run-id>
 bun run kouro cancel <run-id> --reason "abandoned"
 
 # Invocation operations
+bun run kouro steer <run-id> <invocation> --message "preserve the public API"
 bun run kouro interrupt <run-id> <invocation> --reason "taking too long"
 bun run kouro retry <run-id> <invocation> --reason "transient error"
 bun run kouro skip <run-id> <invocation> --reason "not applicable"
@@ -69,6 +70,10 @@ bun run kouro serve [--port <number>] [--repo <path>]
 bun run kouro --help
 ```
 
+`steer` persists operator guidance before the worker forwards it to the exact
+active agent turn. `status` and the event stream show whether the runtime
+applied or rejected the request.
+
 ## Architecture
 
 ```
@@ -79,10 +84,10 @@ LocalKouroHost (local-host.ts)
   ├── SqliteEventStore (persistence-sqlite)
   ├── WorktreeSandboxProvider (sandbox-worktree)
   ├── HarnessRegistry (harnesses)
-  │   ├── CodexHarness
-  │   ├── ClaudeCodeHarness
-  │   ├── OpenCodeHarness
-  │   └── PiHarness
+  │   ├── CodexHarness (App Server)
+  │   ├── ClaudeCodeHarness (Claude Agent SDK)
+  │   ├── OpenCodeHarness (SDK + supervised server)
+  │   └── PiHarness (in-process AgentSession)
   ├── LocalArtifactWriter (harnesses)
   ├── TicketService + SQLite ticket stores
   ├── GitHubTicketProvider (when KOURO_GITHUB_* is configured)
@@ -281,11 +286,16 @@ remote command reports that its provider is not configured.
 
 ### `kouro diagnostics`
 
-Checks availability of agent harness binaries:
-- `codex` — OpenAI Codex CLI
-- `claude` — Anthropic Claude Code
-- `opencode` — OpenCode CLI
-- `pi` — Pi coding agent
+Checks availability of agent runtimes:
+
+- `codex` — OpenAI Codex App Server executable
+- `claude-code` — bundled Anthropic Claude Agent SDK
+- `opencode` — OpenCode SDK and required local server executable
+- `pi` — bundled in-process Pi SDK
+
+Codex and OpenCode executables are checked through `PATH`. Claude and Pi report
+available because their SDK runtimes ship with Kouro; authentication and model
+configuration are verified when an attempt starts.
 
 ## Local State (XDG Paths)
 
@@ -339,6 +349,10 @@ await host.dispose();
 5. **Approved finalization**: Verifies and commits only the prepared tree, then
    creates `kouro/<run-id>`. New custom ADWs without delivery review receive no
    implicit commit or branch.
+6. **Pull-request publication**: Requires the selected Git remote and remote
+   base branch to exist. Kouro pushes the reviewed `kouro/<run-id>` branch when
+   it is absent, then creates or reconciles the pull request; it does not add
+   repository remotes or publish the base branch implicitly.
 
 ## LocalWorker
 

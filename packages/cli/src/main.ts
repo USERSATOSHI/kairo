@@ -48,6 +48,7 @@ Runs:
   resume          Resume a paused run
   cancel          Cancel a run
   interrupt       Interrupt an active invocation
+  steer           Send guidance to an active agent invocation
   retry           Retry an interrupted invocation
   skip            Skip a policy-eligible invocation
 
@@ -109,6 +110,8 @@ The source repository and delivery branch are preserved.`,
   kouro pause|resume|cancel <run-id> [--reason <text>]`,
   interrupt: `Usage:
   kouro interrupt|retry|skip <run-id> <invocation> --reason <text>`,
+  steer: `Usage:
+  kouro steer <run-id> <invocation> --message <text>`,
   retry: `Usage:
   kouro interrupt|retry|skip <run-id> <invocation> --reason <text>`,
   skip: `Usage:
@@ -681,6 +684,17 @@ export async function runCli(args: readonly string[] = process.argv.slice(2)): P
       const stable =
         command === 'resume' ? await host.worker.runUntilStable(runId) : result.unwrap();
       print({ runId, status: stable.state.status });
+      return 0;
+    }
+    if (command === 'steer') {
+      const runId = required(args[1], 'run-id');
+      const invocation = Number(required(args[2], 'invocation'));
+      const message = required(option(args, '--message'), '--message');
+      const result = host
+        .coordinator()
+        .steerInvocation(runId, invocation, actor, message, `steer:${randomUUID()}`);
+      if (result.isErr()) throw new Error('steer failed');
+      print({ runId, status: result.unwrap().state.status });
       return 0;
     }
     if (['interrupt', 'retry', 'skip'].includes(command)) {

@@ -16,7 +16,9 @@ export interface WorkerClock {
 function stableBoundary(aggregate: RunAggregate): boolean {
   return (
     aggregate.state.status !== 'running' ||
-    aggregate.state.invocations.some(({ state }) => state === 'waiting_for_approval')
+    aggregate.state.invocations.some(
+      ({ state }) => state === 'waiting_for_approval' || state === 'interrupted',
+    )
   );
 }
 

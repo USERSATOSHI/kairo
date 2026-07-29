@@ -138,7 +138,7 @@ interface RunState {
 }
 ```
 
-## Event Types (20 Variants)
+## Event Types (23 Variants)
 
 The `RunEvent` discriminated union covers the full run lifecycle:
 
@@ -147,6 +147,7 @@ The `RunEvent` discriminated union covers the full run lifecycle:
 | Run lifecycle | `run.created`, `run.time_observed`, `run.paused`, `run.resumed`, `run.cancelled`, `run.completed` |
 | Invocation lifecycle | `invocation.activated`, `invocation.completed`, `invocation.skipped`, `invocation.retry_requested` |
 | Attempt lifecycle | `attempt.started`, `attempt.resumed`, `attempt.resume_token_recorded`, `attempt.artifact_published`, `attempt.failed`, `attempt.interrupted`, `attempt.interrupt_requested` |
+| Agent control | `agent.steering_requested`, `agent.steering_applied`, `agent.steering_rejected` |
 | Run artifacts | `run.artifact_published` |
 | Approval | `approval.requested`, `approval.granted`, `approval.rejected` |
 

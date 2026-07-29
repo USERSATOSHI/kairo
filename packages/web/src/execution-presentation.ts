@@ -58,6 +58,9 @@ export function approvalDiffArtifact(
 ): ArtifactView | undefined {
   return artifacts.find(
     (artifact) =>
-      artifact.kind === 'git_diff' && artifact.invocationSequence === invocationSequence,
+      artifact.kind === 'git_diff' &&
+      (artifact.invocationSequence === invocationSequence ||
+        (artifact.invocationSequence === undefined &&
+          artifact.id.startsWith(`${invocationSequence}:`))),
   );
 }

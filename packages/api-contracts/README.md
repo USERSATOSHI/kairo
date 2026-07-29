@@ -82,6 +82,8 @@ interface WorkflowNodeView {
   readonly title: string;
   readonly ordinal: number;
   readonly invocations: readonly number[];
+  readonly recoveryPolicy?: CompiledWorkflowBundle['nodes'][number]['recoveryPolicy'];
+  readonly skipOutcome?: string;
   readonly latestState?: RunState['invocations'][number]['state'];
 }
 
@@ -121,9 +123,15 @@ interface LifecycleResponse {
   readonly runId: string;
   readonly status: RunState['status'];
 }
+
+interface AgentSteeringRequest {
+  readonly actor: string;
+  readonly message: string;
+  readonly idempotencyKey: string;
+}
 ```
 
-All state-mutating operations (`createRun`, `pause`, `resume`, `cancel`, `interrupt`, `retry`, `skip`, `decideApproval`) require an `idempotencyKey` for at-least-once delivery semantics.
+All state-mutating operations (`createRun`, `pause`, `resume`, `cancel`, `steer`, `interrupt`, `retry`, `skip`, `decideApproval`) require an `idempotencyKey` for at-least-once delivery semantics.
 
 ### Approvals
 

@@ -3,7 +3,7 @@
 Kouro runs repeatable development workflows around coding agents, commands,
 Git worktrees, and human approvals.
 
-Give Kouro a workflow, a Git repository, and an installed coding-agent CLI. It
+Give Kouro a workflow, a Git repository, and an authenticated agent runtime. It
 creates an isolated worktree, runs the declared steps, pauses when a decision
 needs you, and produces a merge-ready `kouro/<run-id>` branch when the workflow
 finishes successfully.
@@ -12,11 +12,12 @@ finishes successfully.
 
 - [Bun](https://bun.sh/) 1.2 or newer
 - Git
-- At least one supported and authenticated coding-agent CLI:
-  - `codex`
-  - `claude`
-  - `opencode`
-  - `pi`
+- Authentication and provider configuration for at least one supported
+  runtime:
+  - Codex through the installed `codex` App Server
+  - Claude through the bundled Claude Agent SDK
+  - OpenCode through its SDK and installed `opencode` server binary
+  - Pi through the bundled in-process Pi SDK
 
 Kouro runs locally. Repository worktrees, run history, logs, and artifacts stay
 on your machine.
@@ -68,14 +69,16 @@ First, check which agent harnesses Kouro can use:
 kouro diagnostics
 ```
 
-The result reports whether each supported CLI is available:
+The result reports whether each supported runtime is available. Bundled
+in-process SDKs report available; Codex and OpenCode also require their local
+executables:
 
 ```json
 [
   { "id": "codex", "available": true },
-  { "id": "claude-code", "available": false },
+  { "id": "claude-code", "available": true },
   { "id": "opencode", "available": false },
-  { "id": "pi", "available": false }
+  { "id": "pi", "available": true }
 ]
 ```
 
@@ -325,10 +328,15 @@ Pausing is recoverable. Cancellation is terminal.
 ### Control an invocation
 
 ```bash
+kouro steer <run-id> <invocation> --message "Preserve the public API"
 kouro interrupt <run-id> <invocation> --reason "Taking too long"
 kouro retry <run-id> <invocation> --reason "Transient failure"
 kouro skip <run-id> <invocation> --reason "Not applicable"
 ```
+
+Steering is durably attached to the active agent attempt and delivered while
+its provider turn is running. The event history records whether the provider
+applied or rejected it.
 
 Skipping works only when the workflow explicitly declares that invocation as
 eligible to skip.
@@ -387,10 +395,9 @@ Run:
 kouro diagnostics
 ```
 
-Install the missing agent CLI, authenticate it using that tool's normal login
-flow, and retry with its Kouro harness ID. Note that the executable names and
-harness IDs differ for Claude Code: the executable is `claude`, while the
-harness ID is `claude-code`.
+Install the missing Codex or OpenCode executable, or configure authentication
+for the selected bundled SDK, then retry with its Kouro harness ID. Claude uses
+the `claude-code` harness ID; Pi uses `pi`.
 
 ### Kouro is waiting for approval
 

@@ -190,12 +190,21 @@ export interface AttemptFailure {
   readonly message: string;
 }
 
+export interface AgentSteeringRequest {
+  readonly requestSequence: number;
+  readonly actor: string;
+  readonly message: string;
+  readonly state: 'pending' | 'applied' | 'rejected';
+  readonly reason?: string;
+}
+
 export interface NodeAttempt {
   readonly number: number;
   readonly state: AttemptState;
   readonly harnessId?: string;
   readonly model?: string;
   readonly resumeToken?: string;
+  readonly steering?: readonly AgentSteeringRequest[];
   readonly artifacts?: readonly ArtifactReference[];
   readonly failure?: AttemptFailure;
 }
@@ -414,6 +423,29 @@ export type RunEvent =
       readonly invocationSequence: number;
       readonly attemptNumber: number;
       readonly actor: string;
+      readonly reason: string;
+    }
+  | {
+      readonly sequence: number;
+      readonly type: 'agent.steering_requested';
+      readonly invocationSequence: number;
+      readonly attemptNumber: number;
+      readonly actor: string;
+      readonly message: string;
+    }
+  | {
+      readonly sequence: number;
+      readonly type: 'agent.steering_applied';
+      readonly invocationSequence: number;
+      readonly attemptNumber: number;
+      readonly requestSequence: number;
+    }
+  | {
+      readonly sequence: number;
+      readonly type: 'agent.steering_rejected';
+      readonly invocationSequence: number;
+      readonly attemptNumber: number;
+      readonly requestSequence: number;
       readonly reason: string;
     }
   | {

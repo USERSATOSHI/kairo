@@ -42,6 +42,8 @@ import {
 } from 'react';
 
 import {
+  controlInvocation,
+  controlRun,
   decideApproval,
   deleteRun,
   fetchApprovals,
@@ -64,6 +66,10 @@ import {
   invocationDisplayState,
   invocationFailure,
 } from './execution-presentation.ts';
+import {
+  invocationControlAvailability,
+  preferredInvocationSequence,
+} from './execution-controls.ts';
 import { newIdempotencyKey } from './idempotency-key.ts';
 import {
   CodeViewer,
@@ -76,7 +82,7 @@ import {
   type TranscriptEntry,
 } from './transcript.ts';
 
-type Tab = 'details' | 'events' | 'artifacts' | 'approval';
+type Tab = 'control' | 'details' | 'events' | 'artifacts' | 'approval';
 type DiagramMode = 'flowchart' | 'graph';
 type DiagramDirection = 'TB' | 'LR';
 
@@ -437,6 +443,153 @@ function RunList({
   );
 }
 
+type InvocationAction = 'steer' | 'interrupt' | 'retry' | 'skip';
+
+function OperatorConsole({
+  activities,
+  busy,
+  run,
+  selectedNodeId,
+  onAction,
+  onOpenActivity,
+}: {
+  readonly activities: Readonly<Record<number, InvocationActivityView>>;
+  readonly busy: boolean;
+  readonly run: RunDetails;
+  readonly selectedNodeId: string | null;
+  readonly onAction: (
+    invocationSequence: number,
+    action: InvocationAction,
+    value: string,
+  ) => Promise<boolean>;
+  readonly onOpenActivity: (invocationSequence: number) => void;
+}) {
+  const preferred = preferredInvocationSequence(run, selectedNodeId);
+  const [invocationSequence, setInvocationSequence] = useState<number | null>(preferred);
+  const [reason, setReason] = useState('');
+  useEffect(() => setInvocationSequence(preferred), [preferred, run.id]);
+
+  const invocation =
+    run.state.invocations.find(({ sequence }) => sequence === invocationSequence) ??
+    run.state.invocations.at(-1);
+  const node = run.nodes.find(({ id }) => id === invocation?.nodeId);
+  const attempt = invocation?.attempts.at(-1);
+
+  async function submit(action: InvocationAction, value: string): Promise<void> {
+    if (!invocation || !value.trim()) return;
+    const completed = await onAction(invocation.sequence, action, value.trim());
+    if (!completed) return;
+    setReason('');
+  }
+
+  if (!invocation) {
+    return <p className="empty">No invocation is available to control yet.</p>;
+  }
+  const { steerable, interruptible, retryable, skippable } = invocationControlAvailability(
+    run,
+    invocation.sequence,
+  );
+  const activityAvailable = activities[invocation.sequence] !== undefined;
+
+  return (
+    <div className="operator-console">
+      <section className="control-target">
+        <div>
+          <span className="field-label">Target invocation</span>
+          <strong>{node?.title ?? invocation.nodeId}</strong>
+          <small>
+            {node?.type ?? 'node'} · attempt {attempt?.number ?? 'not started'}
+          </small>
+        </div>
+        <label>
+          Invocation
+          <select
+            onChange={(event) => setInvocationSequence(Number(event.target.value))}
+            value={invocation.sequence}
+          >
+            {run.state.invocations
+              .toReversed()
+              .map((candidate) => (
+                <option key={candidate.sequence} value={candidate.sequence}>
+                  #{candidate.sequence} · {candidate.nodeId} · {candidate.state}
+                </option>
+              ))}
+          </select>
+        </label>
+        <span className={stateClass(invocation.state)}>{invocation.state}</span>
+      </section>
+
+      <section className="agent-session-card">
+        <header>
+          <div>
+            <span className="field-label">Agent session</span>
+            <h3>{node?.type === 'agent' ? 'Follow and guide the active turn' : 'No agent turn'}</h3>
+          </div>
+          <span className={steerable ? 'connection-live' : 'connection-idle'}>
+            {steerable ? 'live' : invocation.state.replaceAll('_', ' ')}
+          </span>
+        </header>
+        <p>
+          Open the coding-agent session to watch reasoning, tool calls, and results while adding
+          steering in context.
+        </p>
+        <div className="session-actions">
+          <small>Invocation #{invocation.sequence} · {attempt?.harnessId ?? 'native'}</small>
+          <button
+            className="primary-button"
+            disabled={node?.type !== 'agent' || !activityAvailable || busy}
+            onClick={() => onOpenActivity(invocation.sequence)}
+            type="button"
+          >
+            {activityAvailable
+              ? steerable
+                ? 'Open live session'
+                : 'View agent session'
+              : 'Waiting for stream'}
+          </button>
+        </div>
+      </section>
+
+      <section className="recovery-console">
+        <label>
+          Operator reason
+          <input
+            disabled={busy}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="Required for interrupt, retry, or skip"
+            value={reason}
+          />
+        </label>
+        <div className="recovery-actions">
+          <button
+            className="danger-button"
+            disabled={!interruptible || busy || !reason.trim()}
+            onClick={() => void submit('interrupt', reason)}
+            type="button"
+          >
+            Interrupt attempt
+          </button>
+          <button
+            disabled={!retryable || busy || !reason.trim()}
+            onClick={() => void submit('retry', reason)}
+            type="button"
+          >
+            Retry invocation
+          </button>
+          <button
+            disabled={!skippable || busy || !reason.trim()}
+            onClick={() => void submit('skip', reason)}
+            title={node?.skipOutcome ? `Select outcome ${node.skipOutcome}` : 'Node is not skippable'}
+            type="button"
+          >
+            Skip{node?.skipOutcome ? ` → ${node.skipOutcome}` : ''}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function NodeDetails({
   node,
   run,
@@ -744,11 +897,13 @@ function InspectorModal({
   title,
   metadata,
   onClose,
+  contentClassName,
   children,
 }: {
   readonly title: string;
   readonly metadata: string;
   readonly onClose: () => void;
+  readonly contentClassName?: string;
   readonly children: ReactNode;
 }) {
   useEffect(() => {
@@ -776,7 +931,9 @@ function InspectorModal({
             ×
           </button>
         </header>
-        <div className="modal-content">{children}</div>
+        <div className={`modal-content${contentClassName ? ` ${contentClassName}` : ''}`}>
+          {children}
+        </div>
       </section>
     </div>
   );
@@ -784,18 +941,119 @@ function InspectorModal({
 
 function ActivityModal({
   activity,
+  busy,
+  interruptible,
   onClose,
+  onAction,
+  steerable,
 }: {
   readonly activity: InvocationActivityView;
+  readonly busy: boolean;
+  readonly interruptible: boolean;
   readonly onClose: () => void;
+  readonly onAction: (action: 'steer' | 'interrupt', value: string) => Promise<boolean>;
+  readonly steerable: boolean;
 }) {
+  const [message, setMessage] = useState('');
+  const [actionFailed, setActionFailed] = useState(false);
+  const streamRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
+
+  useEffect(() => {
+    const stream = streamRef.current;
+    if (stream && stickToBottomRef.current) stream.scrollTop = stream.scrollHeight;
+  }, [activity.transcript]);
+
+  async function submitSteering(): Promise<void> {
+    const value = message.trim();
+    if (!steerable || busy || !value) return;
+    setActionFailed(false);
+    const completed = await onAction('steer', value);
+    if (completed) setMessage('');
+    else setActionFailed(true);
+  }
+
+  async function interrupt(): Promise<void> {
+    if (!interruptible || busy) return;
+    setActionFailed(false);
+    const completed = await onAction(
+      'interrupt',
+      'Interrupted by the operator from the live agent session',
+    );
+    if (!completed) setActionFailed(true);
+  }
+
+  function handleComposerKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>): void {
+    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    void submitSteering();
+  }
+
   return (
     <InspectorModal
+      contentClassName="agent-session-content"
       metadata={`${activity.harnessId} · invocation ${activity.invocationSequence} · attempt ${activity.attemptNumber}`}
       onClose={onClose}
-      title={activity.complete ? 'Agent activity' : 'Agent activity · live'}
+      title={activity.complete ? 'Agent session' : 'Agent session · live'}
     >
-      <TranscriptViewer content={activity.transcript} userPrompt={activity.prompt} />
+      <div className="agent-session">
+        <div
+          className="agent-session-stream"
+          onScroll={(event) => {
+            const stream = event.currentTarget;
+            stickToBottomRef.current =
+              stream.scrollHeight - stream.scrollTop - stream.clientHeight < 80;
+          }}
+          ref={streamRef}
+        >
+          <TranscriptViewer content={activity.transcript} userPrompt={activity.prompt} />
+        </div>
+        <footer className="agent-composer">
+          <div className="agent-composer-status">
+            <span className={steerable ? 'connection-live' : 'connection-idle'}>
+              {steerable ? 'ready for steering' : activity.complete ? 'turn complete' : 'read only'}
+            </span>
+            <small>Steering is durably bound to invocation {activity.invocationSequence}.</small>
+          </div>
+          <div className="composer-input">
+            <textarea
+              aria-label="Steering message"
+              disabled={!steerable || busy}
+              onChange={(event) => setMessage(event.target.value)}
+              onKeyDown={handleComposerKeyDown}
+              placeholder={
+                steerable
+                  ? 'Add direction while the agent works…'
+                  : 'This agent turn is not currently steerable.'
+              }
+              rows={3}
+              value={message}
+            />
+            <div className="composer-actions">
+              <button
+                className="stop-button"
+                disabled={!interruptible || busy}
+                onClick={() => void interrupt()}
+                type="button"
+              >
+                Stop
+              </button>
+              <button
+                className="primary-button"
+                disabled={!steerable || busy || !message.trim()}
+                onClick={() => void submitSteering()}
+                type="button"
+              >
+                Send
+              </button>
+            </div>
+          </div>
+          <div className="composer-hint">
+            <small>Enter to send · Shift+Enter for a new line</small>
+            {actionFailed ? <span>Control request failed. Check the run status and retry.</span> : null}
+          </div>
+        </footer>
+      </div>
     </InspectorModal>
   );
 }
@@ -1069,10 +1327,20 @@ function ApprovalControl({
 }
 
 const autoRefreshEvents = new Set([
+  'run.cancelled',
+  'invocation.activated',
   'attempt.started',
   'attempt.resumed',
+  'attempt.resume_token_recorded',
   'attempt.artifact_published',
   'attempt.failed',
+  'attempt.interrupt_requested',
+  'attempt.interrupted',
+  'agent.steering_requested',
+  'agent.steering_applied',
+  'agent.steering_rejected',
+  'invocation.retry_requested',
+  'invocation.skipped',
   'invocation.completed',
   'run.completed',
   'run.paused',
@@ -1267,6 +1535,75 @@ function ExecutionConsole() {
   const activeActivity =
     activeActivitySequence === null ? undefined : activities[activeActivitySequence];
 
+  async function refreshExecution(runId: string): Promise<void> {
+    const [nextRun, nextArtifacts, nextApprovals, nextRuns] = await Promise.all([
+      fetchRun(runId),
+      fetchArtifacts(runId),
+      fetchApprovals(runId),
+      fetchRuns(),
+    ]);
+    setRun(nextRun);
+    setArtifacts(nextArtifacts);
+    setApprovals(nextApprovals);
+    setRuns(nextRuns);
+  }
+
+  async function submitRunAction(
+    action: 'pause' | 'resume' | 'cancel',
+    reason?: string,
+  ): Promise<void> {
+    if (!run) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await controlRun(run.id, action, {
+        actor: 'web-user',
+        ...(reason ? { reason } : {}),
+        idempotencyKey: newIdempotencyKey(),
+      });
+      await refreshExecution(run.id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : `Run could not be ${action}d`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitInvocationAction(
+    invocationSequence: number,
+    action: InvocationAction,
+    value: string,
+  ): Promise<boolean> {
+    if (!run) return false;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await controlInvocation(
+        run.id,
+        invocationSequence,
+        action,
+        action === 'steer'
+          ? {
+              actor: 'web-user',
+              message: value,
+              idempotencyKey: newIdempotencyKey(),
+            }
+          : {
+              actor: 'web-user',
+              reason: value,
+              idempotencyKey: newIdempotencyKey(),
+            },
+      );
+      await refreshExecution(run.id);
+      return true;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : `Invocation could not be ${action}ed`);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function openArtifact(artifact: ArtifactView): Promise<void> {
     if (!run) return;
     try {
@@ -1432,6 +1769,47 @@ function ExecutionConsole() {
                 <small className="repository-path">{run.repositoryPath}</small>
               </div>
               <div className="run-header-actions">
+                <div aria-label="Run controls" className="run-controls" role="group">
+                  {run.status === 'paused' ? (
+                    <button
+                      className="primary-button"
+                      disabled={busy}
+                      onClick={() => void submitRunAction('resume')}
+                      type="button"
+                    >
+                      Resume
+                    </button>
+                  ) : (
+                    <button
+                      disabled={
+                        busy ||
+                        !['running', 'waiting_for_approval'].includes(run.status)
+                      }
+                      onClick={() => void submitRunAction('pause')}
+                      type="button"
+                    >
+                      Pause
+                    </button>
+                  )}
+                  {!isTerminalRun(run) ? (
+                    <button
+                      className="danger-button"
+                      disabled={busy}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            `Cancel ${run.id}? The durable history and worktree will be retained.`,
+                          )
+                        ) {
+                          void submitRunAction('cancel', 'Cancelled from the web workspace');
+                        }
+                      }}
+                      type="button"
+                    >
+                      Cancel
+                    </button>
+                  ) : null}
+                </div>
                 <div className="run-stat">
                   <span className={stateClass(run.status)}>{run.status}</span>
                   <small>{run.eventCount} durable events</small>
@@ -1525,7 +1903,7 @@ function ExecutionConsole() {
                 <span />
               </div>
               <nav className="tabs">
-                {(['details', 'events', 'artifacts', 'approval'] as const).map((name) => (
+                {(['control', 'details', 'events', 'artifacts', 'approval'] as const).map((name) => (
                   <button
                     className={tab === name ? 'active' : ''}
                     key={name}
@@ -1540,6 +1918,16 @@ function ExecutionConsole() {
                 ))}
               </nav>
               <div className="panel">
+                {tab === 'control' ? (
+                  <OperatorConsole
+                    activities={activities}
+                    busy={busy}
+                    onAction={submitInvocationAction}
+                    onOpenActivity={(sequence) => void openActivity(sequence)}
+                    run={run}
+                    selectedNodeId={selectedNode}
+                  />
+                ) : null}
                 {tab === 'details' ? (
                   <NodeDetails
                     activities={activities}
@@ -1610,6 +1998,15 @@ function ExecutionConsole() {
                 ) : null}
               </div>
             </section>
+            <footer className="ide-status-bar">
+              <span>Kouro workspace</span>
+              <span>{repositoryName(run.repositoryPath)}</span>
+              <span>{run.workflowVersion}</span>
+              <span>{run.workflowChecksum.slice(0, 19)}…</span>
+              <span className="status-spacer" />
+              <span>{run.invocationCount} invocations</span>
+              <span>{run.pendingApprovalCount} approvals</span>
+            </footer>
           </>
         ) : (
           <div className="loading">Waiting for durable run state…</div>
@@ -1627,7 +2024,24 @@ function ExecutionConsole() {
         />
       ) : null}
       {activeActivity ? (
-        <ActivityModal activity={activeActivity} onClose={() => setActiveActivitySequence(null)} />
+        <ActivityModal
+          activity={activeActivity}
+          busy={busy}
+          interruptible={
+            run
+              ? invocationControlAvailability(run, activeActivity.invocationSequence).interruptible
+              : false
+          }
+          onAction={(action, value) =>
+            submitInvocationAction(activeActivity.invocationSequence, action, value)
+          }
+          onClose={() => setActiveActivitySequence(null)}
+          steerable={
+            run
+              ? invocationControlAvailability(run, activeActivity.invocationSequence).steerable
+              : false
+          }
+        />
       ) : null}
     </div>
   );

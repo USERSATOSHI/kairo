@@ -1044,11 +1044,12 @@ export class LocalKouroHost {
   }
 
   harnessDiagnostics(): readonly { id: string; available: boolean }[] {
+    const bubblewrap = Bun.which('bwrap') !== null;
     return [
       { id: 'codex', available: Bun.which('codex') !== null },
-      { id: 'claude-code', available: Bun.which('claude') !== null },
-      { id: 'opencode', available: Bun.which('opencode') !== null },
-      { id: 'pi', available: Bun.which('pi') !== null },
+      { id: 'claude-code', available: bubblewrap },
+      { id: 'opencode', available: Bun.which('opencode') !== null && bubblewrap },
+      { id: 'pi', available: bubblewrap },
     ];
   }
 

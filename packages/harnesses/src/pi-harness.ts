@@ -1,6 +1,12 @@
-import { randomUUID } from 'node:crypto';
-
-import { err, ok, safeCall, type Result } from '@usersatoshi/results';
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  getAgentDir,
+  ModelRuntime,
+  SessionManager,
+} from '@earendil-works/pi-coding-agent';
+import { BubblewrapAgentSandbox } from '@kouro/sandbox-worktree';
+import { err, fromAsync, ok, type Result } from '@usersatoshi/results';
 
 import type {
   AgentHarness,
@@ -9,8 +15,23 @@ import type {
   HarnessExecutionRequest,
 } from '@kouro/executors';
 import { invalidResponse, processFailure } from './errors.ts';
-import { BunProcessRunner, type ProcessRunner } from './process-runner.ts';
+import { createPiSandboxTools } from './pi-sandbox-tools.ts';
 import { parseHarnessOutput } from './structured-output.ts';
+
+export interface PiSdkSession {
+  readonly sessionId: string;
+  readonly sessionFile: string | undefined;
+  readonly messages: readonly unknown[];
+  prompt(text: string): Promise<void>;
+  steer(text: string): Promise<void>;
+  abort(): Promise<void>;
+  subscribe(listener: (event: unknown) => void): () => void;
+  dispose(): void;
+}
+
+export interface PiAgentSdk {
+  create(request: HarnessExecutionRequest, resumeToken?: string): Promise<PiSdkSession>;
+}
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -23,7 +44,7 @@ function promptFor(request: HarnessExecutionRequest): string {
   return `Role: ${request.role}\n\n${request.prompt}${schemaInstruction}`;
 }
 
-function toolsFor(capabilities: readonly string[]): string {
+function toolsFor(capabilities: readonly string[]): string[] {
   const tools = ['read', 'grep', 'find', 'ls'];
   if (capabilities.some((capability) => capability.includes('write'))) {
     tools.push('edit', 'write');
@@ -31,104 +52,173 @@ function toolsFor(capabilities: readonly string[]): string {
   if (capabilities.some((capability) => capability.includes('execute'))) {
     tools.push('bash');
   }
-  return tools.join(',');
+  return tools;
 }
 
-function textFromAssistantMessage(value: Readonly<Record<string, unknown>>): string | undefined {
-  if (value.role !== 'assistant' || !Array.isArray(value.content)) return undefined;
+async function sessionManagerFor(cwd: string, token?: string): Promise<SessionManager> {
+  if (!token) return SessionManager.create(cwd);
+  const matching = (await SessionManager.list(cwd)).find(
+    ({ id, path }) => id === token || path === token,
+  );
+  return SessionManager.open(matching?.path ?? token, undefined, cwd);
+}
+
+async function modelFor(
+  runtime: ModelRuntime,
+  requested?: string,
+): Promise<ReturnType<ModelRuntime['getModel']>> {
+  if (!requested) return undefined;
+  const separator = requested.indexOf('/');
+  if (separator >= 1) {
+    return runtime.getModel(requested.slice(0, separator), requested.slice(separator + 1));
+  }
+  return (await runtime.getAvailable()).find(({ id }) => id === requested);
+}
+
+const defaultSdk: PiAgentSdk = {
+  async create(request, resumeToken) {
+    const sandbox = new BubblewrapAgentSandbox();
+    const agentDir = getAgentDir();
+    const modelRuntime = await ModelRuntime.create();
+    const model = await modelFor(modelRuntime, request.model);
+    if (request.model && !model) throw new Error(`Pi model is unavailable: ${request.model}`);
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: request.workingDirectory,
+      agentDir,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+    });
+    await resourceLoader.reload();
+    const { session } = await createAgentSession({
+      cwd: request.workingDirectory,
+      modelRuntime,
+      ...(model ? { model } : {}),
+      tools: toolsFor(request.capabilities),
+      customTools: createPiSandboxTools(request.workingDirectory, request.capabilities, sandbox),
+      sessionManager: await sessionManagerFor(request.workingDirectory, resumeToken),
+      resourceLoader,
+    });
+    return session;
+  },
+};
+
+function assistantOutput(value: unknown): Result<string, HarnessError> | undefined {
+  if (!isRecord(value) || value.role !== 'assistant') return undefined;
+  if (value.stopReason === 'error' || value.stopReason === 'aborted') {
+    return err(
+      processFailure(
+        typeof value.errorMessage === 'string'
+          ? value.errorMessage
+          : `Pi request ${value.stopReason}`,
+      ),
+    );
+  }
+  if (!Array.isArray(value.content)) {
+    return err(processFailure('Pi SDK assistant message has no content'));
+  }
   const text = value.content
     .filter(isRecord)
     .filter((content) => content.type === 'text' && typeof content.text === 'string')
-    .map((content) => content.text)
+    .map((content) => String(content.text))
     .join('');
-  return text || undefined;
+  return text ? ok(text) : err(processFailure('Pi SDK returned no assistant text'));
 }
 
-function parseEvents(output: string): Result<HarnessExecution, HarnessError> {
-  let token: string | undefined;
-  let finalText: string | undefined;
-  for (const line of output.split('\n').filter(Boolean)) {
-    const parsed = safeCall(
-      () => JSON.parse(line) as unknown,
-      () => invalidResponse('Pi returned malformed JSONL', output),
-    );
-    if (parsed.isErr()) return parsed;
-    const event = parsed.unwrap();
-    if (!isRecord(event)) {
-      return err(invalidResponse('Pi returned a non-object JSONL event', output));
+async function applyControls(
+  request: HarnessExecutionRequest,
+  session: PiSdkSession,
+  stopped: () => boolean,
+): Promise<boolean> {
+  if (!request.controls) return false;
+  const handled = new Set<number>();
+  while (!stopped()) {
+    const controls = await request.controls.read();
+    for (const steering of controls.steering) {
+      if (handled.has(steering.requestSequence)) continue;
+      handled.add(steering.requestSequence);
+      try {
+        await session.steer(steering.message);
+        await request.controls.steeringApplied(steering.requestSequence);
+      } catch (cause) {
+        await request.controls.steeringRejected(
+          steering.requestSequence,
+          cause instanceof Error ? cause.message : 'Pi SDK rejected steering',
+        );
+      }
     }
-    if (event.type === 'session' && typeof event.id === 'string') token = event.id;
-    if (event.type !== 'message_end' || !isRecord(event.message)) continue;
-    if (
-      event.message.role === 'assistant' &&
-      (event.message.stopReason === 'error' || event.message.stopReason === 'aborted')
-    ) {
-      return err(
-        processFailure(
-          typeof event.message.errorMessage === 'string'
-            ? event.message.errorMessage
-            : `Pi request ${event.message.stopReason}`,
-        ),
-      );
+    if (controls.interruptRequested) {
+      await session.abort();
+      return true;
     }
-    finalText = textFromAssistantMessage(event.message) ?? finalText;
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
   }
-  if (!finalText) {
-    return err(invalidResponse('Pi response has no final assistant message', output));
-  }
-  return ok({
-    output: parseHarnessOutput(finalText),
-    transcript: output,
-    ...(token ? { resumeToken: token } : {}),
-  });
+  return false;
 }
 
-/** Runs agent requests through Pi's non-interactive JSON event stream. */
+/** Runs agent requests through Pi's in-process AgentSession SDK. */
 export class PiHarness implements AgentHarness {
   readonly id = 'pi';
 
-  constructor(private readonly runner: ProcessRunner = new BunProcessRunner()) {}
+  constructor(private readonly sdk: PiAgentSdk = defaultSdk) {}
 
   execute(request: HarnessExecutionRequest): Promise<Result<HarnessExecution, HarnessError>> {
-    return this.run(request, randomUUID(), '--session-id');
+    return this.run(request);
   }
 
   resume(
     request: HarnessExecutionRequest,
     token: string,
   ): Promise<Result<HarnessExecution, HarnessError>> {
-    return this.run(request, token, '--session');
+    return this.run(request, token);
   }
 
   private async run(
     request: HarnessExecutionRequest,
-    token: string,
-    sessionFlag: '--session' | '--session-id',
+    resumeToken?: string,
   ): Promise<Result<HarnessExecution, HarnessError>> {
-    const result = await this.runner.run(
-      'pi',
-      [
-        '--mode',
-        'json',
-        sessionFlag,
-        token,
-        '--approve',
-        '--no-skills',
-        '--no-prompt-templates',
-        '--no-themes',
-        '--tools',
-        toolsFor(request.capabilities),
-        ...(request.model ? ['--model', request.model] : []),
-        promptFor(request),
-      ],
-      request.workingDirectory,
-      request.onTranscriptChunk,
+    const created = await fromAsync(
+      () => this.sdk.create(request, resumeToken),
+      (cause) =>
+        processFailure(cause instanceof Error ? cause.message : 'Pi SDK session creation failed'),
     );
-    if (result.isErr()) return result;
-    const output = result.unwrap();
-    if (output.exitCode !== 0) {
-      return err(processFailure(output.stderr || `Pi exited ${output.exitCode}`));
+    if (created.isErr()) return created;
+    const session = created.unwrap();
+    const transcript: string[] = [];
+    const unsubscribe = session.subscribe((event) => {
+      const line = JSON.stringify(event);
+      transcript.push(line);
+      if (request.onTranscriptChunk) {
+        void request.onTranscriptChunk(`${line}\n`).catch(() => undefined);
+      }
+    });
+    const token = session.sessionFile ?? session.sessionId;
+    try {
+      if (!resumeToken && request.onResumeToken) await request.onResumeToken(token);
+      let stopped = false;
+      const controls = applyControls(request, session, () => stopped);
+      const prompted = await fromAsync(
+        () => session.prompt(promptFor(request)),
+        (cause) =>
+          processFailure(cause instanceof Error ? cause.message : 'Pi SDK execution failed'),
+      );
+      stopped = true;
+      const interrupted = await controls.catch(() => false);
+      if (interrupted) return err(processFailure('Pi SDK session was interrupted'));
+      if (prompted.isErr()) return prompted;
+      const finalOutput = session.messages.map(assistantOutput).filter(Boolean).at(-1);
+      if (!finalOutput) {
+        return err(invalidResponse('Pi SDK returned no assistant text', transcript.join('\n')));
+      }
+      if (finalOutput.isErr()) return finalOutput;
+      return ok({
+        output: parseHarnessOutput(finalOutput.unwrap()),
+        transcript: transcript.join('\n'),
+        resumeToken: token,
+      });
+    } finally {
+      unsubscribe();
+      session.dispose();
     }
-    return parseEvents(output.stdout);
   }
 }

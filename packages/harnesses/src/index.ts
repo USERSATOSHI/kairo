@@ -1,4 +1,5 @@
 export * from './claude-code-harness.ts';
+export * from './codex-app-server-transport.ts';
 export * from './codex-harness.ts';
 export * from './local-artifact-writer.ts';
 export * from './local-invocation-activity-store.ts';

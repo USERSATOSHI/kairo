@@ -4,19 +4,20 @@ Kouro's local ticket and execution dashboard, built with **React 19**, **Vite**,
 and **React Flow** (`@xyflow/react`). It displays a unified planning/execution
 Kanban, ticket histories and redacted provider configuration alongside runs,
 workflow graphs, durable events, artifacts, diffs, and artifact-bound approval
-controls. Active agent attempts expose a best-effort live activity view, and
-provider JSONL transcripts are presented as user, agent, reasoning, and
-call-ID-correlated tool exchanges in a large modal.
+controls. Active agent attempts expose a best-effort coding-agent session where
+provider streams are presented as user, agent, reasoning, and call-ID-correlated
+tool exchanges above in-context steering and stop controls.
 
 ## Design Constraints
 
-- **Read-only execution console** — The graph is not editable (`nodesConnectable={false}`, `nodesDraggable={false}`)
+- **Durable operator controls** — Pause, resume, cancel, steer, interrupt, retry, and policy-authorized skip call application endpoints with idempotency keys; the browser never mutates run state locally
+- **Read-only workflow graph** — Operator actions do not edit graph structure (`nodesConnectable={false}`, `nodesDraggable={false}`)
 - **Repository-scoped runs** — The serving application enforces the repository boundary before data reaches React
 - **Explicit terminal deletion** — A confirmed delete removes only terminal runs and Kouro-owned local data
 - **The browser cannot supply an approval binding** — Approvals are submitted by a human operator ("web-user") but cryptographic/state bindings happen server-side
 - **Live event replay** — Events are delivered via Server-Sent Events (SSE) with `lastEventId` tracking for resilient reconnection
 - **Live invocation activity** — Active harness stdout is polled through an ephemeral observation endpoint without changing durable orchestration history
-- **Readable transcript modal** — User prompts, agent messages, reasoning summaries, parallel tool calls, and their matching results replace raw JSONL
+- **Coding-agent session** — The live transcript modal keeps user prompts, agent messages, reasoning, tool calls, and results beside a sticky steering composer with send and stop controls
 - **Editor-style artifact preview** — Code, JSON, diffs, and command output use line numbers, language labels, and syntax-aware highlighting
 - **Review workspace** — Delivery approvals combine a changed-file navigator, editor-style bound diff, editable commit/PR metadata, and prominent decision controls
 - **Resizable inspector** — The execution inspector is a persistent bottom drawer that supports pointer dragging and keyboard resizing
@@ -47,10 +48,12 @@ App (root component)
 └── Workspace (main area)
     ├── Error banner (conditional)
     ├── Run Header
-    │   └── Workflow ID, run ID, status, event count
+    │   └── Workflow ID, run ID, pause/resume/cancel, status, event count
     ├── Graph (React Flow)
     │   └── Top-to-bottom flowchart with topology layers, typed shapes, outcomes, and selected-path emphasis
     └── Inspector (tabbed panel)
+        ├── "control" tab → OperatorConsole
+        │   └── Exact invocation selection, agent-session launcher, interrupt, retry, and declared skip
         ├── "details" tab → NodeDetails
         │   └── Node definition + invocations + attempts
         ├── "events" tab → EventLog
@@ -59,8 +62,10 @@ App (root component)
         │   └── Artifact list + content viewer
         └── "approval" tab → ApprovalControl
             └── Grant/reject with reason
-    └── Activity / artifact modal
-        └── Full-size readable transcript with call-ID-correlated tool results
+    └── IDE status bar
+        └── Repository, workflow checksum, invocation count, and approval count
+    └── Agent session / artifact modal
+        └── Full-size readable transcript with call-ID-correlated tool results and in-context steering
 ```
 
 ## Data Flow
@@ -73,6 +78,8 @@ App (root component)
 6. **Artifact click** → Content fetched on demand via `fetchArtifact()`
 7. **Approval action** → `decideApproval()` POSTs grant/reject; on success, run state and approvals are re-fetched
 8. **Active attempt** → `fetchInvocationActivity()` polls the worker's best-effort transcript while the durable attempt remains active
+9. **Run control** → `controlRun()` persists pause, resume, or cancel and refreshes the complete execution read model
+10. **Invocation control** → The Control tab opens the exact agent session; its transcript-adjacent composer and stop action call `controlInvocation()`, while retry and skip remain in the recovery surface
 
 ## API Client
 
@@ -85,6 +92,8 @@ import {
   fetchApprovals,
   fetchArtifacts,
   fetchArtifact,
+  controlRun,
+  controlInvocation,
   decideApproval,
   reconnectEvents,
 } from '@kouro/web/api';
@@ -94,6 +103,17 @@ const runs = await fetchRuns();
 
 // Get run details
 const details = await fetchRun('run-abc');
+
+await controlRun('run-abc', 'pause', {
+  actor: 'web-user',
+  idempotencyKey: 'web:pause:1',
+});
+
+await controlInvocation('run-abc', 3, 'steer', {
+  actor: 'web-user',
+  message: 'Preserve the public API and continue.',
+  idempotencyKey: 'web:steer:1',
+});
 
 // SSE event stream
 const close = reconnectEvents('run-abc', lastEventId, (event) => {
@@ -108,7 +128,7 @@ const close = reconnectEvents('run-abc', lastEventId, (event) => {
 
 - Run lifecycle: `run.created`, `run.paused`, `run.resumed`, `run.cancelled`, `run.completed`
 - Invocation lifecycle: `invocation.activated`, `invocation.completed`, `invocation.skipped`, `invocation.retry_requested`
-- Attempt lifecycle: `attempt.started`, `attempt.resumed`, `attempt.resume_token_recorded`, `attempt.artifact_published`, `attempt.failed`, `attempt.interrupted`, `attempt.interrupt_requested`
+- Attempt lifecycle: `attempt.started`, `attempt.resumed`, `attempt.resume_token_recorded`, `attempt.artifact_published`, `attempt.failed`, `attempt.interrupted`, `attempt.interrupt_requested`, `agent.steering_requested`, `agent.steering_applied`, `agent.steering_rejected`
 - Artifacts: `run.artifact_published`
 - Approval: `approval.requested`, `approval.granted`, `approval.rejected`
 
@@ -130,12 +150,12 @@ status pills, code surfaces, and color-coded state indicators:
 | `pending` | Gray |
 | `interrupted` / `cancelled` | Orange |
 
-On wide screens, runs use a repository-style sidebar with a flexible flowchart
-and tabbed inspector, while tickets use a horizontally scrollable project board
-above a durable-history workspace. Tablet layouts move provider information
-below ticket details. Mobile layouts use touch-safe horizontal run and ticket
-selectors, stacked detail panels, and full-screen transcript and artifact
-inspectors.
+On wide screens, runs use an IDE-style repository explorer, flexible workflow
+canvas, resizable control/inspection drawer, and compact status bar. Tickets use
+a horizontally scrollable project board above a durable-history workspace.
+Tablet layouts move provider information below ticket details. Mobile layouts
+use touch-safe horizontal run and ticket selectors, stacked control/detail
+panels, and full-screen transcript and artifact inspectors.
 
 Node positions derive from graph reachability rather than declaration index, so
 branches share a layer and bounded loop edges route back to earlier layers.

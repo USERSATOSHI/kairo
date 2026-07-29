@@ -45,7 +45,7 @@ The `createKouroApp(services)` factory produces an Elysia instance with **21 rou
 | `GET` | `/runs/:runId/approvals` | List pending/historical approvals |
 | `POST` | `/runs/:runId/approvals/:invocationSequence` | Grant or reject approval |
 | `POST` | `/runs/:runId/:action` | Pause, resume, or cancel a run |
-| `POST` | `/runs/:runId/invocations/:invocationSequence/:action` | Interrupt, retry, or skip an invocation |
+| `POST` | `/runs/:runId/invocations/:invocationSequence/:action` | Steer, interrupt, retry, or skip an invocation |
 
 ### Workflows
 
@@ -86,7 +86,7 @@ All use cases receive an `ApiServices` object (injected port implementations) an
 | `createRun` | `CreateRunResponse` | Create run (delegates to `LocalRunCreator`) |
 | `deleteRun` | `DeleteRunResponse` | Delete a terminal run through `LocalRunDeleter` |
 | `controlRun` | `LifecycleResponse` | Pause / resume / cancel |
-| `controlInvocation` | `LifecycleResponse` | Interrupt / retry / skip |
+| `controlInvocation` | `LifecycleResponse` | Steer / interrupt / retry / skip |
 | `listWorkflows` | `readonly WorkflowSummary[]` | Unique workflows |
 | `getWorkflow` | `WorkflowDetails` | Workflow with bundle |
 | `listRepositories` | `readonly RepositorySummary[]` | All repositories |

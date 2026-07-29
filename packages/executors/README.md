@@ -71,10 +71,16 @@ coordinator.recoverRun('run-abc');
 | `resumeRun(runId, actor, idempotencyKey)` | `run.resumed` |
 | `cancelRun(runId, actor, reason, idempotencyKey)` | `run.cancelled` |
 | `interruptInvocation(runId, invocationSeq, actor, reason, key)` | `attempt.interrupt_requested` |
+| `steerInvocation(runId, invocationSeq, actor, message, key)` | `agent.steering_requested` |
 | `retryInvocation(runId, invocationSeq, actor, reason, key)` | `invocation.retry_requested` |
 | `skipInvocation(runId, invocationSeq, actor, reason, key)` | `invocation.skipped` (with skip binding) |
 
 All lifecycle methods return `Result<RunAggregate, ExecutorError>`.
+
+Agent steering is delivered only to the exact active attempt. The harness
+records `agent.steering_applied` or `agent.steering_rejected` after the
+provider accepts or rejects it; steering never changes graph structure or
+scheduler counters.
 
 #### Approval Decisions
 

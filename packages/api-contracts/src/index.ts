@@ -54,6 +54,8 @@ export interface WorkflowNodeView {
   readonly title: string;
   readonly ordinal: number;
   readonly invocations: readonly number[];
+  readonly recoveryPolicy?: CompiledWorkflowBundle['nodes'][number]['recoveryPolicy'];
+  readonly skipOutcome?: string;
   readonly latestState?: RunState['invocations'][number]['state'];
 }
 
@@ -167,6 +169,12 @@ export interface LifecycleRequest {
 export interface LifecycleResponse {
   readonly runId: string;
   readonly status: RunState['status'];
+}
+
+export interface AgentSteeringRequest {
+  readonly actor: string;
+  readonly message: string;
+  readonly idempotencyKey: string;
 }
 
 export interface EventStreamMessage {

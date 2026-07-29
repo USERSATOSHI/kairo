@@ -627,7 +627,7 @@ inspect.on('failure').to(failed);`,
     }
   });
 
-  test('local host diagnoses every supported harness binary', async () => {
+  test('local host diagnoses every supported harness runtime', async () => {
     const root = await mkdtemp(resolve(tmpdir(), 'kouro-m7-diagnostics-'));
     roots.push(root);
     const host = new LocalKouroHost(localPaths(root));

@@ -222,7 +222,7 @@ Status: **Complete** (accepted 2026-07-26)
 - [x] Predictable local data and configuration paths
 - [x] Local ADW run, run list, and run inspection commands
 - [x] Approval and rejection commands
-- [x] Pause, resume, cancel, interrupt, retry, and policy-eligible skip commands
+- [x] Pause, resume, cancel, steer, interrupt, retry, and policy-eligible skip commands
 - [x] Long-lived worker loop with startup recovery and clean shutdown
 - [x] Single-process SQLite, worktree, artifact, harness, API, and web composition
 - [x] Packaged built-in feature-development ADW
@@ -231,6 +231,7 @@ Status: **Complete** (accepted 2026-07-26)
 - [x] Controlled commit and named merge-ready branch delivery
 - [x] Durable lifecycle events and application use cases
 - [x] Run creation, lifecycle, and complete local repository API surfaces
+- [x] IDE-style web run controls for pause, resume, cancel, steer, interrupt, retry, and skip
 - [x] Harness availability diagnostics
 - [x] Lifecycle, worker-ownership, and composition ADRs
 
@@ -242,6 +243,7 @@ Status: **Complete** (accepted 2026-07-26)
 - [x] `kouro approve <run-id> <invocation> --reason <text>`
 - [x] `kouro reject <run-id> <invocation> --reason <text>`
 - [x] `kouro pause|resume|cancel <run-id>`
+- [x] `kouro steer <run-id> <invocation> --message <text>`
 - [x] `kouro interrupt|retry|skip <run-id> <invocation> --reason <text>`
 - [x] `kouro serve`
 

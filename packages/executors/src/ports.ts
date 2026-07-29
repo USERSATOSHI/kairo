@@ -163,6 +163,22 @@ export type HarnessError =
       readonly harnessId: string;
     };
 
+export interface AgentSteeringControl {
+  readonly requestSequence: number;
+  readonly message: string;
+}
+
+export interface AgentControlSnapshot {
+  readonly steering: readonly AgentSteeringControl[];
+  readonly interruptRequested: boolean;
+}
+
+export interface AgentControlChannel {
+  read(): Promise<AgentControlSnapshot>;
+  steeringApplied(requestSequence: number): Promise<void>;
+  steeringRejected(requestSequence: number, reason: string): Promise<void>;
+}
+
 export interface HarnessExecutionRequest {
   readonly runId: string;
   readonly invocationSequence: number;
@@ -174,6 +190,8 @@ export interface HarnessExecutionRequest {
   readonly model?: string;
   readonly outputSchema?: JsonValue;
   readonly onTranscriptChunk?: (chunk: string) => Promise<void>;
+  readonly onResumeToken?: (token: string) => Promise<void>;
+  readonly controls?: AgentControlChannel;
 }
 
 export interface HarnessExecution {
