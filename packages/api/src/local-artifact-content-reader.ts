@@ -29,6 +29,18 @@ function checksum(content: string): string {
   return `sha256:${createHash('sha256').update(content).digest('hex')}`;
 }
 
+function artifactCoordinates(
+  artifact: ArtifactReference,
+  invocationSequence: number | undefined,
+  attemptNumber: number | undefined,
+): readonly [number, number] {
+  if (invocationSequence !== undefined && attemptNumber !== undefined) {
+    return [invocationSequence, attemptNumber];
+  }
+  const match = /^(\d+):(\d+):/.exec(artifact.id);
+  return [invocationSequence ?? Number(match?.[1] ?? 0), attemptNumber ?? Number(match?.[2] ?? 0)];
+}
+
 /** Reads and verifies artifacts written by LocalArtifactWriter. */
 export class LocalArtifactContentReader implements ArtifactContentReader {
   constructor(private readonly root: string) {}
@@ -36,18 +48,23 @@ export class LocalArtifactContentReader implements ArtifactContentReader {
   async read(
     runId: string,
     artifact: ArtifactReference,
-    invocationSequence = 0,
-    attemptNumber = 0,
+    invocationSequence?: number,
+    attemptNumber?: number,
   ): Promise<Result<ArtifactContent, ArtifactContentReaderError>> {
     const runDirectory = createHash('sha256').update(runId).digest('hex');
     const filename = `${artifact.kind}.${extensionFor(artifact.kind)}`;
+    const [artifactInvocation, artifactAttempt] = artifactCoordinates(
+      artifact,
+      invocationSequence,
+      attemptNumber,
+    );
     try {
       const content = await readFile(
         resolve(
           this.root,
           runDirectory,
-          String(invocationSequence),
-          String(attemptNumber),
+          String(artifactInvocation),
+          String(artifactAttempt),
           filename,
         ),
         'utf8',

@@ -17,6 +17,12 @@ call-ID-correlated tool exchanges in a large modal.
 - **Live event replay** — Events are delivered via Server-Sent Events (SSE) with `lastEventId` tracking for resilient reconnection
 - **Live invocation activity** — Active harness stdout is polled through an ephemeral observation endpoint without changing durable orchestration history
 - **Readable transcript modal** — User prompts, agent messages, reasoning summaries, parallel tool calls, and their matching results replace raw JSONL
+- **Editor-style artifact preview** — Code, JSON, diffs, and command output use line numbers, language labels, and syntax-aware highlighting
+- **Review workspace** — Delivery approvals combine a changed-file navigator, editor-style bound diff, editable commit/PR metadata, and prominent decision controls
+- **Resizable inspector** — The execution inspector is a persistent bottom drawer that supports pointer dragging and keyboard resizing
+- **Markdown tool activity** — Structured tool arguments and results become readable Markdown fields, while shell commands and fenced code retain syntax highlighting
+- **Prompt deduplication** — The invocation prompt is added only when the provider transcript did not already emit the same user message
+- **Switchable workflow layout** — Operators can use a layered top-to-bottom or left-to-right flowchart, or a compact network graph
 - **Derived ticket columns** — The API supplies planning and runtime-owned execution projections; React never persists board state
 - **Server-resolved provider secrets** — Provider configuration responses contain status and non-secret scope only
 
@@ -112,7 +118,8 @@ Each API response is validated through runtime type guards (`isRunSummary`, `isR
 
 ## Visual Design
 
-Dark theme with color-coded state indicators:
+GitHub-inspired dark theme with compact developer typography, familiar borders,
+status pills, code surfaces, and color-coded state indicators:
 
 | State | Color |
 |-------|-------|
@@ -123,7 +130,18 @@ Dark theme with color-coded state indicators:
 | `pending` | Gray |
 | `interrupted` / `cancelled` | Orange |
 
-Layout: 260px sidebar + flexible main area with a flowchart graph and tabbed inspector panel. Node positions derive from graph reachability rather than declaration index, so branches share a layer and bounded loop edges route back to earlier layers.
+On wide screens, runs use a repository-style sidebar with a flexible flowchart
+and tabbed inspector, while tickets use a horizontally scrollable project board
+above a durable-history workspace. Tablet layouts move provider information
+below ticket details. Mobile layouts use touch-safe horizontal run and ticket
+selectors, stacked detail panels, and full-screen transcript and artifact
+inspectors.
+
+Node positions derive from graph reachability rather than declaration index, so
+branches share a layer and bounded loop edges route back to earlier layers.
+The diagram toolbar stores its flowchart/graph and direction choices as
+device-local preferences. Parallel outgoing transition labels receive separate
+offsets so their outcome titles remain readable.
 
 ## Vite Dev Proxy
 

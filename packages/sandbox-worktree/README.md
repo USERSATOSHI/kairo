@@ -147,7 +147,8 @@ The **fully controlled commit** operation:
 ### `captureArtifacts(worktree)`
 
 - Runs `git status --porcelain=v2 --branch`
-- Runs `git diff --binary --no-ext-diff HEAD`
+- Stages the complete worktree in a temporary index without changing the real index
+- Runs `git diff --cached --binary --no-ext-diff HEAD` so new files are included
 - Writes both to files under `artifacts/<repoId>/<runId>/`
 - Returns paths, SHA-256 checksums, and sizes as `GitArtifact`
 

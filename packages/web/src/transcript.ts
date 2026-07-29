@@ -35,6 +35,10 @@ function display(value: unknown): string {
   }
 }
 
+function normalizedMessage(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
 function contentText(content: unknown, kind: 'text' | 'reasoning'): string {
   if (!Array.isArray(content)) return '';
   const accepted = kind === 'reasoning' ? new Set(['thinking', 'reasoning']) : new Set(['text']);
@@ -251,7 +255,6 @@ function parseEvent(
 export function parseTranscript(content: string, userPrompt?: string): readonly TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
   const calls = new Set<string>();
-  if (userPrompt) entries.push({ id: 'user-prompt', kind: 'user', text: userPrompt });
   for (const [index, line] of content.split('\n').entries()) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -262,8 +265,17 @@ export function parseTranscript(content: string, userPrompt?: string): readonly 
       // A partial live JSONL line is rendered after the next polling update.
     }
   }
-  if (entries.length === (userPrompt ? 1 : 0) && content.trim()) {
+  if (entries.length === 0 && content.trim()) {
     entries.push({ id: 'plain-transcript', kind: 'agent', text: content.trim() });
+  }
+  if (
+    userPrompt &&
+    !entries.some(
+      (entry) =>
+        entry.kind === 'user' && normalizedMessage(entry.text) === normalizedMessage(userPrompt),
+    )
+  ) {
+    entries.unshift({ id: 'user-prompt', kind: 'user', text: userPrompt });
   }
   return entries;
 }

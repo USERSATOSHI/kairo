@@ -125,6 +125,10 @@ describe('WorktreeSandboxProvider', () => {
     expect(status).toContain('untracked.txt');
     expect(diff).toContain('-initial');
     expect(diff).toContain('+changed');
+    expect(diff).toContain('diff --git a/untracked.txt b/untracked.txt');
+    expect(diff).toContain('new file mode');
+    expect(diff).toContain('+new');
+    expect(await git(worktree.path, 'diff', '--cached', '--name-only')).toBe('');
     expect(artifacts.diff.checksum).toBe(createHash('sha256').update(diff).digest('hex'));
     expect(artifacts.diff.size).toBe(Buffer.byteLength(diff));
   });

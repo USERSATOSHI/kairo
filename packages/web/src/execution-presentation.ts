@@ -1,4 +1,4 @@
-import type { RunDetails } from '@kouro/api-contracts';
+import type { ArtifactView, RunDetails } from '@kouro/api-contracts';
 
 type NodeInvocation = RunDetails['state']['invocations'][number];
 type InvocationState = NodeInvocation['state'];
@@ -49,4 +49,15 @@ export function formatByteSize(bytes: number): string {
   } while (value >= 1024 && unitIndex < units.length - 1);
   const precision = value < 10 ? 1 : 0;
   return `${value.toFixed(precision)} ${units[unitIndex]}`;
+}
+
+/** Returns the Git diff published for the approval's exact invocation. */
+export function approvalDiffArtifact(
+  artifacts: readonly ArtifactView[],
+  invocationSequence: number,
+): ArtifactView | undefined {
+  return artifacts.find(
+    (artifact) =>
+      artifact.kind === 'git_diff' && artifact.invocationSequence === invocationSequence,
+  );
 }

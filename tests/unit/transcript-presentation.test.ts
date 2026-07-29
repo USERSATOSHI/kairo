@@ -1,13 +1,41 @@
 import { describe, expect, test } from 'bun:test';
 
+import type { ArtifactView } from '@kouro/api-contracts';
+
 import {
+  approvalDiffArtifact,
   formatByteSize,
   invocationDisplayState,
   invocationFailure,
 } from '../../packages/web/src/execution-presentation.ts';
+import { structuredValueMarkdown } from '../../packages/web/src/code-viewer.tsx';
 import { groupTranscript, parseTranscript } from '../../packages/web/src/transcript.ts';
 
+function gitDiffArtifact(id: string, invocationSequence: number): ArtifactView {
+  return {
+    id,
+    runId: 'run-1',
+    invocationSequence,
+    attemptNumber: 0,
+    kind: 'git_diff',
+    mediaType: 'text/x-diff',
+    checksum: `sha256:${invocationSequence}`,
+    size: invocationSequence,
+  };
+}
+
 describe('transcript presentation', () => {
+  test('selects the diff from the exact approval invocation', () => {
+    const current = gitDiffArtifact('2:0:git_diff', 2);
+
+    expect(
+      approvalDiffArtifact(
+        [gitDiffArtifact('10:0:git_diff', 10), gitDiffArtifact('1:0:git_diff', 1), current],
+        2,
+      ),
+    ).toBe(current);
+  });
+
   test('shows user, reasoning, and agent messages', () => {
     const transcript = [
       JSON.stringify({
@@ -35,6 +63,32 @@ describe('transcript presentation', () => {
         id: 'event-1',
         kind: 'agent',
         text: 'The change is complete.',
+      },
+    ]);
+  });
+
+  test('does not repeat a prompt already emitted by the provider', () => {
+    const transcript = [
+      JSON.stringify({
+        role: 'user',
+        content: 'Please implement the change.',
+      }),
+      JSON.stringify({
+        role: 'assistant',
+        content: 'I will inspect the existing behavior.',
+      }),
+    ].join('\n');
+
+    expect(parseTranscript(transcript, '  Please implement   the change. ')).toEqual([
+      {
+        id: 'event-0',
+        kind: 'user',
+        text: 'Please implement the change.',
+      },
+      {
+        id: 'event-1',
+        kind: 'agent',
+        text: 'I will inspect the existing behavior.',
       },
     ]);
   });
@@ -94,6 +148,23 @@ describe('transcript presentation', () => {
       { callId: 'call-b', command: 'bun test b', result: 'B passed' },
       { callId: 'call-c', command: 'bun test c', result: 'C passed' },
     ]);
+  });
+
+  test('formats structured tool data as readable Markdown fields', () => {
+    expect(
+      structuredValueMarkdown({
+        command: 'bun test',
+        options: { timeout: 30, verbose: true },
+        files: ['src/a.ts', 'src/b.ts'],
+      }),
+    ).toBe(
+      [
+        '- **command**: `bun test`',
+        '- **options.timeout**: `30`',
+        '- **options.verbose**: `true`',
+        '- **files**: `["src/a.ts","src/b.ts"]`',
+      ].join('\n'),
+    );
   });
 
   test('keeps an unmatched tool result visible', () => {

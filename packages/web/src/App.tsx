@@ -15,8 +15,13 @@ import type {
 import type { DeliveryMetadata, DeliveryState } from '@kouro/domain';
 import {
   Background,
+  BaseEdge,
   Controls,
   type Edge,
+  EdgeLabelRenderer,
+  type EdgeProps,
+  getBezierPath,
+  getSmoothStepPath,
   Handle,
   MarkerType,
   MiniMap,
@@ -25,7 +30,16 @@ import {
   Position,
   ReactFlow,
 } from '@xyflow/react';
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import {
   decideApproval,
@@ -45,11 +59,17 @@ import {
   type ReplayedEvent,
 } from './api.ts';
 import {
+  approvalDiffArtifact,
   formatByteSize,
   invocationDisplayState,
   invocationFailure,
 } from './execution-presentation.ts';
 import { newIdempotencyKey } from './idempotency-key.ts';
+import {
+  CodeViewer,
+  MarkdownContent,
+  structuredValueMarkdown,
+} from './code-viewer.tsx';
 import {
   groupTranscript,
   parseTranscript,
@@ -57,6 +77,18 @@ import {
 } from './transcript.ts';
 
 type Tab = 'details' | 'events' | 'artifacts' | 'approval';
+type DiagramMode = 'flowchart' | 'graph';
+type DiagramDirection = 'TB' | 'LR';
+
+interface WorkspaceStyle extends CSSProperties {
+  readonly '--inspector-height': string;
+}
+
+interface DrawerDrag {
+  readonly pointerId: number;
+  readonly startHeight: number;
+  readonly startY: number;
+}
 
 interface WorkItemView {
   readonly provider: string;
@@ -71,79 +103,20 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-const syntaxJsonRe =
-  /("(?:[^"\\]|\\.)*")(\s*:\s*)?|(\btrue\b|\bfalse\b|\bnull\b)|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|([{}[\],])/g;
-
-function highlightJson(text: string) {
-  const parts = [];
-  let last = 0;
-  let key = 0;
-  let match: RegExpExecArray | null;
-  while ((match = syntaxJsonRe.exec(text)) !== null) {
-    if (match.index > last) parts.push(text.slice(last, match.index));
-    if (match[1]) {
-      if (match[2]) {
-        parts.push(
-          <span className="syntax-key" key={key++}>
-            {match[1]}
-          </span>,
-        );
-        parts.push(match[2]);
-      } else {
-        parts.push(
-          <span className="syntax-string" key={key++}>
-            {match[1]}
-          </span>,
-        );
-      }
-    } else if (match[3]) {
-      const cls = match[3] === 'null' ? 'syntax-null' : 'syntax-bool';
-      parts.push(
-        <span className={cls} key={key++}>
-          {match[3]}
-        </span>,
-      );
-    } else if (match[4]) {
-      parts.push(
-        <span className="syntax-number" key={key++}>
-          {match[4]}
-        </span>,
-      );
-    } else if (match[5]) {
-      parts.push(match[5]);
-    }
-    last = syntaxJsonRe.lastIndex;
+function formattedJson(text: string): string | undefined {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return undefined;
   }
-  if (last < text.length) parts.push(text.slice(last));
-  return parts;
 }
 
-function highlightDiff(text: string) {
-  const lines = text.split('\n');
-  return lines.map((line, index) => {
-    if (line.startsWith('+') && !line.startsWith('+++')) {
-      return (
-        <span className="diff-add" key={index}>
-          {line}
-          {index < lines.length - 1 ? '\n' : ''}
-        </span>
-      );
-    }
-    if (line.startsWith('-') && !line.startsWith('---')) {
-      return (
-        <span className="diff-remove" key={index}>
-          {line}
-          {index < lines.length - 1 ? '\n' : ''}
-        </span>
-      );
-    }
-    return (
-      <span key={index}>
-        {line}
-        {index < lines.length - 1 ? '\n' : ''}
-      </span>
-    );
-  });
+function jsonMarkdown(text: string): string | undefined {
+  try {
+    return structuredValueMarkdown(JSON.parse(text));
+  } catch {
+    return undefined;
+  }
 }
 
 function workItemFor(run: RunDetails): WorkItemView | undefined {
@@ -186,23 +159,88 @@ interface WorkflowNodeData extends Record<string, unknown> {
   readonly title: string;
   readonly nodeType: WorkflowNodeView['type'];
   readonly state: string;
+  readonly direction: DiagramDirection;
+  readonly mode: DiagramMode;
 }
 
 type WorkflowFlowNode = Node<WorkflowNodeData, 'workflow'>;
 
 function WorkflowGraphNode({ data }: NodeProps<WorkflowFlowNode>) {
+  const horizontal = data.direction === 'LR' && data.mode === 'flowchart';
   return (
-    <div className={`flow-node flow-node-${data.nodeType}`}>
-      <Handle position={Position.Top} type="target" />
+    <div className={`flow-node flow-node-${data.nodeType} flow-node-${data.mode}`}>
+      <Handle position={horizontal ? Position.Left : Position.Top} type="target" />
       <small>{data.nodeType}</small>
       <strong>{data.title}</strong>
       <span className={stateClass(data.state)}>{data.state}</span>
-      <Handle position={Position.Bottom} type="source" />
+      <Handle position={horizontal ? Position.Right : Position.Bottom} type="source" />
     </div>
   );
 }
 
 const workflowNodeTypes = { workflow: WorkflowGraphNode };
+
+interface WorkflowEdgeData extends Record<string, unknown> {
+  readonly direction: DiagramDirection;
+  readonly label: string;
+  readonly labelOffset: number;
+  readonly mode: DiagramMode;
+  readonly selected: boolean;
+}
+
+type WorkflowFlowEdge = Edge<WorkflowEdgeData, 'workflow'>;
+
+function WorkflowGraphEdge({
+  data,
+  markerEnd,
+  sourcePosition,
+  sourceX,
+  sourceY,
+  style,
+  targetPosition,
+  targetX,
+  targetY,
+}: EdgeProps<WorkflowFlowEdge>) {
+  if (!data) return null;
+  const [path, labelX, labelY] =
+    data.mode === 'graph'
+      ? getBezierPath({
+          sourceX,
+          sourceY,
+          sourcePosition,
+          targetX,
+          targetY,
+          targetPosition,
+        })
+      : getSmoothStepPath({
+          sourceX,
+          sourceY,
+          sourcePosition,
+          targetX,
+          targetY,
+          targetPosition,
+          borderRadius: 8,
+        });
+  const xOffset = data.direction === 'TB' ? data.labelOffset : 0;
+  const yOffset = data.direction === 'LR' ? data.labelOffset : 0;
+  return (
+    <>
+      <BaseEdge markerEnd={markerEnd} path={path} style={style} />
+      <EdgeLabelRenderer>
+        <span
+          className={`flow-edge-label${data.selected ? ' selected' : ''}`}
+          style={{
+            transform: `translate(-50%, -50%) translate(${labelX + xOffset}px, ${labelY + yOffset}px)`,
+          }}
+        >
+          {data.label}
+        </span>
+      </EdgeLabelRenderer>
+    </>
+  );
+}
+
+const workflowEdgeTypes = { workflow: WorkflowGraphEdge };
 
 function graphDepths(run: RunDetails): ReadonlyMap<string, number> {
   const outgoing = new Map<string, string[]>();
@@ -230,7 +268,10 @@ function graphDepths(run: RunDetails): ReadonlyMap<string, number> {
   return depths;
 }
 
-function graphNodes(run: RunDetails): WorkflowFlowNode[] {
+function flowchartNodes(
+  run: RunDetails,
+  direction: DiagramDirection,
+): WorkflowFlowNode[] {
   const depths = graphDepths(run);
   const layers = new Map<number, WorkflowNodeView[]>();
   for (const node of run.nodes) {
@@ -240,21 +281,52 @@ function graphNodes(run: RunDetails): WorkflowFlowNode[] {
     layers.set(depth, layer);
   }
   const widestLayer = Math.max(1, ...[...layers.values()].map((layer) => layer.length));
-  const horizontalGap = 260;
+  const crossAxisGap = 270;
+  const depthGap = 180;
   return [...layers.entries()].flatMap(([depth, layer]) => {
     const sorted = layer.toSorted((left, right) => left.ordinal - right.ordinal);
-    const offset = ((widestLayer - sorted.length) * horizontalGap) / 2;
+    const offset = ((widestLayer - sorted.length) * crossAxisGap) / 2;
     return sorted.map((node, index) => ({
       id: node.id,
       type: 'workflow',
-      position: { x: offset + index * horizontalGap, y: depth * 180 },
+      position:
+        direction === 'TB'
+          ? { x: offset + index * crossAxisGap, y: depth * depthGap }
+          : { x: depth * crossAxisGap, y: offset + index * depthGap },
       data: {
         title: node.title,
         nodeType: node.type,
         state: nodeState(run, node),
+        direction,
+        mode: 'flowchart' as const,
       },
     }));
   });
+}
+
+function networkGraphNodes(run: RunDetails): WorkflowFlowNode[] {
+  const count = Math.max(1, run.nodes.length);
+  const radius = Math.max(220, count * 42);
+  return run.nodes
+    .toSorted((left, right) => left.ordinal - right.ordinal)
+    .map((node, index) => {
+      const angle = (index / count) * Math.PI * 2 - Math.PI / 2;
+      return {
+        id: node.id,
+        type: 'workflow',
+        position: {
+          x: Math.cos(angle) * radius,
+          y: Math.sin(angle) * radius,
+        },
+        data: {
+          title: node.title,
+          nodeType: node.type,
+          state: nodeState(run, node),
+          direction: 'TB' as const,
+          mode: 'graph' as const,
+        },
+      };
+    });
 }
 
 function nodeState(run: RunDetails, node: WorkflowNodeView): string {
@@ -274,7 +346,12 @@ function displayedInvocationState(
   return invocationDisplayState(invocation);
 }
 
-function graphEdges(run: RunDetails): Edge[] {
+function graphEdges(
+  run: RunDetails,
+  mode: DiagramMode,
+  direction: DiagramDirection,
+): WorkflowFlowEdge[] {
+  const edgeDirection = mode === 'graph' ? 'TB' : direction;
   const selectedTransitions = new Set(
     run.state.invocations.flatMap(({ selectedTransitionId }) =>
       selectedTransitionId ? [selectedTransitionId] : [],
@@ -285,26 +362,40 @@ function graphEdges(run: RunDetails): Edge[] {
       .filter(({ latestState }) => ['active', 'waiting_for_approval'].includes(latestState ?? ''))
       .map(({ id }) => id),
   );
-  return run.edges.map((edge) => ({
-    id: edge.id,
-    source: edge.source,
-    target: edge.target,
-    label: edge.outcome,
-    type: 'smoothstep',
-    animated: activeNodes.has(edge.source),
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      color: selectedTransitions.has(edge.id) ? '#73d6c5' : '#607da5',
-    },
-    style: {
-      stroke: selectedTransitions.has(edge.id) ? '#73d6c5' : '#607da5',
-      strokeWidth: selectedTransitions.has(edge.id) ? 2.5 : 1.5,
-    },
-    labelStyle: { fill: '#c0cee0', fontSize: 11, fontWeight: 650 },
-    labelBgStyle: { fill: '#0b1422', fillOpacity: 0.92 },
-    labelBgPadding: [6, 4],
-    labelBgBorderRadius: 4,
-  }));
+  const outgoingCounts = new Map<string, number>();
+  for (const edge of run.edges) {
+    outgoingCounts.set(edge.source, (outgoingCounts.get(edge.source) ?? 0) + 1);
+  }
+  const sourceCounts = new Map<string, number>();
+  return run.edges.map((edge) => {
+    const siblingIndex = sourceCounts.get(edge.source) ?? 0;
+    sourceCounts.set(edge.source, siblingIndex + 1);
+    const siblingCount = outgoingCounts.get(edge.source) ?? 1;
+    const labelOffset = (siblingIndex - (siblingCount - 1) / 2) * 30;
+    const selected = selectedTransitions.has(edge.id);
+    return {
+      id: edge.id,
+      source: edge.source,
+      target: edge.target,
+      type: 'workflow',
+      animated: activeNodes.has(edge.source),
+      data: {
+        direction: edgeDirection,
+        label: edge.outcome,
+        labelOffset,
+        mode,
+        selected,
+      },
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: selected ? '#2f81f7' : '#6e7681',
+      },
+      style: {
+        stroke: selected ? '#2f81f7' : '#6e7681',
+        strokeWidth: selected ? 2.5 : 1.5,
+      },
+    };
+  });
 }
 
 function RunList({
@@ -319,8 +410,8 @@ function RunList({
   return (
     <aside className="run-list">
       <header>
-        <p className="eyebrow">Execution console</p>
-        <h1>Kouro</h1>
+        <p className="eyebrow">Current repository</p>
+        <h1>Workflow runs</h1>
       </header>
       <div className="run-list-heading">
         <span>Runs</span>
@@ -390,7 +481,7 @@ function NodeDetails({
       </div>
       {invocations.map((invocation) => (
         <article className="invocation" key={invocation.sequence}>
-          <div>
+          <div className="invocation-header">
             <strong>Invocation {invocation.sequence}</strong>
             <span className={stateClass(displayedInvocationState(run, node, invocation))}>
               {displayedInvocationState(run, node, invocation)}
@@ -493,6 +584,8 @@ function TranscriptCard({
   readonly entry: TranscriptEntry;
   readonly nested?: boolean;
 }) {
+  const markdown = jsonMarkdown(entry.text);
+  const shellInput = entry.kind === 'tool_call' && entry.toolName === 'shell';
   return (
     <article className={`message message-${entry.kind}${nested ? ' message-nested' : ''}`}>
       <header>
@@ -500,7 +593,18 @@ function TranscriptCard({
         {entry.callId ? <code className="call-id">{entry.callId}</code> : null}
         {entry.status ? <span className="tool-status">{entry.status}</span> : null}
       </header>
-      <div className="message-text">{entry.text}</div>
+      <div className="message-text">
+        {shellInput ? (
+          <CodeViewer
+            compact
+            content={entry.text}
+            label="command"
+            language="shell"
+          />
+        ) : (
+          <MarkdownContent content={markdown ?? entry.text} />
+        )}
+      </div>
     </article>
   );
 }
@@ -517,7 +621,7 @@ function TranscriptViewer({
     [content, userPrompt],
   );
   if (groups.length === 0) {
-    return <pre className="artifact-content">{highlightJson(content)}</pre>;
+    return <CodeViewer content={content} label="transcript.ndjson" language="json" />;
   }
   return (
     <div className="transcript-viewer">
@@ -545,7 +649,7 @@ function AgentOutputViewer({ content }: { readonly content: string }) {
   } catch {
     // fall through
   }
-  if (!parsed) return <pre className="artifact-content">{highlightJson(content)}</pre>;
+  if (!parsed) return <CodeViewer content={content} label="agent-output.txt" language="text" />;
   const result = typeof parsed.result === 'string' ? parsed.result : null;
   const output = 'structured_output' in parsed ? parsed.structured_output : null;
   return (
@@ -553,18 +657,24 @@ function AgentOutputViewer({ content }: { readonly content: string }) {
       {result ? (
         <div className="output-field">
           <span className="field-label">Result</span>
-          <div className="field-value">{result}</div>
+          <div className="field-value">
+            <MarkdownContent content={result} />
+          </div>
         </div>
       ) : null}
       {output !== null && output !== undefined ? (
         <details>
           <summary>Structured output</summary>
-          <pre className="artifact-content">{highlightJson(JSON.stringify(output, null, 2))}</pre>
+          <CodeViewer
+            content={JSON.stringify(output, null, 2)}
+            label="structured-output.json"
+            language="json"
+          />
         </details>
       ) : null}
       <details open={!result}>
         <summary>Raw JSON</summary>
-        <pre className="artifact-content">{highlightJson(content)}</pre>
+        <CodeViewer content={content} label="agent-output.json" language="json" />
       </details>
     </div>
   );
@@ -578,19 +688,32 @@ function ArtifactContent({
   readonly userPrompt?: string;
 }) {
   if (artifact.content === undefined) return <p className="empty">No content available.</p>;
+  const json = formattedJson(artifact.content);
   switch (artifact.kind) {
     case 'harness_transcript':
       return <TranscriptViewer content={artifact.content} userPrompt={userPrompt} />;
     case 'agent_output':
       return <AgentOutputViewer content={artifact.content} />;
     case 'command_output':
-      return <pre className="artifact-content">{highlightJson(artifact.content)}</pre>;
+      return (
+        <CodeViewer
+          content={json ?? artifact.content}
+          label={artifact.id}
+          language={json ? 'json' : 'text'}
+        />
+      );
     case 'git_diff':
-      return <pre className="artifact-content diff">{highlightDiff(artifact.content)}</pre>;
+      return <CodeViewer content={artifact.content} label={artifact.id} language="diff" />;
     case 'git_status':
-      return <pre className="artifact-content">{artifact.content}</pre>;
+      return <CodeViewer content={artifact.content} label={artifact.id} language="text" />;
     default:
-      return <pre className="artifact-content">{artifact.content}</pre>;
+      return (
+        <CodeViewer
+          content={json ?? artifact.content}
+          label={artifact.id}
+          language={json ? 'json' : 'text'}
+        />
+      );
   }
 }
 
@@ -749,105 +872,166 @@ function ApprovalControl({
 }) {
   const [reason, setReason] = useState('');
   const [metadata, setMetadata] = useState(delivery?.proposal?.metadata);
-  const [diff, setDiff] = useState('');
+  const [diff, setDiff] = useState<string>();
+  const [diffError, setDiffError] = useState<string>();
   const [selectedFile, setSelectedFile] = useState(0);
   useEffect(() => {
     setMetadata(delivery?.proposal?.metadata);
   }, [delivery?.proposal?.checksum]);
   useEffect(() => {
-    if (!diffArtifact) return;
-    void fetchArtifact(approval.runId, diffArtifact.id).then((artifact) =>
-      setDiff(artifact.content ?? ''),
-    );
+    setDiff(undefined);
+    setDiffError(undefined);
+    setSelectedFile(0);
+    if (!diffArtifact) {
+      setDiff('');
+      return;
+    }
+    void fetchArtifact(approval.runId, diffArtifact.id)
+      .then((artifact) => setDiff(artifact.content ?? ''))
+      .catch((cause: unknown) =>
+        setDiffError(cause instanceof Error ? cause.message : 'The bound diff could not be read'),
+      );
   }, [approval.runId, diffArtifact?.id]);
-  const files = diff
+  const files = (diff ?? '')
     .split(/(?=^diff --git )/m)
     .filter((section) => section.startsWith('diff --git '));
-  const activeDiff = files[selectedFile] ?? diff;
+  const activeDiff = files[selectedFile] ?? diff ?? '';
+  const activeFile =
+    files[selectedFile]?.match(/^diff --git a\/(.+?) b\//m)?.[1] ?? 'complete.diff';
   const deliveryReview = approval.binding.preparedTree !== undefined && metadata !== undefined;
   return (
     <article className="approval-card">
-      <div>
-        <span className="node-type">Approval</span>
-        <h3>{approval.nodeId}</h3>
-        <p>Invocation {approval.invocationSequence}</p>
-      </div>
-      <dl>
-        <dt>Action</dt>
-        <dd>{approval.binding.resolvedAction}</dd>
-        <dt>Repository HEAD</dt>
-        <dd>{approval.binding.repositoryHead}</dd>
-        <dt>Bound artifacts</dt>
-        <dd>{approval.binding.artifactChecksums.length}</dd>
-        {approval.binding.preparedTree ? (
-          <>
-            <dt>Prepared tree</dt>
-            <dd>{approval.binding.preparedTree}</dd>
-          </>
-        ) : null}
-      </dl>
+      <header className="approval-summary">
+        <div>
+          <span className="node-type">Review required</span>
+          <h3>{approval.binding.resolvedAction}</h3>
+          <p>
+            {approval.nodeId} · invocation {approval.invocationSequence}
+          </p>
+        </div>
+        <span className={stateClass(approval.state)}>{approval.state}</span>
+      </header>
+      <details className="approval-binding">
+        <summary>Approval binding</summary>
+        <dl>
+          <dt>Repository HEAD</dt>
+          <dd>{approval.binding.repositoryHead}</dd>
+          <dt>Bound artifacts</dt>
+          <dd>{approval.binding.artifactChecksums.length}</dd>
+          {approval.binding.preparedTree ? (
+            <>
+              <dt>Prepared tree</dt>
+              <dd>{approval.binding.preparedTree}</dd>
+            </>
+          ) : null}
+        </dl>
+      </details>
       {deliveryReview && metadata ? (
         <div className="delivery-review">
-          <div className="changed-files">
-            {files.map((file, index) => (
-              <button key={file.slice(0, 80)} onClick={() => setSelectedFile(index)} type="button">
-                {file.match(/^diff --git a\/(.+?) b\//m)?.[1] ?? `Change ${index + 1}`}
-              </button>
-            ))}
-          </div>
-          <pre className="bound-diff">{activeDiff || 'The bound diff is empty.'}</pre>
-          <label>
-            Commit title
-            <input
-              value={metadata.commitTitle}
-              onChange={(event) =>
-                setMetadata({ ...metadata, commitTitle: event.target.value })
-              }
-            />
-          </label>
-          <label>
-            Commit body
-            <textarea
-              value={metadata.commitBody ?? ''}
-              onChange={(event) =>
-                setMetadata({ ...metadata, commitBody: event.target.value })
-              }
-            />
-          </label>
-          <label>
-            Pull request title
-            <input
-              value={metadata.pullRequestTitle}
-              onChange={(event) =>
-                setMetadata({ ...metadata, pullRequestTitle: event.target.value })
-              }
-            />
-          </label>
-          <label>
-            Pull request body
-            <textarea
-              value={metadata.pullRequestBody ?? ''}
-              onChange={(event) =>
-                setMetadata({ ...metadata, pullRequestBody: event.target.value })
-              }
-            />
-          </label>
-          <label>
-            <input
-              checked={metadata.draft}
-              onChange={(event) => setMetadata({ ...metadata, draft: event.target.checked })}
-              type="checkbox"
-            />
-            Draft pull request
-          </label>
-          <p>{delivery?.repairsUsed ?? 0} of 2 delivery repair returns used.</p>
+          <section className="diff-review">
+            <header>
+              <div>
+                <h4>Changed files</h4>
+                <span>{files.length} files in the bound tree</span>
+              </div>
+            </header>
+            <div className="diff-workspace">
+              {files.length > 0 ? (
+                <nav aria-label="Changed files" className="changed-files">
+                  {files.map((file, index) => {
+                    const filename =
+                      file.match(/^diff --git a\/(.+?) b\//m)?.[1] ?? `Change ${index + 1}`;
+                    return (
+                      <button
+                        aria-pressed={selectedFile === index}
+                        className={selectedFile === index ? 'active' : ''}
+                        key={file.slice(0, 80)}
+                        onClick={() => setSelectedFile(index)}
+                        title={filename}
+                        type="button"
+                      >
+                        {filename}
+                      </button>
+                    );
+                  })}
+                </nav>
+              ) : null}
+              <div className="diff-editor">
+                {diffError ? <p className="diff-error">{diffError}</p> : null}
+                {!diffError && diff === undefined ? (
+                  <p className="empty">Loading the bound diff…</p>
+                ) : null}
+                {!diffError && diff !== undefined ? (
+                  <CodeViewer
+                    content={activeDiff || 'The bound diff is empty.'}
+                    label={activeFile}
+                    language="diff"
+                  />
+                ) : null}
+              </div>
+            </div>
+          </section>
+          <section className="proposal-form">
+            <header>
+              <h4>Delivery metadata</h4>
+              <span>{delivery?.repairsUsed ?? 0} of 2 repair returns used</span>
+            </header>
+            <label>
+              Commit title
+              <input
+                value={metadata.commitTitle}
+                onChange={(event) =>
+                  setMetadata({ ...metadata, commitTitle: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              Commit body
+              <textarea
+                value={metadata.commitBody ?? ''}
+                onChange={(event) =>
+                  setMetadata({ ...metadata, commitBody: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              Pull request title
+              <input
+                value={metadata.pullRequestTitle}
+                onChange={(event) =>
+                  setMetadata({ ...metadata, pullRequestTitle: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              Pull request body
+              <textarea
+                value={metadata.pullRequestBody ?? ''}
+                onChange={(event) =>
+                  setMetadata({ ...metadata, pullRequestBody: event.target.value })
+                }
+              />
+            </label>
+            <label className="checkbox-label">
+              <input
+                checked={metadata.draft}
+                onChange={(event) => setMetadata({ ...metadata, draft: event.target.checked })}
+                type="checkbox"
+              />
+              Open as draft pull request
+            </label>
+          </section>
         </div>
       ) : null}
       {approval.state === 'waiting_for_approval' ? (
-        <>
+        <footer className="approval-decision">
           <label>
-            Decision reason
-            <textarea value={reason} onChange={(event) => setReason(event.target.value)} />
+            Review note
+            <textarea
+              placeholder="Explain why this tree is ready, or what needs to change."
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+            />
           </label>
           <div className="approval-actions">
             <button
@@ -876,7 +1060,7 @@ function ApprovalControl({
               Approve
             </button>
           </div>
-        </>
+        </footer>
       ) : (
         <span className={stateClass(approval.state)}>{approval.state}</span>
       )}
@@ -905,6 +1089,53 @@ const autoRefreshEvents = new Set([
   'delivery.publication_failed',
 ]);
 
+function storedDiagramMode(): DiagramMode {
+  try {
+    return localStorage.getItem('kouro:diagram-mode') === 'graph' ? 'graph' : 'flowchart';
+  } catch {
+    return 'flowchart';
+  }
+}
+
+function storedDiagramDirection(): DiagramDirection {
+  try {
+    return localStorage.getItem('kouro:diagram-direction') === 'LR' ? 'LR' : 'TB';
+  } catch {
+    return 'TB';
+  }
+}
+
+function storeDiagramPreference(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Device-local preferences are optional when browser storage is unavailable.
+  }
+}
+
+function maximumInspectorHeight(): number {
+  return typeof window === 'undefined' ? 720 : Math.max(240, window.innerHeight - 340);
+}
+
+function constrainedInspectorHeight(value: number): number {
+  return Math.min(maximumInspectorHeight(), Math.max(240, value));
+}
+
+function storedInspectorHeight(): number {
+  try {
+    const stored = Number(localStorage.getItem('kouro:inspector-height'));
+    return Number.isFinite(stored) && stored > 0
+      ? constrainedInspectorHeight(stored)
+      : constrainedInspectorHeight(380);
+  } catch {
+    return constrainedInspectorHeight(380);
+  }
+}
+
+function workspaceStyle(inspectorHeight: number): WorkspaceStyle {
+  return { '--inspector-height': `${inspectorHeight}px` };
+}
+
 function ExecutionConsole() {
   const [runs, setRuns] = useState<readonly RunSummary[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string>();
@@ -921,6 +1152,11 @@ function ExecutionConsole() {
   const [approvals, setApprovals] = useState<readonly ApprovalView[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [diagramMode, setDiagramMode] = useState<DiagramMode>(storedDiagramMode);
+  const [diagramDirection, setDiagramDirection] =
+    useState<DiagramDirection>(storedDiagramDirection);
+  const [inspectorHeight, setInspectorHeight] = useState(storedInspectorHeight);
+  const drawerDragRef = useRef<DrawerDrag | undefined>(undefined);
 
   useEffect(() => {
     fetchRuns()
@@ -1014,8 +1250,19 @@ function ExecutionConsole() {
     return () => window.clearInterval(timer);
   }, [run]);
 
-  const nodes = useMemo(() => (run ? graphNodes(run) : []), [run]);
-  const edges = useMemo(() => (run ? graphEdges(run) : []), [run]);
+  const nodes = useMemo(
+    () =>
+      run
+        ? diagramMode === 'graph'
+          ? networkGraphNodes(run)
+          : flowchartNodes(run, diagramDirection)
+        : [],
+    [diagramDirection, diagramMode, run],
+  );
+  const edges = useMemo(
+    () => (run ? graphEdges(run, diagramMode, diagramDirection) : []),
+    [diagramDirection, diagramMode, run],
+  );
   const node = run?.nodes.find(({ id }) => id === selectedNode) ?? null;
   const activeActivity =
     activeActivitySequence === null ? undefined : activities[activeActivitySequence];
@@ -1114,10 +1361,67 @@ function ExecutionConsole() {
     }
   }
 
+  function setAndStoreInspectorHeight(value: number): void {
+    const next = constrainedInspectorHeight(value);
+    setInspectorHeight(next);
+    storeDiagramPreference('kouro:inspector-height', String(next));
+  }
+
+  function startDrawerResize(event: ReactPointerEvent<HTMLDivElement>): void {
+    event.preventDefault();
+    drawerDragRef.current = {
+      pointerId: event.pointerId,
+      startHeight: inspectorHeight,
+      startY: event.clientY,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function resizeDrawer(event: ReactPointerEvent<HTMLDivElement>): void {
+    const drag = drawerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setInspectorHeight(constrainedInspectorHeight(drag.startHeight + drag.startY - event.clientY));
+  }
+
+  function finishDrawerResize(event: ReactPointerEvent<HTMLDivElement>): void {
+    const drag = drawerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const next = constrainedInspectorHeight(drag.startHeight + drag.startY - event.clientY);
+    drawerDragRef.current = undefined;
+    setInspectorHeight(next);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    storeDiagramPreference('kouro:inspector-height', String(next));
+  }
+
+  function cancelDrawerResize(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (drawerDragRef.current?.pointerId !== event.pointerId) return;
+    drawerDragRef.current = undefined;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    storeDiagramPreference('kouro:inspector-height', String(inspectorHeight));
+  }
+
+  function resizeDrawerWithKeyboard(event: ReactKeyboardEvent<HTMLDivElement>): void {
+    if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    if (event.key === 'Home') {
+      setAndStoreInspectorHeight(240);
+      return;
+    }
+    if (event.key === 'End') {
+      setAndStoreInspectorHeight(maximumInspectorHeight());
+      return;
+    }
+    setAndStoreInspectorHeight(inspectorHeight + (event.key === 'ArrowUp' ? 40 : -40));
+  }
+
   return (
     <div className="execution-layout">
       <RunList runs={runs} selected={selectedRunId} onSelect={setSelectedRunId} />
-      <section className="workspace">
+      <section className="workspace" style={workspaceStyle(inspectorHeight)}>
         {error ? <div className="error-banner">{error}</div> : null}
         {run ? (
           <>
@@ -1145,9 +1449,48 @@ function ExecutionConsole() {
               </div>
             </header>
             <section className="graph">
+              <div className="graph-toolbar">
+                <div aria-label="Diagram style" className="segmented-control" role="group">
+                  {(['flowchart', 'graph'] as const).map((mode) => (
+                    <button
+                      aria-pressed={diagramMode === mode}
+                      className={diagramMode === mode ? 'active' : ''}
+                      key={mode}
+                      onClick={() => {
+                        setDiagramMode(mode);
+                        storeDiagramPreference('kouro:diagram-mode', mode);
+                      }}
+                      type="button"
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
+                <div aria-label="Flow direction" className="segmented-control" role="group">
+                  {(['TB', 'LR'] as const).map((direction) => (
+                    <button
+                      aria-pressed={diagramDirection === direction}
+                      className={diagramDirection === direction ? 'active' : ''}
+                      disabled={diagramMode === 'graph'}
+                      key={direction}
+                      onClick={() => {
+                        setDiagramDirection(direction);
+                        storeDiagramPreference('kouro:diagram-direction', direction);
+                      }}
+                      title={direction === 'TB' ? 'Top to bottom' : 'Left to right'}
+                      type="button"
+                    >
+                      {direction}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <ReactFlow
                 edges={edges}
+                edgeTypes={workflowEdgeTypes}
                 fitView
+                fitViewOptions={{ padding: 0.24 }}
+                key={`${run.id}:${diagramMode}:${diagramDirection}`}
                 nodes={nodes}
                 nodeTypes={workflowNodeTypes}
                 nodesConnectable={false}
@@ -1157,12 +1500,30 @@ function ExecutionConsole() {
                   setTab('details');
                 }}
               >
-                <Background color="#263750" gap={24} />
-                <MiniMap nodeColor="#3f74a8" pannable zoomable />
+                <Background color="#30363d" gap={24} />
+                <MiniMap nodeColor="#388bfd" pannable zoomable />
                 <Controls showInteractive={false} />
               </ReactFlow>
             </section>
             <section className="inspector">
+              <div
+                aria-label="Resize bottom drawer"
+                aria-orientation="horizontal"
+                aria-valuemax={maximumInspectorHeight()}
+                aria-valuemin={240}
+                aria-valuenow={inspectorHeight}
+                className="drawer-resize-handle"
+                onKeyDown={resizeDrawerWithKeyboard}
+                onPointerCancel={cancelDrawerResize}
+                onPointerDown={startDrawerResize}
+                onPointerMove={resizeDrawer}
+                onPointerUp={finishDrawerResize}
+                role="separator"
+                tabIndex={0}
+                title="Drag to resize the bottom drawer"
+              >
+                <span />
+              </div>
               <nav className="tabs">
                 {(['details', 'events', 'artifacts', 'approval'] as const).map((name) => (
                   <button
@@ -1203,9 +1564,10 @@ function ExecutionConsole() {
                         approval={approval}
                         busy={busy}
                         delivery={run.state.delivery}
-                        diffArtifact={artifacts
-                          .filter(({ kind }) => kind === 'git_diff')
-                          .toSorted((left, right) => right.id.localeCompare(left.id))[0]}
+                        diffArtifact={approvalDiffArtifact(
+                          artifacts,
+                          approval.invocationSequence,
+                        )}
                         key={approval.invocationSequence}
                         onDecision={(decision, reason, metadata) =>
                           void submitDecision(approval, decision, reason, metadata)
@@ -1547,23 +1909,37 @@ export function App() {
   const [surface, setSurface] = useState<'tickets' | 'runs'>('tickets');
   return (
     <main className="app-shell">
-      <nav className="surface-nav">
-        <strong>Kouro</strong>
-        <button
-          className={surface === 'tickets' ? 'active' : ''}
-          onClick={() => setSurface('tickets')}
-          type="button"
-        >
-          Tickets
-        </button>
-        <button
-          className={surface === 'runs' ? 'active' : ''}
-          onClick={() => setSurface('runs')}
-          type="button"
-        >
-          Runs
-        </button>
-      </nav>
+      <header className="surface-nav">
+        <div className="product-mark" aria-hidden="true">
+          K
+        </div>
+        <div className="product-name">
+          <strong>Kouro</strong>
+          <span>Developer workflows</span>
+        </div>
+        <nav aria-label="Primary">
+          <button
+            aria-current={surface === 'tickets' ? 'page' : undefined}
+            className={surface === 'tickets' ? 'active' : ''}
+            onClick={() => setSurface('tickets')}
+            type="button"
+          >
+            Tickets
+          </button>
+          <button
+            aria-current={surface === 'runs' ? 'page' : undefined}
+            className={surface === 'runs' ? 'active' : ''}
+            onClick={() => setSurface('runs')}
+            type="button"
+          >
+            Actions
+          </button>
+        </nav>
+        <span className="environment-badge">
+          <span aria-hidden="true" />
+          Local
+        </span>
+      </header>
       {surface === 'tickets' ? <TicketConsole /> : <ExecutionConsole />}
     </main>
   );

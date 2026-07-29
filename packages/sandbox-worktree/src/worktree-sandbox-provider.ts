@@ -531,21 +531,45 @@ export class WorktreeSandboxProvider {
         '--branch',
       ]);
       if (status.isErr()) return status;
-      const diff = await this.git.run(worktree.path, 'capture Git diff', [
-        'diff',
-        '--binary',
-        '--no-ext-diff',
-        'HEAD',
-      ]);
-      if (diff.isErr()) return diff;
-      const statusArtifact = await this.writeArtifact(worktree, 'status', status.unwrap().stdout);
-      if (statusArtifact.isErr()) return statusArtifact;
-      const diffArtifact = await this.writeArtifact(worktree, 'diff', diff.unwrap().stdout);
-      if (diffArtifact.isErr()) return diffArtifact;
-      return ok({
-        status: statusArtifact.unwrap(),
-        diff: diffArtifact.unwrap(),
-      });
+      const captureIndexPath = resolve(
+        this.managementRoot,
+        'artifacts',
+        `.capture-${sha256(worktree.runId)}-${randomUUID()}.index`,
+      );
+      const captureEnvironment = { GIT_INDEX_FILE: captureIndexPath };
+      try {
+        const initializedIndex = await this.git.run(
+          worktree.path,
+          'initialize temporary Git index',
+          ['read-tree', 'HEAD'],
+          captureEnvironment,
+        );
+        if (initializedIndex.isErr()) return initializedIndex;
+        const stagedChanges = await this.git.run(
+          worktree.path,
+          'stage changes in temporary Git index',
+          ['add', '--all'],
+          captureEnvironment,
+        );
+        if (stagedChanges.isErr()) return stagedChanges;
+        const diff = await this.git.run(
+          worktree.path,
+          'capture Git diff',
+          ['diff', '--cached', '--binary', '--no-ext-diff', 'HEAD'],
+          captureEnvironment,
+        );
+        if (diff.isErr()) return diff;
+        const statusArtifact = await this.writeArtifact(worktree, 'status', status.unwrap().stdout);
+        if (statusArtifact.isErr()) return statusArtifact;
+        const diffArtifact = await this.writeArtifact(worktree, 'diff', diff.unwrap().stdout);
+        if (diffArtifact.isErr()) return diffArtifact;
+        return ok({
+          status: statusArtifact.unwrap(),
+          diff: diffArtifact.unwrap(),
+        });
+      } finally {
+        await unlink(captureIndexPath).catch(() => undefined);
+      }
     });
   }
 

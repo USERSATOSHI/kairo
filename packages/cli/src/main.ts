@@ -316,9 +316,10 @@ async function interactiveSession(
           runId,
         );
         const diff = artifacts.isOk()
-          ? artifacts.value
-              .filter(({ kind }) => kind === 'git_diff')
-              .toSorted((left, right) => right.id.localeCompare(left.id))[0]
+          ? artifacts.value.find(
+              ({ invocationSequence, kind }) =>
+                kind === 'git_diff' && invocationSequence === invocation.sequence,
+            )
           : undefined;
         if (diff) {
           const content = await getArtifact(

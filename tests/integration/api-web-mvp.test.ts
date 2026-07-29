@@ -93,6 +93,20 @@ describe('M6 observable Elysia and web MVP', () => {
         )
       ).isErr(),
     ).toBe(true);
+
+    const gitStatus = (
+      await writer.write({
+        runId: 'artifact-run',
+        invocationSequence: 4,
+        attemptNumber: 0,
+        kind: 'git_status',
+        mediaType: 'text/plain',
+        content: ' M packages/web/src/App.tsx\n',
+      })
+    ).unwrap();
+    expect((await reader.read('artifact-run', gitStatus)).unwrap().content).toBe(
+      ' M packages/web/src/App.tsx\n',
+    );
   });
 
   test('factory exposes durable state and decides an approval without opening a port', async () => {
