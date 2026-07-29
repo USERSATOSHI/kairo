@@ -5,7 +5,13 @@ import { fromAsync, type Result } from '@usersatoshi/results';
 
 import { CliErrorKind, cliErr, type CliError } from './errors.ts';
 
-export const ADW_TEMPLATES = ['feature-development', 'hotfix', 'bug-fix', 'chore'] as const;
+export const ADW_TEMPLATES = [
+  'feature-development',
+  'hotfix',
+  'bug-fix',
+  'chore',
+  'security-audit',
+] as const;
 
 export type AdwTemplate = (typeof ADW_TEMPLATES)[number];
 

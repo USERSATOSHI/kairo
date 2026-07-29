@@ -1,0 +1,9 @@
+{
+  "id": "{{id}}",
+  "name": "{{name}}",
+  "version": "1.0.0",
+  "description": "Security-audit workflow for repositories and URLs. Scans for exposed endpoints, credential leaks, misconfigurations, and exploitable vulnerabilities.",
+  "kouro": ">=0.1.0",
+  "entrypoint": "./kouro.adw.ts",
+  "permissions": ["repository.read", "terminal.execute"]
+}
