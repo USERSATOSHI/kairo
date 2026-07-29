@@ -1,6 +1,6 @@
 {
   "name": "@kouro/ticket-provider-github",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -17,7 +17,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@kouro/tickets": "0.1.10",
+    "@kouro/tickets": "0.1.11",
     "@usersatoshi/results": "^1.0.0"
   }
 }
