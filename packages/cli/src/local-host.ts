@@ -48,7 +48,11 @@ import {
   PiHarness,
 } from '@kouro/harnesses';
 import { SqliteEventStore } from '@kouro/persistence-sqlite';
-import { WorktreeSandboxProvider, type RunWorktree } from '@kouro/sandbox-worktree';
+import {
+  SandboxRuntimeAgentCommandSandbox,
+  WorktreeSandboxProvider,
+  type RunWorktree,
+} from '@kouro/sandbox-worktree';
 import {
   SqliteTicketRepository,
   SqliteTicketRunStore,
@@ -131,6 +135,14 @@ interface ConfiguredPullRequestProvider {
   readonly provider: PullRequestProvider;
   readonly owner: string;
   readonly repository: string;
+}
+
+export interface HarnessDiagnostic {
+  readonly id: string;
+  readonly available: boolean;
+  readonly terminalSandbox: 'provider-native' | 'sandbox-runtime';
+  readonly terminalAvailable: boolean;
+  readonly reason?: string;
 }
 
 function pullRequestProviders(): ReadonlyMap<'github' | 'forgejo', ConfiguredPullRequestProvider> {
@@ -219,6 +231,37 @@ function harnessRouteError(
     ) {
       return `Harness route ${nodeId} must contain at least one harness ID`;
     }
+  }
+  return undefined;
+}
+
+function harnessCapabilityError(
+  nodes: readonly {
+    readonly id: string;
+    readonly type: string;
+    readonly harness?: string;
+    readonly capabilities?: readonly string[];
+  }[],
+  request: Pick<CreateRunRequest, 'harnesses' | 'harnessesByNode'>,
+  diagnostics: readonly HarnessDiagnostic[],
+): string | undefined {
+  const byId = new Map(diagnostics.map((diagnostic) => [diagnostic.id, diagnostic]));
+  for (const node of nodes) {
+    if (node.type !== 'agent') continue;
+    const selected =
+      request.harnessesByNode?.[node.id] ?? (node.harness ? [node.harness] : request.harnesses);
+    if (!selected?.length) continue;
+    const known = selected.map((id) => byId.get(id)).filter((value) => value !== undefined);
+    if (known.length !== selected.length) continue;
+    const needsTerminal = node.capabilities?.includes('terminal.execute') ?? false;
+    const usable = known.some(
+      (diagnostic) => diagnostic.available && (!needsTerminal || diagnostic.terminalAvailable),
+    );
+    if (usable) continue;
+    const reason = known
+      .map(({ id, reason: detail }) => `${id}: ${detail ?? 'unavailable'}`)
+      .join('; ');
+    return `No selected harness can execute node ${node.id}${needsTerminal ? ' with terminal.execute' : ''}: ${reason}`;
   }
   return undefined;
 }
@@ -394,6 +437,14 @@ export class LocalKouroHost {
     );
     if (routeError) {
       return cliErr(CliErrorKind.InvalidArguments, 'invalid_harness_route', routeError);
+    }
+    const capabilityError = harnessCapabilityError(
+      compiled.unwrap().bundle.nodes,
+      request,
+      await this.harnessDiagnostics(),
+    );
+    if (capabilityError) {
+      return cliErr(CliErrorKind.InvalidArguments, 'harness_unavailable', capabilityError);
     }
     const task = request.task?.trim();
     const ticket = request.ticket?.trim();
@@ -1047,13 +1098,41 @@ export class LocalKouroHost {
     }
   }
 
-  harnessDiagnostics(): readonly { id: string; available: boolean }[] {
-    const bubblewrap = Bun.which('bwrap') !== null;
+  async harnessDiagnostics(): Promise<readonly HarnessDiagnostic[]> {
+    const portable = await new SandboxRuntimeAgentCommandSandbox().availability();
+    const portableReason = portable.available
+      ? {}
+      : { reason: portable.reason ?? 'Sandbox Runtime is unavailable' };
+    const opencodeAvailable = Bun.which('opencode') !== null;
     return [
-      { id: 'codex', available: Bun.which('codex') !== null },
-      { id: 'claude-code', available: bubblewrap },
-      { id: 'opencode', available: Bun.which('opencode') !== null && bubblewrap },
-      { id: 'pi', available: bubblewrap },
+      {
+        id: 'codex',
+        available: Bun.which('codex') !== null,
+        terminalSandbox: 'provider-native',
+        terminalAvailable: Bun.which('codex') !== null,
+      },
+      {
+        id: 'claude-code',
+        available: true,
+        terminalSandbox: 'provider-native',
+        terminalAvailable: true,
+      },
+      {
+        id: 'opencode',
+        available: opencodeAvailable,
+        terminalSandbox: 'sandbox-runtime',
+        terminalAvailable: opencodeAvailable && portable.available,
+        ...(!opencodeAvailable
+          ? { reason: 'OpenCode executable was not found on PATH' }
+          : portableReason),
+      },
+      {
+        id: 'pi',
+        available: true,
+        terminalSandbox: 'sandbox-runtime',
+        terminalAvailable: portable.available,
+        ...portableReason,
+      },
     ];
   }
 

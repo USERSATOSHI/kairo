@@ -692,7 +692,7 @@ inspect.on('failure').to(failed);`,
     roots.push(root);
     const host = new LocalKouroHost(localPaths(root));
     try {
-      expect(host.harnessDiagnostics().map(({ id }) => id)).toEqual([
+      expect((await host.harnessDiagnostics()).map(({ id }) => id)).toEqual([
         'codex',
         'claude-code',
         'opencode',

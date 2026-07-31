@@ -62,6 +62,10 @@ bun run kouro skip <run-id> <invocation> --reason "not applicable"
 
 # Diagnostics
 bun run kouro diagnostics
+bun run kouro sandbox status
+
+# Native Windows only: one-time elevated sandbox provisioning
+bun run kouro sandbox setup
 
 # Start the current repository dashboard and API (default port 4317)
 bun run kouro serve [--port <number>] [--repo <path>]
@@ -297,7 +301,18 @@ Checks availability of agent runtimes:
 
 Codex and OpenCode executables are checked through `PATH`. Claude and Pi report
 available because their SDK runtimes ship with Kouro; authentication and model
-configuration are verified when an attempt starts.
+configuration are verified when an attempt starts. Each row separately reports
+whether `terminal.execute` has a usable provider-native or portable OS sandbox.
+
+OpenCode and Pi use Kouro's portable command sandbox. macOS uses Seatbelt and
+requires `rg`; Linux and WSL2 use Bubblewrap and require `bwrap`, `socat`, and
+`rg`. Native Windows uses a dedicated local account, filesystem ACLs, and a
+Windows Filtering Platform egress fence. Run `kouro sandbox setup` once on
+Windows and approve its elevation prompt; ordinary runs never self-elevate.
+
+`kouro sandbox status` reports missing platform dependencies. A selected agent
+node requiring `terminal.execute` is rejected before repository state is
+created when none of its explicitly routed harnesses has a usable sandbox.
 
 ## Local State (XDG Paths)
 

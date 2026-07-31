@@ -58,8 +58,10 @@ or tool arguments cannot request an unsandboxed fallback.
 - Read-only agents cannot modify the worktree through direct file tools or
   shell commands.
 - Common host credential paths are not readable from sandboxed commands.
-- Linux installations using Claude, OpenCode, or Pi command tools require
-  `bwrap`. Codex retains its own platform support.
+- Linux installations using OpenCode or Pi command tools require the configured
+  command-sandbox runtime. Claude and Codex retain their provider-native
+  platform support. ADR-0032 replaces the original Bubblewrap-only portability
+  boundary.
 - A command that legitimately requires network access must declare a network
   capability in both the workflow permissions and node capabilities.
 - Worktree isolation, tool sandboxing, workflow authorization, and durable

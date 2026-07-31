@@ -18,6 +18,7 @@ Run the CLI from source:
 ```bash
 bun run kouro --help
 bun run kouro diagnostics
+bun run kouro sandbox status
 bun run kouro run feature-development \
   --repo /path/to/repository \
   --task "Implement the requested change" \
@@ -87,7 +88,7 @@ Each independently distributed workspace includes its own `LICENSE` and
 | `@kouro/runtime` | Pure reduction, transition selection, scheduling, simulation, and recovery decisions |
 | `@kouro/executors` | Application coordination and execution ports |
 | `@kouro/persistence-sqlite` | Transactional event history and query projections |
-| `@kouro/sandbox-worktree` | Git repository registration, worktree isolation, artifacts, and delivery branches |
+| `@kouro/sandbox-worktree` | Git worktrees, artifacts, path guards, and cross-platform provider-tool isolation |
 | `@kouro/harnesses` | Claude Code, Codex, OpenCode, and Pi adapters |
 | `@kouro/api-contracts` | Transport DTOs and shared API contracts |
 | `@kouro/api` | Elysia application boundary and use cases |

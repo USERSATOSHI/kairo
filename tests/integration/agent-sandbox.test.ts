@@ -4,13 +4,21 @@ import { join } from 'node:path';
 
 import { describe, expect, test } from 'bun:test';
 
-import { BubblewrapAgentSandbox, SandboxErrorKind } from '@kouro/sandbox-worktree';
+import { ok } from '@usersatoshi/results';
+
+import {
+  SandboxErrorKind,
+  SandboxRuntimeAgentCommandSandbox,
+  WorktreePathGuard,
+  type AgentCommandSandbox,
+} from '@kouro/sandbox-worktree';
 import {
   createOpenCodeSandboxPlugin,
   invokeOpenCodeSubagent,
 } from '../../packages/harnesses/src/opencode-sandbox-plugin.ts';
+import { sandboxRuntimeConfig } from '../../packages/sandbox-worktree/src/sandbox-runtime-helper.ts';
 
-describe('ADR-0030: Bubblewrap agent tool sandbox', () => {
+describe('ADR-0032: cross-platform agent tool sandbox', () => {
   test('rejects lexical and symbolic-link escapes from the worktree', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'kouro-agent-sandbox-path-'));
     const root = join(directory, 'worktree');
@@ -18,15 +26,15 @@ describe('ADR-0030: Bubblewrap agent tool sandbox', () => {
     await Bun.write(join(root, 'inside.txt'), 'inside');
     await Bun.write(join(outside, 'secret.txt'), 'secret');
     symlinkSync(outside, join(root, 'escape'));
-    const sandbox = new BubblewrapAgentSandbox();
+    const pathGuard = new WorktreePathGuard();
     try {
-      expect((await sandbox.guardPath(root, join(root, 'inside.txt'), 'read')).isOk()).toBe(true);
-      const lexical = await sandbox.guardPath(root, join(root, '..', 'outside'), 'read');
+      expect((await pathGuard.guard(root, join(root, 'inside.txt'), 'read')).isOk()).toBe(true);
+      const lexical = await pathGuard.guard(root, join(root, '..', 'outside'), 'read');
       expect(lexical.isErr()).toBe(true);
       if (lexical.isErr()) {
         expect(lexical.error.kind).toBe(SandboxErrorKind.BoundaryViolation);
       }
-      const symbolic = await sandbox.guardPath(root, join(root, 'escape', 'secret.txt'), 'read');
+      const symbolic = await pathGuard.guard(root, join(root, 'escape', 'secret.txt'), 'read');
       expect(symbolic.isErr()).toBe(true);
       if (symbolic.isErr()) {
         expect(symbolic.error.kind).toBe(SandboxErrorKind.BoundaryViolation);
@@ -36,27 +44,28 @@ describe('ADR-0030: Bubblewrap agent tool sandbox', () => {
     }
   });
 
-  test('builds a minimal environment and capability-derived namespace policy', async () => {
+  test('builds capability-derived portable filesystem and network policy', () => {
     const root = mkdtempSync(join(tmpdir(), 'kouro-agent-sandbox-policy-'));
-    const sandbox = new BubblewrapAgentSandbox();
     try {
-      const prepared = await sandbox.invocation({
+      const config = sandboxRuntimeConfig({
         command: 'true',
         workingDirectory: root,
         writable: false,
         network: false,
         environment: {
-          HOME: process.env.HOME,
-          PATH: process.env.PATH,
+          HOME: process.env.HOME ?? root,
+          PATH: process.env.PATH ?? '',
           ANTHROPIC_API_KEY: 'must-not-cross',
         },
       });
-      expect(prepared.isOk()).toBe(true);
-      if (prepared.isErr()) return;
-      expect(prepared.value.args).toContain('--unshare-net');
-      expect(prepared.value.args).toContain('--ro-bind');
-      expect(prepared.value.environment.ANTHROPIC_API_KEY).toBeUndefined();
-      expect(prepared.value.environment.TMPDIR).toBe('/tmp');
+      expect(config.network.allowedDomains).toEqual([]);
+      expect(config.network.deniedDomains).toEqual(['*']);
+      expect(config.filesystem.allowWrite).toEqual([]);
+      expect(config.filesystem.denyWrite).toContain(root);
+      expect(config.credentials?.envVars).toContainEqual({
+        name: 'ANTHROPIC_API_KEY',
+        mode: 'deny',
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -67,8 +76,13 @@ describe('ADR-0030: Bubblewrap agent tool sandbox', () => {
     const root = join(directory, 'worktree');
     const outside = join(directory, 'outside.txt');
     await Bun.write(join(root, '.keep'), '');
-    const sandbox = new BubblewrapAgentSandbox();
+    const sandbox = new SandboxRuntimeAgentCommandSandbox();
     try {
+      const availability = await sandbox.availability();
+      if (!availability.available) {
+        expect(availability.reason).toBeString();
+        return;
+      }
       const executed = await sandbox.execute({
         command: `printf allowed > allowed.txt; printf hidden > ${outside}`,
         workingDirectory: root,
@@ -83,22 +97,42 @@ describe('ADR-0030: Bubblewrap agent tool sandbox', () => {
     }
   });
 
-  test('rewrites OpenCode Bash calls through the Bubblewrap implementation', async () => {
+  test('rewrites OpenCode Bash calls through the command-sandbox port', async () => {
     const root = mkdtempSync(join(tmpdir(), 'kouro-opencode-sandbox-plugin-'));
     try {
-      const plugin = await createOpenCodeSandboxPlugin({
-        workingDirectory: root,
-        writable: false,
-        network: false,
-      })();
+      const sandbox: AgentCommandSandbox = {
+        id: 'test-sandbox',
+        availability: () =>
+          Promise.resolve({
+            available: true,
+            runtime: 'sandbox-runtime',
+            platform: process.platform,
+          }),
+        invocation: () =>
+          Promise.resolve(
+            ok({
+              command: 'kouro-sandbox-helper',
+              args: ['execute', 'encoded-policy'],
+              environment: { PATH: '/usr/bin' },
+            }),
+          ),
+        execute: () => Promise.resolve(ok({ exitCode: 0 })),
+      };
+      const plugin = await createOpenCodeSandboxPlugin(
+        {
+          workingDirectory: root,
+          writable: false,
+          network: false,
+        },
+        sandbox,
+      )();
       const output: { args: Readonly<Record<string, unknown>> } = {
         args: { command: 'printf sandboxed' },
       };
       await plugin['tool.execute.before']({ tool: 'bash' }, output);
       expect(output.args.command).toBeString();
-      expect(String(output.args.command)).toContain("'bwrap'");
-      expect(String(output.args.command)).toContain("'--unshare-net'");
-      expect(String(output.args.command)).toContain("'printf sandboxed'");
+      expect(String(output.args.command)).toContain("'kouro-sandbox-helper'");
+      expect(String(output.args.command)).toContain("'encoded-policy'");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

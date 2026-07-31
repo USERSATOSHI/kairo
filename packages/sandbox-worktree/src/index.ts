@@ -1,11 +1,15 @@
 export { SandboxErrorKind, type SandboxError, toErr, toSandboxError } from './errors.ts';
+export { BubblewrapAgentSandbox, type BubblewrapInvocation } from './bubblewrap-agent-sandbox.ts';
 export {
-  BubblewrapAgentSandbox,
+  type AgentCommandSandbox,
+  type AgentCommandSandboxAvailability,
+  type AgentSandboxInvocation,
   type AgentSandboxPolicy,
-  type BubblewrapInvocation,
+  SandboxRuntimeAgentCommandSandbox,
   type SandboxedCommandInput,
   type SandboxedCommandOutput,
-} from './bubblewrap-agent-sandbox.ts';
+} from './agent-command-sandbox.ts';
+export { WorktreePathGuard } from './worktree-path-guard.ts';
 export { GitCommandRunner, type GitCommandOutput } from './git-command-runner.ts';
 export {
   WorktreeSandboxProvider,

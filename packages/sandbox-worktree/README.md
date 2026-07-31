@@ -2,6 +2,13 @@
 
 Infrastructure adapter for managing **isolated, disposable Git worktrees** as execution sandboxes for Kouro workflow runs. Provides deterministic, recoverable operations on top of Git repositories — registration, commit pinning, worktree creation, controlled commits, artifact capture, and cleanup.
 
+The package also owns provider-tool isolation infrastructure. `WorktreePathGuard`
+contains direct file tools inside an exact worktree, while
+`SandboxRuntimeAgentCommandSandbox` runs agent-controlled commands through a
+short-lived cross-platform helper. The helper uses Seatbelt on macOS,
+Bubblewrap on Linux/WSL2, and a provisioned account plus ACL/WFP enforcement on
+native Windows. Unavailable isolation fails closed.
+
 ## Architecture
 
 ```
@@ -9,6 +16,11 @@ WorktreeSandboxProvider
   ├── GitCommandRunner — wraps git CLI via Bun.spawn
   ├── Filesystem operations — atomic writes, locks, metadata
   └── Lock system — per-repository filesystem locks
+
+Agent tool isolation
+  ├── WorktreePathGuard — lexical, canonical, and symlink containment
+  └── SandboxRuntimeAgentCommandSandbox
+      └── one Sandbox Runtime helper process per command
 ```
 
 ## Usage
@@ -203,6 +215,10 @@ Per-repository filesystem locks under `locks/`:
 | `GitCommandOutput` | interface | `git-command-runner.ts` |
 | `SandboxErrorKind` | const enum | `errors.ts` |
 | `SandboxError` | type | `errors.ts` |
+| `WorktreePathGuard` | class | `worktree-path-guard.ts` |
+| `AgentCommandSandbox` | interface | `agent-command-sandbox.ts` |
+| `SandboxRuntimeAgentCommandSandbox` | class | `agent-command-sandbox.ts` |
+| `AgentCommandSandboxAvailability` | interface | `agent-command-sandbox.ts` |
 | `RegisteredRepository` | interface | `types.ts` |
 | `PinnedRepository` | interface | `types.ts` |
 | `RunWorktree` | interface | `types.ts` |
@@ -218,6 +234,7 @@ Per-repository filesystem locks under `locks/`:
 
 | Package | Purpose |
 |---------|---------|
+| `@anthropic-ai/sandbox-runtime` | Cross-platform command isolation adapter |
 | `@usersatoshi/results` | `Result<T, E>` type |
 
 No other Kouro dependencies — this is a standalone infrastructure package.

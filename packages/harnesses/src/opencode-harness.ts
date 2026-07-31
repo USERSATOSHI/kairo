@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 
 import { createOpencode, type Config } from '@opencode-ai/sdk/v2';
 import { err, fromAsync, ok, type Result } from '@usersatoshi/results';
-import { BubblewrapAgentSandbox } from '@kouro/sandbox-worktree';
+import { SandboxRuntimeAgentCommandSandbox } from '@kouro/sandbox-worktree';
 
 import type {
   AgentHarness,
@@ -191,8 +191,14 @@ function failureMessage(value: unknown): string {
 const defaultSdk: OpenCodeAgentSdk = {
   async create(request, resumeToken) {
     const canExecute = request.capabilities.some((capability) => capability.includes('execute'));
-    if (canExecute && !new BubblewrapAgentSandbox().available()) {
-      throw new Error('Bubblewrap is required for OpenCode command execution');
+    if (canExecute) {
+      const sandboxAvailability = await new SandboxRuntimeAgentCommandSandbox().availability();
+      if (!sandboxAvailability.available) {
+        throw new Error(
+          sandboxAvailability.reason ??
+            'Sandbox Runtime is required for OpenCode command execution',
+        );
+      }
     }
     const subagentBridge = request.subagents ? createSubagentBridge(request.subagents) : undefined;
     let sandboxPlugin: OpenCodeSandboxPlugin | undefined;

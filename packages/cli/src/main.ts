@@ -14,6 +14,7 @@ import {
   LocalArtifactContentReader,
 } from '@kouro/api';
 import type { DeliveryMetadata } from '@kouro/domain';
+import { SandboxRuntimeAgentCommandSandbox } from '@kouro/sandbox-worktree';
 
 import { ADW_TEMPLATES, createAdw, isAdwTemplate } from './create-adw.ts';
 import { LocalKouroHost } from './local-host.ts';
@@ -58,6 +59,7 @@ Planning:
 Host:
   serve           Serve the current repository dashboard and API
   diagnostics     Report available agent harnesses
+  sandbox         Inspect or provision the command sandbox
 
 Global options:
   -h, --help      Show help
@@ -135,6 +137,12 @@ Serves only the current repository by default. It can monitor a CLI-owned run
 without interrupting it and takes over execution when the worker lease becomes available.`,
   diagnostics: `Usage:
   kouro diagnostics`,
+  sandbox: `Usage:
+  kouro sandbox status
+  kouro sandbox setup
+
+Windows setup provisions the dedicated sandbox account and network policy.
+macOS and Linux require no host provisioning; status reports missing tools.`,
 };
 
 function option(args: readonly string[], name: string): string | undefined {
@@ -500,6 +508,22 @@ export async function runCli(args: readonly string[] = process.argv.slice(2)): P
     return 0;
   }
 
+  if (command === 'sandbox') {
+    const sandbox = new SandboxRuntimeAgentCommandSandbox();
+    const action = required(args[1], 'sandbox action');
+    if (action === 'setup') {
+      const setup = await sandbox.setup();
+      if (setup.isErr()) throw new Error(JSON.stringify(setup.error));
+      print(await sandbox.availability());
+      return 0;
+    }
+    if (action === 'status') {
+      print(await sandbox.availability());
+      return 0;
+    }
+    throw new Error(`Unknown sandbox action: ${action}`);
+  }
+
   const host = new LocalKouroHost();
   const initialized = await host.initialize();
   if (initialized.isErr())
@@ -718,7 +742,7 @@ export async function runCli(args: readonly string[] = process.argv.slice(2)): P
       return 0;
     }
     if (command === 'diagnostics') {
-      print(host.harnessDiagnostics());
+      print(await host.harnessDiagnostics());
       return 0;
     }
     if (command === 'serve') {

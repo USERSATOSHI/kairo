@@ -6,7 +6,7 @@ import {
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import { err, fromAsync, ok, type Result } from '@usersatoshi/results';
-import { BubblewrapAgentSandbox } from '@kouro/sandbox-worktree';
+import { WorktreePathGuard } from '@kouro/sandbox-worktree';
 import { z } from 'zod';
 
 import type {
@@ -93,7 +93,7 @@ function pathFromToolInput(input: Readonly<Record<string, unknown>>): string | u
 }
 
 function fileGuardFor(request: HarnessExecutionRequest) {
-  const sandbox = new BubblewrapAgentSandbox();
+  const pathGuard = new WorktreePathGuard();
   return async (input: unknown) => {
     if (!isRecord(input) || input.hook_event_name !== 'PreToolUse') return {};
     if (
@@ -105,7 +105,7 @@ function fileGuardFor(request: HarnessExecutionRequest) {
     const toolInput = isRecord(input.tool_input) ? input.tool_input : {};
     const path = pathFromToolInput(toolInput) ?? request.workingDirectory;
     const operation = input.tool_name === 'Edit' || input.tool_name === 'Write' ? 'write' : 'read';
-    const guarded = await sandbox.guardPath(request.workingDirectory, path, operation);
+    const guarded = await pathGuard.guard(request.workingDirectory, path, operation);
     return {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse' as const,

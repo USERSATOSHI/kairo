@@ -12,7 +12,7 @@ import {
   defineTool,
 } from '@earendil-works/pi-coding-agent';
 import type { SubagentExecutionController } from '@kouro/executors';
-import { BubblewrapAgentSandbox } from '@kouro/sandbox-worktree';
+import type { AgentCommandSandbox, WorktreePathGuard } from '@kouro/sandbox-worktree';
 import { Type } from 'typebox';
 import {
   SUBAGENT_TOOL_NAME,
@@ -57,108 +57,108 @@ function failure(error: unknown): Error {
 }
 
 async function guardedPath(
-  sandbox: BubblewrapAgentSandbox,
+  pathGuard: WorktreePathGuard,
   root: string,
   path: string,
   operation: 'read' | 'write',
 ): Promise<string> {
-  const guarded = await sandbox.guardPath(root, path, operation);
+  const guarded = await pathGuard.guard(root, path, operation);
   if (guarded.isErr()) throw failure(guarded.error);
   return guarded.unwrap();
 }
 
-function createSandboxedReadTool(root: string, sandbox: BubblewrapAgentSandbox) {
+function createSandboxedReadTool(root: string, pathGuard: WorktreePathGuard) {
   return createReadTool(root, {
     operations: {
       async access(path) {
-        await access(await guardedPath(sandbox, root, path, 'read'), constants.R_OK);
+        await access(await guardedPath(pathGuard, root, path, 'read'), constants.R_OK);
       },
       async readFile(path) {
-        return readFile(await guardedPath(sandbox, root, path, 'read'));
+        return readFile(await guardedPath(pathGuard, root, path, 'read'));
       },
     },
   });
 }
 
-function createSandboxedEditTool(root: string, sandbox: BubblewrapAgentSandbox) {
+function createSandboxedEditTool(root: string, pathGuard: WorktreePathGuard) {
   return createEditTool(root, {
     operations: {
       async access(path) {
         await access(
-          await guardedPath(sandbox, root, path, 'write'),
+          await guardedPath(pathGuard, root, path, 'write'),
           constants.R_OK | constants.W_OK,
         );
       },
       async readFile(path) {
-        return readFile(await guardedPath(sandbox, root, path, 'read'));
+        return readFile(await guardedPath(pathGuard, root, path, 'read'));
       },
       async writeFile(path, content) {
-        await writeFile(await guardedPath(sandbox, root, path, 'write'), content);
+        await writeFile(await guardedPath(pathGuard, root, path, 'write'), content);
       },
     },
   });
 }
 
-function createSandboxedWriteTool(root: string, sandbox: BubblewrapAgentSandbox) {
+function createSandboxedWriteTool(root: string, pathGuard: WorktreePathGuard) {
   return createWriteTool(root, {
     operations: {
       async mkdir(path) {
-        await mkdir(await guardedPath(sandbox, root, path, 'write'), { recursive: true });
+        await mkdir(await guardedPath(pathGuard, root, path, 'write'), { recursive: true });
       },
       async writeFile(path, content) {
-        await writeFile(await guardedPath(sandbox, root, path, 'write'), content);
+        await writeFile(await guardedPath(pathGuard, root, path, 'write'), content);
       },
     },
   });
 }
 
-function createSandboxedLsTool(root: string, sandbox: BubblewrapAgentSandbox) {
+function createSandboxedLsTool(root: string, pathGuard: WorktreePathGuard) {
   return createLsTool(root, {
     operations: {
       async exists(path) {
         try {
-          await access(await guardedPath(sandbox, root, path, 'read'));
+          await access(await guardedPath(pathGuard, root, path, 'read'));
           return true;
         } catch {
           return false;
         }
       },
       async stat(path) {
-        return stat(await guardedPath(sandbox, root, path, 'read'));
+        return stat(await guardedPath(pathGuard, root, path, 'read'));
       },
       async readdir(path) {
-        return readdir(await guardedPath(sandbox, root, path, 'read'));
+        return readdir(await guardedPath(pathGuard, root, path, 'read'));
       },
     },
   });
 }
 
-function createSandboxedGrepTool(root: string, sandbox: BubblewrapAgentSandbox) {
+function createSandboxedGrepTool(root: string, pathGuard: WorktreePathGuard) {
   return createGrepTool(root, {
     operations: {
       async isDirectory(path) {
-        return (await stat(await guardedPath(sandbox, root, path, 'read'))).isDirectory();
+        return (await stat(await guardedPath(pathGuard, root, path, 'read'))).isDirectory();
       },
       async readFile(path) {
-        return readFile(await guardedPath(sandbox, root, path, 'read'), 'utf8');
+        return readFile(await guardedPath(pathGuard, root, path, 'read'), 'utf8');
       },
     },
   });
 }
 
-function createSandboxedFindTool(root: string, sandbox: BubblewrapAgentSandbox) {
+function createSandboxedFindTool(root: string, pathGuard: WorktreePathGuard) {
   return createFindTool(root, {
     operations: {
       async exists(path) {
         try {
-          await access(await guardedPath(sandbox, root, path, 'read'));
+          await access(await guardedPath(pathGuard, root, path, 'read'));
           return true;
         } catch {
           return false;
         }
       },
       async glob(pattern, cwd, options) {
-        const directory = await guardedPath(sandbox, root, cwd, 'read');
+        const directory = await guardedPath(pathGuard, root, cwd, 'read');
         const matches: string[] = [];
         const glob = new Bun.Glob(pattern);
         for await (const match of glob.scan({
@@ -179,7 +179,8 @@ function createSandboxedFindTool(root: string, sandbox: BubblewrapAgentSandbox) 
 
 function createSandboxedBashTool(
   root: string,
-  sandbox: BubblewrapAgentSandbox,
+  pathGuard: WorktreePathGuard,
+  commandSandbox: AgentCommandSandbox,
   writable: boolean,
   network: boolean,
 ) {
@@ -187,8 +188,8 @@ function createSandboxedBashTool(
     exposeSessionEnvironment: false,
     operations: {
       async exec(command, cwd, options) {
-        const guardedCwd = await guardedPath(sandbox, root, cwd, 'read');
-        const executed = await sandbox.execute({
+        const guardedCwd = await guardedPath(pathGuard, root, cwd, 'read');
+        const executed = await commandSandbox.execute({
           command,
           workingDirectory: guardedCwd,
           writable,
@@ -208,21 +209,24 @@ function createSandboxedBashTool(
 export function createPiSandboxTools(
   root: string,
   capabilities: readonly string[],
-  sandbox: BubblewrapAgentSandbox,
+  pathGuard: WorktreePathGuard,
+  commandSandbox: AgentCommandSandbox,
   subagents?: SubagentExecutionController,
 ) {
   const writable = capabilities.some((capability) => capability.includes('write'));
   const executable = capabilities.some((capability) => capability.includes('execute'));
   const network = capabilities.some((capability) => capability.includes('network'));
   return [
-    createSandboxedReadTool(root, sandbox),
-    createSandboxedGrepTool(root, sandbox),
-    createSandboxedFindTool(root, sandbox),
-    createSandboxedLsTool(root, sandbox),
+    createSandboxedReadTool(root, pathGuard),
+    createSandboxedGrepTool(root, pathGuard),
+    createSandboxedFindTool(root, pathGuard),
+    createSandboxedLsTool(root, pathGuard),
     ...(writable
-      ? [createSandboxedEditTool(root, sandbox), createSandboxedWriteTool(root, sandbox)]
+      ? [createSandboxedEditTool(root, pathGuard), createSandboxedWriteTool(root, pathGuard)]
       : []),
-    ...(executable ? [createSandboxedBashTool(root, sandbox, writable, network)] : []),
+    ...(executable
+      ? [createSandboxedBashTool(root, pathGuard, commandSandbox, writable, network)]
+      : []),
     ...(subagents ? [createPiSubagentTool(subagents)] : []),
   ];
 }

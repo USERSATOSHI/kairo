@@ -16,6 +16,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.67",
     "@usersatoshi/results": "^1.0.0"
   }
 }

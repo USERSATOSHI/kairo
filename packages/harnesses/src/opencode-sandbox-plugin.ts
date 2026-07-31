@@ -1,4 +1,7 @@
-import { BubblewrapAgentSandbox } from '@kouro/sandbox-worktree';
+import {
+  SandboxRuntimeAgentCommandSandbox,
+  type AgentCommandSandbox,
+} from '@kouro/sandbox-worktree';
 import { z } from 'zod';
 import { SUBAGENT_TOOL_NAME } from './subagent-tool.ts';
 
@@ -21,6 +24,7 @@ interface OpenCodeSubagentConfiguration {
 type OpenCodeSubagentRequester = (input: string, init: RequestInit) => Promise<Response>;
 
 function shellQuote(value: string): string {
+  if (process.platform === 'win32') return `"${value.replaceAll('"', '""')}"`;
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
@@ -40,8 +44,10 @@ export async function invokeOpenCodeSubagent(
   return response.text();
 }
 
-export function createOpenCodeSandboxPlugin(policy: PluginSandboxPolicy) {
-  const sandbox = new BubblewrapAgentSandbox();
+export function createOpenCodeSandboxPlugin(
+  policy: PluginSandboxPolicy,
+  sandbox: AgentCommandSandbox = new SandboxRuntimeAgentCommandSandbox(),
+) {
   return async () => {
     const subagentTool = policy.subagents
       ? {
@@ -74,18 +80,9 @@ export function createOpenCodeSandboxPlugin(policy: PluginSandboxPolicy) {
           throw new Error(`Kouro sandbox unavailable: ${JSON.stringify(invocation.error)}`);
         }
         const prepared = invocation.unwrap();
-        const environment = Object.entries(prepared.environment).map(
-          ([key, value]) => `${key}=${shellQuote(value)}`,
-        );
         output.args = {
           ...output.args,
-          command: [
-            'env',
-            '-i',
-            ...environment,
-            shellQuote(prepared.command),
-            ...prepared.args.map(shellQuote),
-          ].join(' '),
+          command: [shellQuote(prepared.command), ...prepared.args.map(shellQuote)].join(' '),
         };
       },
     };

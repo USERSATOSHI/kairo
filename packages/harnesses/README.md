@@ -104,6 +104,10 @@ controller. The provider's native task delegation remains disabled.
 The OpenCode SDK supervises the local `opencode` executable, so that executable
 must still be installed and authenticated.
 
+Every Bash tool call is rewritten through Kouro's cross-platform command
+sandbox. Provider API traffic remains outside that boundary, while the command
+receives only capability-derived worktree write and network access.
+
 ### PiHarness
 
 Creates an in-process Pi `AgentSession` through
@@ -120,6 +124,10 @@ in the normalized prompt and independently validated by Kouro.
 
 Authorized workflow subagents are added as one in-process custom tool. The
 child execution remains owned by Kouro and never receives that tool itself.
+
+Pi replaces its built-in file and Bash tools with Kouro-owned tools. Direct
+file operations use the exact-worktree path guard; Bash uses the same
+cross-platform command sandbox as OpenCode.
 
 ### ScriptedFakeHarness
 

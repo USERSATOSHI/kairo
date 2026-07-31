@@ -69,18 +69,23 @@ First, check which agent harnesses Kouro can use:
 kouro diagnostics
 ```
 
-The result reports whether each supported runtime is available. Bundled
-in-process SDKs report available; Codex and OpenCode also require their local
-executables:
+The result reports provider availability separately from safe terminal
+execution. Bundled in-process SDKs report available; Codex and OpenCode also
+require their local executables:
 
 ```json
 [
-  { "id": "codex", "available": true },
-  { "id": "claude-code", "available": true },
-  { "id": "opencode", "available": false },
-  { "id": "pi", "available": true }
+  { "id": "codex", "available": true, "terminalSandbox": "provider-native", "terminalAvailable": true },
+  { "id": "claude-code", "available": true, "terminalSandbox": "provider-native", "terminalAvailable": true },
+  { "id": "opencode", "available": false, "terminalSandbox": "sandbox-runtime", "terminalAvailable": false },
+  { "id": "pi", "available": true, "terminalSandbox": "sandbox-runtime", "terminalAvailable": true }
 ]
 ```
+
+OpenCode and Pi terminal tools use Seatbelt on macOS, Bubblewrap on
+Linux/WSL2, and a provisioned account plus ACL/WFP enforcement on native
+Windows. Check the portable sandbox separately with `kouro sandbox status`.
+On Windows, run `kouro sandbox setup` once and approve its elevation prompt.
 
 Run the built-in feature-development workflow against a Git repository:
 
@@ -400,6 +405,15 @@ kouro diagnostics
 Install the missing Codex or OpenCode executable, or configure authentication
 for the selected bundled SDK, then retry with its Kouro harness ID. Claude uses
 the `claude-code` harness ID; Pi uses `pi`.
+
+If the provider is available but `terminalAvailable` is false, run:
+
+```bash
+kouro sandbox status
+```
+
+Install the reported platform dependency. Native Windows requires the explicit
+one-time `kouro sandbox setup` command.
 
 ### Kouro is waiting for approval
 

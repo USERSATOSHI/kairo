@@ -5,7 +5,7 @@ import {
   ModelRuntime,
   SessionManager,
 } from '@earendil-works/pi-coding-agent';
-import { BubblewrapAgentSandbox } from '@kouro/sandbox-worktree';
+import { SandboxRuntimeAgentCommandSandbox, WorktreePathGuard } from '@kouro/sandbox-worktree';
 import { err, fromAsync, ok, type Result } from '@usersatoshi/results';
 
 import type {
@@ -77,7 +77,8 @@ async function modelFor(
 
 const defaultSdk: PiAgentSdk = {
   async create(request, resumeToken) {
-    const sandbox = new BubblewrapAgentSandbox();
+    const pathGuard = new WorktreePathGuard();
+    const commandSandbox = new SandboxRuntimeAgentCommandSandbox();
     const agentDir = getAgentDir();
     const modelRuntime = await ModelRuntime.create();
     const model = await modelFor(modelRuntime, request.model);
@@ -98,7 +99,8 @@ const defaultSdk: PiAgentSdk = {
       customTools: createPiSandboxTools(
         request.workingDirectory,
         request.capabilities,
-        sandbox,
+        pathGuard,
+        commandSandbox,
         request.subagents,
       ),
       sessionManager: await sessionManagerFor(request.workingDirectory, resumeToken),
