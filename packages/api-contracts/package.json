@@ -1,6 +1,6 @@
 {
   "name": "@kouro/api-contracts",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -17,7 +17,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@kouro/domain": "0.1.12",
-    "@kouro/tickets": "0.1.12"
+    "@kouro/domain": "0.1.13",
+    "@kouro/tickets": "0.1.13"
   }
 }
