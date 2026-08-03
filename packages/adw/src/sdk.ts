@@ -1,4 +1,5 @@
 import type {
+  AgentReasoningEffort,
   Expression,
   JsonPrimitive,
   JsonValue,
@@ -37,6 +38,15 @@ export const HARNESS = Object.freeze({
 
 export type HarnessId = (typeof HARNESS)[keyof typeof HARNESS];
 
+/** Portable reasoning efforts supported by every built-in harness. */
+export const REASONING_EFFORT = Object.freeze({
+  LOW: 'low',
+  MEDIUM: 'medium',
+  HIGH: 'high',
+} as const satisfies Readonly<Record<string, AgentReasoningEffort>>);
+
+export type ReasoningEffort = (typeof REASONING_EFFORT)[keyof typeof REASONING_EFFORT];
+
 /**
  * Capability vocabulary accepted by each built-in harness.
  *
@@ -69,6 +79,7 @@ interface AgentNodeAuthoringBase<Harness extends HarnessId> {
   readonly prompt: string;
   readonly outputSchema?: string;
   readonly clearContext?: boolean;
+  readonly reasoningEffort?: ReasoningEffort;
   readonly allowedSubagents?: readonly string[];
   readonly capabilities?: readonly HarnessCapabilityMap[Harness][];
   readonly priority?: number;
@@ -94,6 +105,7 @@ interface SubagentAuthoringBase {
   readonly role: string;
   readonly prompt: string;
   readonly outputSchema?: string;
+  readonly reasoningEffort?: ReasoningEffort;
   readonly capabilities: readonly [typeof CAPABILITY.REPOSITORY_READ];
   readonly maxInvocations: number;
   readonly maxConcurrent: number;

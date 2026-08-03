@@ -83,6 +83,7 @@ describe('bounded workflow subagents', () => {
             role: 'architecture-scout',
             prompt: 'Inspect architecture.',
             harness: child.id,
+            reasoningEffort: 'low',
             capabilities: ['repository.read'],
             maxInvocations: 2,
             maxConcurrent: 2,
@@ -92,6 +93,7 @@ describe('bounded workflow subagents', () => {
             role: 'test-scout',
             prompt: 'Inspect tests.',
             harness: child.id,
+            reasoningEffort: 'medium',
             capabilities: ['repository.read'],
             maxInvocations: 2,
             maxConcurrent: 1,
@@ -123,7 +125,11 @@ describe('bounded workflow subagents', () => {
         'Inspect tests.\n\nDelegated task:\nFind the lowest useful tests',
       ]);
       expect(child.calls.every(({ request }) => request.subagents === undefined)).toBe(true);
-      expect(child.calls.every(({ request }) => request.reasoningEffort === 'high')).toBe(true);
+      expect(child.calls.map(({ request }) => request.reasoningEffort)).toEqual([
+        'low',
+        'low',
+        'medium',
+      ]);
 
       const runDirectory = createHash('sha256').update('run-subagents').digest('hex');
       const transcript = await readFile(
@@ -134,6 +140,7 @@ describe('bounded workflow subagents', () => {
       expect(transcript).toContain('"callId":"architecture:1"');
       expect(transcript).toContain('"callId":"tests:4"');
       expect(transcript).toContain('"task":"Find the lowest useful tests"');
+      expect(transcript).toContain('"reasoningEffort":"medium"');
       expect(transcript).toContain('Subagent is not authorized: unknown');
     } finally {
       await rm(directory, { recursive: true, force: true });

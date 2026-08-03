@@ -1,4 +1,4 @@
-import { WorkflowBuilder } from '@kouro/adw';
+import { REASONING_EFFORT, WorkflowBuilder } from '@kouro/adw';
 
 const workflow = new WorkflowBuilder({
   id: 'feature-simulation',
@@ -15,6 +15,7 @@ workflow.subworkflow('validation', {
 const scout = workflow.subagent('scout', {
   role: 'repository-scout',
   prompt: './prompts/scout.md',
+  reasoningEffort: REASONING_EFFORT.LOW,
   outputSchema: './schemas/scout.schema.ts',
   capabilities: ['repository.read'],
   maxInvocations: 2,
@@ -23,6 +24,7 @@ const scout = workflow.subagent('scout', {
 const plan = workflow.agent('plan', {
   role: 'planner',
   prompt: './prompts/plan.md',
+  reasoningEffort: REASONING_EFFORT.HIGH,
   outputSchema: './schemas/plan.schema.ts',
   capabilities: ['repository.read'],
   recoveryPolicy: 'resume_supported',

@@ -73,6 +73,8 @@ harness choice; omitted pins are resolved from durable run configuration.
 An optional non-empty `models` map selects a model by resolved harness ID. The
 resolved value is recorded on the attempt, and a missing entry preserves the
 harness's configured default.
+An optional `reasoningEffort` pins `low`, `medium`, or `high` for that agent and
+takes precedence over the durable run-level fallback.
 
 Agent source nodes may authorize `allowedSubagents`. Each referenced
 `SourceSubagentDefinition` is a bounded reusable child role, not a graph node:
@@ -85,7 +87,9 @@ records normalized inline or provider-backed ticket content, its external
 revision when available, and a `sha256:` checksum. The snapshot lives in
 durable run configuration so replay and resume never refetch a mutable ticket.
 Optional `agentReasoningEffort` is likewise snapshotted as `low`, `medium`, or
-`high`; it influences harness inference without changing orchestration replay.
+`high`; it is the fallback for agent and subagent definitions that do not pin
+their own effort and influences harness inference without changing
+orchestration replay.
 
 ## State Machine Types
 

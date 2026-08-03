@@ -322,6 +322,7 @@ function routedAgentArtifact(): CompiledWorkflowArtifact {
         prompt: 'Plan the change.',
         harness: 'claude-code',
         models: { 'claude-code': 'claude-model' },
+        reasoningEffort: 'high',
         recoveryPolicy: 'resume_supported',
       },
       {
@@ -330,6 +331,7 @@ function routedAgentArtifact(): CompiledWorkflowArtifact {
         role: 'implementer',
         prompt: 'Implement the plan.',
         models: { opencode: 'provider/opencode-model' },
+        reasoningEffort: 'low',
         recoveryPolicy: 'resume_supported',
       },
       { id: 'complete', type: 'complete' },
@@ -704,6 +706,7 @@ describe('M4 harness-independent agent execution', () => {
               plan: ['opencode'],
               implement: ['opencode'],
             },
+            agentReasoningEffort: 'medium',
           },
           idempotencyKey: 'create',
         })
@@ -717,6 +720,8 @@ describe('M4 harness-independent agent execution', () => {
 
       const completed = store.loadRun('routed-run').unwrap();
       expect(completed.state.status).toBe('succeeded');
+      expect(planner.calls[0]?.request.reasoningEffort).toBe('high');
+      expect(implementer.calls[0]?.request.reasoningEffort).toBe('low');
       expect(
         completed.state.invocations
           .filter(({ nodeId }) => nodeId === 'plan' || nodeId === 'implement')

@@ -174,6 +174,9 @@ A compiled agent `harness` pin takes precedence and selects a one-item policy.
 After choosing the harness, the coordinator resolves the model from the
 compiled node's `models` map. It records that selection on `attempt.started`,
 passes it to the harness, and reuses the recorded model when resuming.
+The coordinator resolves reasoning effort from the compiled agent first and
+then the durable run fallback. A bounded subagent resolves its own compiled
+effort first and otherwise inherits the parent's effective effort.
 
 When run configuration contains a `workItem`, the coordinator serializes that
 immutable snapshot into every agent prompt before adding transition feedback.

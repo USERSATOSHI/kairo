@@ -263,6 +263,44 @@ the compiled workflow checksum and durable attempt history, and resumed
 sessions keep the same selection. If the selected harness has no entry, Kouro
 leaves the model unset and that CLI uses its configured default.
 
+## Set reasoning effort per agent
+
+Reasoning effort belongs on each workflow role when stages need different
+cost, latency, and depth:
+
+```typescript
+import { REASONING_EFFORT } from '@kouro/adw';
+
+const scout = workflow.subagent('scout', {
+  role: 'repository-scout',
+  prompt: './prompts/scout.md',
+  reasoningEffort: REASONING_EFFORT.LOW,
+  capabilities: ['repository.read'],
+  maxInvocations: 2,
+  maxConcurrent: 2,
+});
+
+const plan = workflow.agent('plan', {
+  role: 'planner',
+  prompt: './prompts/plan.md',
+  reasoningEffort: REASONING_EFFORT.HIGH,
+  capabilities: ['repository.read'],
+  recoveryPolicy: 'resume_supported',
+});
+
+const implement = workflow.agent('implement', {
+  role: 'implementer',
+  prompt: './prompts/implement.md',
+  reasoningEffort: REASONING_EFFORT.MEDIUM,
+  capabilities: ['repository.read', 'repository.write'],
+  recoveryPolicy: 'resume_supported',
+});
+```
+
+The web launch setting is the fallback for agents without a compiled value.
+A subagent without its own value inherits its parent's effective effort.
+Omitting every level keeps the harness provider default.
+
 ## Create your own workflow
 
 Create an editable ADW package in the current repository:

@@ -111,7 +111,9 @@ function agentHarnesses(
 
 function agentReasoningEffort(
   aggregate: RunAggregate,
+  compiledEffort?: AgentReasoningEffort,
 ): Result<{ readonly value?: AgentReasoningEffort }, ExecutorError> {
+  if (compiledEffort !== undefined) return ok({ value: compiledEffort });
   const configured = aggregate.state.configuration.agentReasoningEffort;
   if (configured === undefined) return ok({});
   if (configured === 'low' || configured === 'medium' || configured === 'high') {
@@ -1064,7 +1066,7 @@ export class RunCoordinator {
       invocationSequence,
       attemptNumber,
     );
-    const effort = agentReasoningEffort(aggregate);
+    const effort = agentReasoningEffort(aggregate, definition.reasoningEffort);
     if (effort.isErr()) return effort;
     const reasoningEffort = effort.unwrap().value;
     const subagentDefinitions = (definition.allowedSubagents ?? []).map((subagentId) => {

@@ -1,6 +1,7 @@
 import { ok, type Result } from '@usersatoshi/results';
 
 import type {
+  AgentReasoningEffort,
   CompiledTransition,
   CompiledWorkflowArtifact,
   CompiledWorkflowBundle,
@@ -17,6 +18,10 @@ import { canonicalJson, compareCanonicalText, sha256 } from './canonical.ts';
 
 const NODE_ID_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
 const SUBAGENT_CAPABILITIES = new Set(['repository.read']);
+
+function isAgentReasoningEffort(value: unknown): value is AgentReasoningEffort {
+  return value === 'low' || value === 'medium' || value === 'high';
+}
 
 function isRecoveryPolicy(value: unknown): value is RecoveryPolicy {
   return (
@@ -91,6 +96,12 @@ function nodeConfigurationError(node: SourceNodeDefinition): string | undefined 
   }
   if (node.models !== undefined && node.type !== 'agent') {
     return 'models is supported only on agent nodes';
+  }
+  if (node.reasoningEffort !== undefined && node.type !== 'agent') {
+    return 'reasoningEffort is supported only on agent nodes';
+  }
+  if (node.reasoningEffort !== undefined && !isAgentReasoningEffort(node.reasoningEffort)) {
+    return 'reasoningEffort must be low, medium, or high';
   }
   if (node.allowedSubagents !== undefined && node.type !== 'agent') {
     return 'allowedSubagents is supported only on agent nodes';
@@ -188,6 +199,9 @@ function subagentConfigurationError(subagent: SourceSubagentDefinition): string 
     ) {
       return 'models must contain non-empty harness IDs and model identifiers';
     }
+  }
+  if (subagent.reasoningEffort !== undefined && !isAgentReasoningEffort(subagent.reasoningEffort)) {
+    return 'reasoningEffort must be low, medium, or high';
   }
   if (!Number.isSafeInteger(subagent.maxInvocations) || subagent.maxInvocations <= 0) {
     return 'maxInvocations must be a positive safe integer';

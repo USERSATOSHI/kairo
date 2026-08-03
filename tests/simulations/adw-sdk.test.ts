@@ -7,6 +7,7 @@ import {
   HARNESS,
   not,
   output,
+  REASONING_EFFORT,
   RECOVERY_POLICY,
   WorkflowAuthoringError,
   WorkflowAuthoringErrorKind,
@@ -46,6 +47,11 @@ describe('class-based ADW authoring SDK', () => {
       MANUAL_RECONCILIATION: 'manual_reconciliation',
       NEVER_AUTOMATICALLY_RETRY: 'never_automatically_retry',
     });
+    expect(REASONING_EFFORT).toEqual({
+      LOW: 'low',
+      MEDIUM: 'medium',
+      HIGH: 'high',
+    });
   });
 
   test('emits the existing plain definition shape from fluent declarations', () => {
@@ -66,6 +72,7 @@ describe('class-based ADW authoring SDK', () => {
       prompt: './repair.md',
       harness: 'pi',
       models: { pi: 'anthropic/claude-sonnet' },
+      reasoningEffort: REASONING_EFFORT.MEDIUM,
       clearContext: true,
       recoveryPolicy: 'resume_supported',
     });
@@ -95,6 +102,7 @@ describe('class-based ADW authoring SDK', () => {
           prompt: './repair.md',
           harness: 'pi',
           models: { pi: 'anthropic/claude-sonnet' },
+          reasoningEffort: 'medium',
           clearContext: true,
           recoveryPolicy: 'resume_supported',
         },
@@ -200,6 +208,7 @@ describe('class-based ADW authoring SDK', () => {
     const architecture = workflow.subagent('architecture', {
       role: 'architecture-scout',
       prompt: './prompts/architecture.md',
+      reasoningEffort: REASONING_EFFORT.LOW,
       capabilities: [CAPABILITY.REPOSITORY_READ],
       maxInvocations: 2,
       maxConcurrent: 2,
@@ -209,6 +218,7 @@ describe('class-based ADW authoring SDK', () => {
       prompt: './prompts/tests.md',
       harness: HARNESS.PI,
       models: { [HARNESS.PI]: 'anthropic/claude-sonnet' },
+      reasoningEffort: REASONING_EFFORT.HIGH,
       capabilities: [CAPABILITY.REPOSITORY_READ],
       maxInvocations: 3,
       maxConcurrent: 1,
@@ -236,12 +246,14 @@ describe('class-based ADW authoring SDK', () => {
       subagents: {
         architecture: {
           role: 'architecture-scout',
+          reasoningEffort: 'low',
           maxInvocations: 2,
           maxConcurrent: 2,
         },
         tests: {
           role: 'test-scout',
           harness: 'pi',
+          reasoningEffort: 'high',
           maxInvocations: 3,
           maxConcurrent: 1,
         },

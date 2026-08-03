@@ -23,8 +23,10 @@ Run creation accepts an optional `reasoningEffort` with the portable values
 each provider's configured default.
 
 The coordinator passes the snapshotted value through the normalized harness
-request. Bounded subagents inherit the same value from their parent attempt.
-Harnesses map it to their installed provider boundary:
+request. Bounded subagents inherit the same value from their parent attempt by
+default. ADR-0034 subsequently allows compiled agent and subagent definitions
+to override this fallback. Harnesses map the effective value to their installed
+provider boundary:
 
 - Codex App Server `turn/start.effort`;
 - Claude Agent SDK `effort`;
@@ -40,7 +42,8 @@ validate them against the selected harness and model.
 
 - Web-created runs can make an explicit cost/latency/quality choice.
 - Replay and resumed execution read the same durable run setting.
-- Parent and child agents use one coherent effort policy.
+- Parent and child agents without compiled overrides use one coherent effort
+  policy.
 - Existing runs and requests remain compatible because the setting is optional.
 - The setting influences provider inference, not graph scheduling, transitions,
   permissions, limits, approvals, or deterministic event reduction.
@@ -58,6 +61,5 @@ another provider.
 
 ### Workflow-level compiled effort
 
-Deferred. Workflow authors can pin harnesses and models when portability is an
-intentional tradeoff, but reasoning effort is initially an operator-level run
-policy like default harness routing.
+Initially deferred and subsequently adopted by ADR-0034. The run value remains
+the operator-selected fallback for workflow definitions that omit an effort.

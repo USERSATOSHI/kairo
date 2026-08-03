@@ -5,7 +5,7 @@ export type JsonValue =
   | readonly JsonValue[]
   | { readonly [key: string]: JsonValue };
 
-/** Portable reasoning-depth policy snapshotted for every agent in one run. */
+/** Portable reasoning-depth policy used by workflow agents and run defaults. */
 export type AgentReasoningEffort = 'low' | 'medium' | 'high';
 
 export interface WorkItemSnapshot {
@@ -82,6 +82,7 @@ export interface SourceNodeDefinition {
   readonly outputSchema?: string;
   readonly harness?: string;
   readonly models?: Readonly<Record<string, string>>;
+  readonly reasoningEffort?: AgentReasoningEffort;
   readonly allowedSubagents?: readonly string[];
   readonly clearContext?: boolean;
   readonly result?: 'succeeded' | 'failed';
@@ -95,6 +96,7 @@ export interface SourceSubagentDefinition {
   readonly outputSchema?: string;
   readonly harness?: string;
   readonly models?: Readonly<Record<string, string>>;
+  readonly reasoningEffort?: AgentReasoningEffort;
   readonly capabilities: readonly string[];
   readonly maxInvocations: number;
   readonly maxConcurrent: number;

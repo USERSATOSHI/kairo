@@ -41,14 +41,15 @@ describe('M1 content-addressed TypeScript ADW compiler', () => {
         role: 'repository-scout',
         prompt: './prompts/scout.md',
         outputSchema: './schemas/scout.schema.ts',
+        reasoningEffort: 'low',
         capabilities: ['repository.read'],
         maxInvocations: 2,
         maxConcurrent: 2,
       },
     ]);
     expect(compiled.unwrap().bundle.semanticVersions).toEqual({
-      compiler: '0.2.0',
-      ir: '2',
+      compiler: '0.3.0',
+      ir: '3',
       expressions: '1',
     });
   });

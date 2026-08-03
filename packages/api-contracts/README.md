@@ -45,7 +45,7 @@ interface CreateRunRequest {
   readonly ticket?: string;           // Source-qualified provider reference
   readonly harnesses?: readonly string[];  // Default ordered harness policy
   readonly harnessesByNode?: Readonly<Record<string, readonly string[]>>;
-  readonly reasoningEffort?: 'low' | 'medium' | 'high';
+  readonly reasoningEffort?: 'low' | 'medium' | 'high'; // Fallback for unpinned agents
   readonly actor: string;             // Who created the run
 }
 

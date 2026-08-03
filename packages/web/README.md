@@ -27,7 +27,7 @@ tool exchanges above in-context steering and stop controls.
 - **Derived ticket columns** — The API supplies planning and runtime-owned execution projections; React never persists board state
 - **Markdown ticket details** — Ticket descriptions and comments render headings, lists, links, quotes, inline code, and fenced code without accepting raw HTML
 - **Ticket-scoped workflow launch** — Ticket details launch a workflow against a selected repository with immutable ticket input, optional base-branch and harness routing, and direct navigation to the created run
-- **Portable reasoning effort** — Ticket launch can snapshot provider-default, low, medium, or high effort for every parent agent and bounded subagent in the run
+- **Portable reasoning effort** — Ticket launch can snapshot a provider-default, low, medium, or high fallback while compiled agent and subagent settings take precedence
 - **Nested subagent sessions** — Completed Kouro subagents render as separate readable sessions with delegated task, harness/model metadata, reasoning, tool activity, and structured output instead of embedded JSONL
 - **Approval proposal context** — Generic approvals include the exact source invocation output, so a plan can be reviewed without leaving the approval workspace
 - **Server-resolved provider secrets** — Provider configuration responses contain status and non-secret scope only

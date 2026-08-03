@@ -26,6 +26,7 @@ import {
   CAPABILITY,
   HARNESS,
   output,
+  REASONING_EFFORT,
   RECOVERY_POLICY,
   WorkflowBuilder,
 } from '@kouro/adw';
@@ -54,6 +55,7 @@ const reviewRepairs = workflow.counter('reviewRepair', 2);
 const architectureScout = workflow.subagent('architectureScout', {
   role: 'architecture-scout',
   prompt: './prompts/architecture-scout.md',
+  reasoningEffort: REASONING_EFFORT.LOW,
   capabilities: [CAPABILITY.REPOSITORY_READ],
   maxInvocations: 2,
   maxConcurrent: 2,
@@ -68,6 +70,7 @@ const testScout = workflow.subagent('testScout', {
 const plan = workflow.agent('plan', {
   role: 'planner',
   prompt: './prompts/plan.md',
+  reasoningEffort: REASONING_EFFORT.HIGH,
   outputSchema: './schemas/plan.schema.ts',
   capabilities: [CAPABILITY.REPOSITORY_READ],
   recoveryPolicy: RECOVERY_POLICY.RESUME_SUPPORTED,
@@ -79,6 +82,7 @@ const approval = workflow.approval('planApproval', {
 const implement = workflow.agent('implement', {
   role: 'implementer',
   prompt: './prompts/implement.md',
+  reasoningEffort: REASONING_EFFORT.MEDIUM,
   capabilities: [CAPABILITY.REPOSITORY_READ, CAPABILITY.REPOSITORY_WRITE],
   recoveryPolicy: RECOVERY_POLICY.RESUME_SUPPORTED,
 });
@@ -167,6 +171,13 @@ Kouro resolves the entry after selecting the harness, so fallback harnesses can
 use different provider-specific model identifiers. The map is included in the
 compiled checksum. If the selected harness has no entry, the harness uses its
 configured default.
+
+Set `reasoningEffort` on an agent or subagent when that role needs a stable
+reasoning depth. `REASONING_EFFORT.LOW`, `.MEDIUM`, and `.HIGH` are portable
+across the built-in harnesses. A node-level value is included in the compiled
+checksum and takes precedence over the run-level choice. When omitted, an
+agent uses the run-level effort and a subagent inherits its parent's effective
+effort; omitting both preserves the provider default.
 
 The SDK exports `HARNESS`, `CAPABILITY`, and `RECOVERY_POLICY` constants so
 workflow declarations receive autocomplete without repeating protocol strings.
@@ -272,6 +283,7 @@ and subworkflows.
 | Export | Kind |
 |---|---|
 | `WorkflowBuilder` | Stateful authoring builder |
+| `REASONING_EFFORT` | Portable per-agent reasoning-depth constants |
 | `WorkflowAuthoringError`, `WorkflowAuthoringErrorKind` | Fail-fast authoring errors |
 | `output`, `all`, `any`, `not` | Pure expression helpers |
 | Node, subagent, counter, and transition handle types | Fluent authoring contracts |

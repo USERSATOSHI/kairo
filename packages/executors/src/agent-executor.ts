@@ -60,6 +60,7 @@ interface SubagentTranscriptRecord {
   readonly task: string;
   readonly harnessId: string;
   readonly model?: string;
+  readonly reasoningEffort?: SourceSubagentDefinition['reasoningEffort'];
   readonly success: boolean;
   readonly output?: JsonValue;
   readonly error?: string;
@@ -275,6 +276,7 @@ export class AgentExecutor {
   ): Promise<SubagentInvocationResult> {
     const harnessId = definition.harness ?? parent.harnessId;
     const model = definition.models?.[harnessId];
+    const reasoningEffort = definition.reasoningEffort ?? parent.reasoningEffort;
     const resolved = this.registry.get(harnessId);
     if (resolved.isErr()) {
       const error = harnessErrorText(resolved.error);
@@ -285,6 +287,7 @@ export class AgentExecutor {
         task,
         harnessId,
         ...(model ? { model } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
         success: false,
         error,
       });
@@ -300,7 +303,7 @@ export class AgentExecutor {
       prompt: `${definition.prompt}\n\nDelegated task:\n${task}`,
       capabilities: definition.capabilities,
       ...(model ? { model } : {}),
-      ...(parent.reasoningEffort ? { reasoningEffort: parent.reasoningEffort } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(definition.outputSchemaValue === undefined
         ? {}
         : { outputSchema: definition.outputSchemaValue }),
@@ -315,6 +318,7 @@ export class AgentExecutor {
         task,
         harnessId,
         ...(model ? { model } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
         success: false,
         error,
       });
@@ -337,6 +341,7 @@ export class AgentExecutor {
         task,
         harnessId,
         ...(model ? { model } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
         success: false,
         error,
         transcript: completed.transcript,
@@ -351,6 +356,7 @@ export class AgentExecutor {
       task,
       harnessId,
       ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
       success: true,
       output: validated.output,
       transcript: completed.transcript,

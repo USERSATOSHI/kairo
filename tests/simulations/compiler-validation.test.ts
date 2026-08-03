@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { compileWorkflow, CompilerErrorKind } from '@kouro/adw';
-import type { RecoveryPolicy } from '@kouro/domain';
+import type { AgentReasoningEffort, RecoveryPolicy } from '@kouro/domain';
 import { workflowSource } from './fixtures.ts';
 
 describe('M1 compiler validation', () => {
@@ -396,6 +396,91 @@ describe('M1 compiler validation', () => {
         kind: CompilerErrorKind.InvalidNodeConfiguration,
         nodeId: 'command',
         reason: 'command recoveryPolicy is unsupported',
+      });
+    }
+  });
+
+  test('accepts reasoning effort only on agents and validates portable values', () => {
+    const invalidNodeEffort = compileWorkflow(
+      workflowSource({
+        entryNodeId: 'agent',
+        nodes: [
+          {
+            id: 'agent',
+            type: 'agent',
+            role: 'planner',
+            prompt: 'Plan.',
+            // Deliberately cross the static boundary to test runtime validation.
+            // oxlint-disable-next-line typescript/no-unsafe-type-assertion
+            reasoningEffort: 'maximum' as AgentReasoningEffort,
+            recoveryPolicy: 'resume_supported',
+          },
+          { id: 'complete', type: 'complete' },
+        ],
+        transitions: [
+          {
+            id: 'agent.success.complete',
+            from: { nodeId: 'agent', outcome: 'success' },
+            toNodeId: 'complete',
+          },
+        ],
+      }),
+    );
+    expect(invalidNodeEffort.isErr()).toBe(true);
+    if (invalidNodeEffort.isErr()) {
+      expect(invalidNodeEffort.error).toMatchObject({
+        kind: CompilerErrorKind.InvalidNodeConfiguration,
+        nodeId: 'agent',
+        reason: 'reasoningEffort must be low, medium, or high',
+      });
+    }
+
+    const invalidSubagentEffort = compileWorkflow(
+      workflowSource({
+        subagents: [
+          {
+            id: 'scout',
+            role: 'scout',
+            prompt: 'Inspect.',
+            // Deliberately cross the static boundary to test runtime validation.
+            // oxlint-disable-next-line typescript/no-unsafe-type-assertion
+            reasoningEffort: 'maximum' as AgentReasoningEffort,
+            capabilities: ['repository.read'],
+            maxInvocations: 1,
+            maxConcurrent: 1,
+          },
+        ],
+      }),
+    );
+    expect(invalidSubagentEffort.isErr()).toBe(true);
+    if (invalidSubagentEffort.isErr()) {
+      expect(invalidSubagentEffort.error).toMatchObject({
+        kind: CompilerErrorKind.InvalidSubagentConfiguration,
+        subagentId: 'scout',
+        reason: 'reasoningEffort must be low, medium, or high',
+      });
+    }
+
+    const commandEffort = compileWorkflow(
+      workflowSource({
+        nodes: [
+          {
+            id: 'command',
+            type: 'command',
+            command: 'bun test',
+            reasoningEffort: 'low',
+            recoveryPolicy: 'replay_safe',
+          },
+          { id: 'complete', type: 'complete' },
+        ],
+      }),
+    );
+    expect(commandEffort.isErr()).toBe(true);
+    if (commandEffort.isErr()) {
+      expect(commandEffort.error).toMatchObject({
+        kind: CompilerErrorKind.InvalidNodeConfiguration,
+        nodeId: 'command',
+        reason: 'reasoningEffort is supported only on agent nodes',
       });
     }
   });

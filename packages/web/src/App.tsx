@@ -2387,7 +2387,7 @@ function TicketRunFields({
           <option value="medium">Medium · balanced</option>
           <option value="high">High · deeper</option>
         </select>
-        <small>Applied to every parent agent and bounded subagent in this run.</small>
+        <small>Fallback for agents and subagents without a workflow-level effort.</small>
       </label>
       <label>
         <span>Base branch</span>

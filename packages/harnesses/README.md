@@ -49,7 +49,7 @@ const harness = new ClaudeCodeHarness();
 - Project, user, and local settings are not loaded into the SDK query.
 - Authorized workflow subagents are exposed through one Kouro-owned in-process
   MCP tool; provider-native delegation stays disabled.
-- Portable run reasoning effort maps to the Claude Agent SDK `effort` option.
+- Effective workflow/run reasoning effort maps to the Claude Agent SDK `effort` option.
 
 ### CodexHarness
 
@@ -77,7 +77,7 @@ const harness = new CodexHarness();
   final agent message through Kouro's independent structured-output validator.
 - Exposes authorized workflow subagents as a thread-scoped dynamic tool and
   answers tool calls through the normalized executor controller.
-- Portable run reasoning effort maps to App Server `turn/start.effort`.
+- Effective workflow/run reasoning effort maps to App Server `turn/start.effort`.
 
 Kouro may call `resume()` for a later graph invocation of the same agent node,
 not only for interruption recovery. The durable session token retains the
@@ -103,7 +103,7 @@ When the workflow authorizes subagents, the generated plugin adds one custom
 tool backed by an authenticated loopback bridge to the normalized executor
 controller. The provider's native task delegation remains disabled.
 
-Portable run reasoning effort maps to the selected OpenCode model variant.
+Effective workflow/run reasoning effort maps to the selected OpenCode model variant.
 
 The OpenCode SDK supervises the local `opencode` executable, so that executable
 must still be installed and authenticated.
@@ -129,7 +129,7 @@ in the normalized prompt and independently validated by Kouro.
 Authorized workflow subagents are added as one in-process custom tool. The
 child execution remains owned by Kouro and never receives that tool itself.
 
-Portable run reasoning effort maps to Pi's `thinkingLevel`.
+Effective workflow/run reasoning effort maps to Pi's `thinkingLevel`.
 
 Pi replaces its built-in file and Bash tools with Kouro-owned tools. Direct
 file operations use the exact-worktree path guard; Bash uses the same
