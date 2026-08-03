@@ -66,10 +66,22 @@ export type TicketBoardColumn =
   | 'done'
   | 'cancelled';
 
+export interface TicketRunUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  readonly reasoningTokens?: number;
+}
+
 export interface TicketRunView {
   readonly runId: RunId;
   readonly active: boolean;
   readonly column: Exclude<TicketBoardColumn, 'backlog' | 'ready'>;
+  /** Token usage summed across the run's agent attempts, when any harness reported it. */
+  readonly usage?: TicketRunUsage;
+  /** Estimated USD cost from the shared price table, when every used model is priced. */
+  readonly costUsd?: number;
 }
 
 export interface TicketBoardCard {

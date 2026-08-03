@@ -7,6 +7,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { SandboxRuntimeAgentCommandSandbox, WorktreePathGuard } from '@kouro/sandbox-worktree';
 import { err, fromAsync, ok, type Result } from '@usersatoshi/results';
+import type { TokenUsage } from '@kouro/domain';
 
 import type {
   AgentHarness,
@@ -26,7 +27,20 @@ export interface PiSdkSession {
   steer(text: string): Promise<void>;
   abort(): Promise<void>;
   subscribe(listener: (event: unknown) => void): () => void;
+  getSessionStats(): PiSessionStats;
   dispose(): void;
+}
+
+/** Token counts and cost reported by the Pi SDK session statistics. */
+export interface PiSessionStats {
+  readonly tokens?: {
+    readonly input: number;
+    readonly output: number;
+    readonly cacheRead: number;
+    readonly cacheWrite: number;
+    readonly total: number;
+  };
+  readonly cost?: number;
 }
 
 export interface PiAgentSdk {
@@ -133,6 +147,17 @@ function assistantOutput(value: unknown): Result<string, HarnessError> | undefin
   return text ? ok(text) : err(processFailure('Pi SDK returned no assistant text'));
 }
 
+function usageFromPiStats(stats: PiSessionStats): TokenUsage | undefined {
+  const tokens = stats.tokens;
+  if (!tokens) return undefined;
+  return {
+    inputTokens: tokens.input,
+    outputTokens: tokens.output,
+    ...(tokens.cacheRead > 0 ? { cacheReadTokens: tokens.cacheRead } : {}),
+    ...(tokens.cacheWrite > 0 ? { cacheWriteTokens: tokens.cacheWrite } : {}),
+  };
+}
+
 async function applyControls(
   request: HarnessExecutionRequest,
   session: PiSdkSession,
@@ -219,10 +244,17 @@ export class PiHarness implements AgentHarness {
         return err(invalidResponse('Pi SDK returned no assistant text', transcript.join('\n')));
       }
       if (finalOutput.isErr()) return finalOutput;
+      let usage: TokenUsage | undefined;
+      try {
+        usage = usageFromPiStats(session.getSessionStats());
+      } catch {
+        usage = undefined;
+      }
       return ok({
         output: parseHarnessOutput(finalOutput.unwrap()),
         transcript: transcript.join('\n'),
         resumeToken: token,
+        ...(usage ? { usage } : {}),
       });
     } finally {
       unsubscribe();

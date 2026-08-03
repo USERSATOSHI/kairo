@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 
 import { compileWorkflow } from '@kouro/adw';
-import type { CompiledWorkflowArtifact, WorkflowSourceBundle } from '@kouro/domain';
+import type { CompiledWorkflowArtifact, TokenUsage, WorkflowSourceBundle } from '@kouro/domain';
 import {
   AgentExecutor,
   ExecutorErrorKind,
@@ -158,6 +158,7 @@ class ScriptedOpenCodeSdk implements OpenCodeAgentSdk {
     steer(text: string): Promise<void>;
     interrupt(): Promise<void>;
     messages(): Promise<readonly unknown[]>;
+    usage(): Promise<TokenUsage | undefined>;
     subscribe(listener: (event: unknown) => Promise<void>): Promise<() => Promise<void>>;
     close(): void;
   }> {
@@ -175,6 +176,7 @@ class ScriptedOpenCodeSdk implements OpenCodeAgentSdk {
             content: [{ type: 'text', text: JSON.stringify(this.output) }],
           },
         ]),
+      usage: () => Promise.resolve({ inputTokens: 500, outputTokens: 100 }),
       subscribe: () => Promise.resolve(() => Promise.resolve()),
       close: () => undefined,
     });
@@ -206,6 +208,10 @@ class ScriptedPiSdk implements PiAgentSdk {
       prompt: () => Promise.resolve(),
       steer: () => Promise.resolve(),
       abort: () => Promise.resolve(),
+      getSessionStats: () => ({
+        tokens: { input: 200, output: 50, cacheRead: 0, cacheWrite: 0, total: 250 },
+        cost: 0,
+      }),
       subscribe: () => () => undefined,
       dispose: () => undefined,
     });
@@ -828,6 +834,45 @@ describe('M4 harness-independent agent execution', () => {
       );
       const completed = (await coordinator.advance('invalid-run')).unwrap();
       expect(completed.state.status).toBe('failed');
+    } finally {
+      store.dispose();
+      rmSync(paths.directory, { recursive: true, force: true });
+    }
+  });
+
+  test('ignores malformed optional usage without failing a successful attempt', async () => {
+    const paths = location('kouro-m4-malformed-usage-');
+    const store = storeAt(paths.database);
+    try {
+      const harness = new ScriptedFakeHarness('fake', [
+        {
+          output: { summary: 'Complete', steps: ['Ship it'] },
+          transcript: '{}',
+          usage: { inputTokens: -1, outputTokens: 20 },
+        },
+      ]);
+      const coordinator = new RunCoordinator(
+        store,
+        new UnusedCommandRunner(),
+        new AgentExecutor(new HarnessRegistry([harness]), new LocalArtifactWriter(paths.artifacts)),
+        paths.directory,
+      );
+      coordinator
+        .createRun({
+          runId: 'malformed-usage-run',
+          artifact: artifact(),
+          startingCommit: 'abc123',
+          configuration: { agentHarnesses: ['fake'] },
+          idempotencyKey: 'create',
+        })
+        .unwrap();
+
+      await coordinator.advance('malformed-usage-run');
+      expect((await coordinator.advance('malformed-usage-run')).isOk()).toBe(true);
+
+      const persisted = store.loadRun('malformed-usage-run').unwrap();
+      expect(persisted.state.invocations[0]?.state).toBe('succeeded');
+      expect(persisted.state.invocations[0]?.attempts[0]?.usage).toBeUndefined();
     } finally {
       store.dispose();
       rmSync(paths.directory, { recursive: true, force: true });

@@ -217,6 +217,21 @@ export interface AgentSteeringRequest {
   readonly reason?: string;
 }
 
+/**
+ * Token usage reported by a coding-agent harness for one attempt.
+ *
+ * Fields are provider-agnostic counts gathered at the harness boundary. Cost
+ * is never persisted here; it is a derived display value computed from this
+ * usage and a model price table at the edge.
+ */
+export interface TokenUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  readonly reasoningTokens?: number;
+}
+
 export interface NodeAttempt {
   readonly number: number;
   readonly state: AttemptState;
@@ -226,6 +241,7 @@ export interface NodeAttempt {
   readonly steering?: readonly AgentSteeringRequest[];
   readonly artifacts?: readonly ArtifactReference[];
   readonly failure?: AttemptFailure;
+  readonly usage?: TokenUsage;
 }
 
 export interface NodeInvocation {
@@ -367,6 +383,13 @@ export type RunEvent =
       readonly invocationSequence: number;
       readonly attemptNumber: number;
       readonly resumeToken: string;
+    }
+  | {
+      readonly sequence: number;
+      readonly type: 'attempt.usage_recorded';
+      readonly invocationSequence: number;
+      readonly attemptNumber: number;
+      readonly usage: TokenUsage;
     }
   | {
       readonly sequence: number;

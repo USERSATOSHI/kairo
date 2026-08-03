@@ -24,6 +24,10 @@ activity record while execution is in progress. The record is scoped by run,
 invocation, and attempt and contains the exact prompt metadata, harness identity,
 raw transcript bytes, and a completion marker.
 
+ADR-0035 extends the same activity record with Kouro-owned subagent lifecycle
+envelopes. Child provider chunks remain presentation-only bytes and are
+correlated by stable Kouro subagent call IDs.
+
 The activity record is an observation only:
 
 - it is not appended to the durable run event stream;

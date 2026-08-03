@@ -1,6 +1,7 @@
+import { estimateCostUsd } from '@kouro/domain';
 import type { NodeDefinition, RunState } from '@kouro/domain';
 import type { ObservableRunStore } from './ports.ts';
-import type { TicketError, TicketRunQuery, TicketRunView } from '@kouro/tickets';
+import type { TicketError, TicketRunQuery, TicketRunUsage, TicketRunView } from '@kouro/tickets';
 import { TicketErrorKind, toTicketError } from '@kouro/tickets';
 import { ok, type Result } from '@usersatoshi/results';
 
@@ -25,6 +26,51 @@ function runningColumn(
   return 'implementing';
 }
 
+function runUsage(state: RunState): TicketRunUsage | undefined {
+  const usage = state.invocations.flatMap(({ attempts }) =>
+    attempts.flatMap((attempt) => (attempt.usage ? [attempt.usage] : [])),
+  );
+  if (usage.length === 0) return undefined;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheReadTokens: number | undefined;
+  let cacheWriteTokens: number | undefined;
+  let reasoningTokens: number | undefined;
+  for (const item of usage) {
+    inputTokens += item.inputTokens;
+    outputTokens += item.outputTokens;
+    if (item.cacheReadTokens !== undefined) {
+      cacheReadTokens = (cacheReadTokens ?? 0) + item.cacheReadTokens;
+    }
+    if (item.cacheWriteTokens !== undefined) {
+      cacheWriteTokens = (cacheWriteTokens ?? 0) + item.cacheWriteTokens;
+    }
+    if (item.reasoningTokens !== undefined) {
+      reasoningTokens = (reasoningTokens ?? 0) + item.reasoningTokens;
+    }
+  }
+  return {
+    inputTokens,
+    outputTokens,
+    ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+    ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+  };
+}
+
+function runCostUsd(state: RunState): number | undefined {
+  const attempts = state.invocations.flatMap(({ attempts: invocationAttempts }) =>
+    invocationAttempts.flatMap((attempt) =>
+      attempt.usage ? [{ usage: attempt.usage, model: attempt.model }] : [],
+    ),
+  );
+  if (attempts.length === 0) return undefined;
+  const costs = attempts.map((attempt) => estimateCostUsd(attempt.usage, attempt.model));
+  return costs.every((cost): cost is number => cost !== undefined)
+    ? costs.reduce((total, cost) => total + cost, 0)
+    : undefined;
+}
+
 export class KouroTicketRunQuery implements TicketRunQuery {
   constructor(private readonly runs: ObservableRunStore) {}
 
@@ -39,6 +85,8 @@ export class KouroTicketRunQuery implements TicketRunQuery {
     }
     const aggregate = loaded.unwrap();
     const status = aggregate.state.status;
+    const usage = runUsage(aggregate.state);
+    const costUsd = runCostUsd(aggregate.state);
     return ok({
       runId,
       active: !['succeeded', 'failed', 'cancelled'].includes(status),
@@ -52,6 +100,8 @@ export class KouroTicketRunQuery implements TicketRunQuery {
               : status === 'paused'
                 ? 'blocked'
                 : runningColumn(aggregate.state, aggregate.artifact.bundle.nodes),
+      ...(usage ? { usage } : {}),
+      ...(costUsd === undefined ? {} : { costUsd }),
     });
   }
 }

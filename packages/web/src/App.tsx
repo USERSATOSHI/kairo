@@ -66,15 +66,21 @@ import {
 } from './api.ts';
 import {
   approvalDiffArtifact,
+  attemptCostUsd,
   formatByteSize,
+  formatTokenCount,
+  formatUsd,
   invocationDisplayState,
   invocationFailure,
+  runCostUsd,
+  runUsage,
 } from './execution-presentation.ts';
 import {
   invocationControlAvailability,
   preferredInvocationSequence,
 } from './execution-controls.ts';
 import { newIdempotencyKey } from './idempotency-key.ts';
+import { timelineModel } from './timeline.ts';
 import {
   CodeViewer,
   MarkdownContent,
@@ -87,7 +93,7 @@ import {
 } from './transcript.ts';
 
 type Tab = 'control' | 'details' | 'events' | 'artifacts' | 'approval';
-type DiagramMode = 'flowchart' | 'graph';
+type DiagramMode = 'flowchart' | 'graph' | 'timeline';
 type DiagramDirection = 'TB' | 'LR';
 
 interface WorkspaceStyle extends CSSProperties {
@@ -408,6 +414,116 @@ function graphEdges(
   });
 }
 
+interface TimelineStyle extends CSSProperties {
+  readonly '--timeline-track-min': string;
+}
+
+function RunTimeline({
+  run,
+  selectedNodeId,
+  onSelectNode,
+}: {
+  readonly run: RunDetails;
+  readonly selectedNodeId: string | null;
+  readonly onSelectNode: (nodeId: string) => void;
+}) {
+  const model = useMemo(() => timelineModel(run), [run]);
+  if (model.tickCount === 0) {
+    return (
+      <div className="timeline">
+        <p className="timeline-empty">No invocation has been activated yet.</p>
+      </div>
+    );
+  }
+  const tickPercent = 100 / model.tickCount;
+  const ticks = Array.from({ length: model.tickCount }, (_, index) => index + 1);
+  const timelineStyle: TimelineStyle = {
+    '--timeline-track-min': `${Math.max(320, model.tickCount * 34)}px`,
+  };
+  return (
+    <div className="timeline" style={timelineStyle}>
+      <div className="timeline-scroll">
+        <header className="timeline-header">
+          <span className="timeline-lane-heading">Node · lane</span>
+          <div className="timeline-axis">
+            {ticks.map((tick) => (
+              <span
+                className="timeline-tick"
+                key={tick}
+                style={{ left: `${((tick - 1) * tickPercent).toFixed(3)}%` }}
+              >
+                {tick}
+              </span>
+            ))}
+            <span className="timeline-tick timeline-tick-end" style={{ left: '100%' }}>
+              end
+            </span>
+          </div>
+        </header>
+        {model.lanes.map((lane) => (
+          <section className="timeline-lane" key={lane.nodeId}>
+            <button
+              aria-pressed={selectedNodeId === lane.nodeId}
+              className={selectedNodeId === lane.nodeId ? 'timeline-lane-label selected' : 'timeline-lane-label'}
+              onClick={() => onSelectNode(lane.nodeId)}
+              title={`${lane.nodeType} · ${lane.title}`}
+              type="button"
+            >
+              <small>{lane.nodeType}</small>
+              <strong>{lane.title}</strong>
+              <span>{lane.blocks.length} invocation{lane.blocks.length === 1 ? '' : 's'}</span>
+            </button>
+            <div className="timeline-lane-tracks">
+              {lane.blocks.map((block) => (
+                <button
+                  aria-pressed={selectedNodeId === block.nodeId}
+                  className={`timeline-block${block.queued ? ' queued' : ''}${selectedNodeId === block.nodeId ? ' selected' : ''}`}
+                  key={block.invocationSequence}
+                  onClick={() => onSelectNode(block.nodeId)}
+                  style={{
+                    left: `${((block.invocationSequence - 1) * tickPercent).toFixed(3)}%`,
+                    width: `${tickPercent.toFixed(3)}%`,
+                  }}
+                  title={`#${block.invocationSequence} · ${block.state} · ${block.attemptCount} attempt${block.attemptCount === 1 ? '' : 's'}${block.model ? ` · ${block.model}` : ''}${block.usage ? ` · ${formatTokenCount(block.usage.inputTokens + block.usage.outputTokens)} tokens` : ''}${block.costUsd !== undefined ? ` · ${formatUsd(block.costUsd)} est.` : ''}`}
+                  type="button"
+                >
+                  <span className={`timeline-block-fill state-${block.state.replaceAll('_', '-')}`} />
+                  <span className="timeline-block-label">
+                    #{block.invocationSequence}
+                    {block.attemptCount > 0 ? ` · ×${block.attemptCount}` : ''}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+      <footer className="timeline-legend">
+        <span>Horizontal order is the durable activation sequence, not wall-clock time.</span>
+        <span className="timeline-legend-swatch state-succeeded">succeeded</span>
+        <span className="timeline-legend-swatch state-active">active</span>
+        <span className="timeline-legend-swatch state-waiting-for-approval">waiting</span>
+        <span className="timeline-legend-swatch state-failed">failed</span>
+        <span className="timeline-legend-swatch queued">queued</span>
+      </footer>
+    </div>
+  );
+}
+
+function RunCostStat({ run }: { readonly run: RunDetails }) {
+  const usage = runUsage(run);
+  if (!usage) return null;
+  const cost = runCostUsd(run);
+  return (
+    <div className="run-stat run-stat-cost">
+      <span>{cost !== undefined ? formatUsd(cost) : 'unpriced'}</span>
+      <small>
+        {formatTokenCount(usage.inputTokens + usage.outputTokens)} tokens est.
+      </small>
+    </div>
+  );
+}
+
 function RunList({
   runs,
   selected,
@@ -594,6 +710,37 @@ function OperatorConsole({
   );
 }
 
+function AttemptUsage({
+  run,
+  invocationSequence,
+  attemptNumber,
+}: {
+  readonly run: RunDetails;
+  readonly invocationSequence: number;
+  readonly attemptNumber: number;
+}) {
+  const invocation = run.state.invocations.find(({ sequence }) => sequence === invocationSequence);
+  const attempt = invocation?.attempts.find(({ number }) => number === attemptNumber);
+  const usage = attempt?.usage;
+  if (!usage) return null;
+  const cost = attemptCostUsd(run, invocationSequence, attemptNumber);
+  const parts = [
+    `${formatTokenCount(usage.inputTokens)} in`,
+    `${formatTokenCount(usage.outputTokens)} out`,
+    ...(usage.cacheReadTokens !== undefined ? [`${formatTokenCount(usage.cacheReadTokens)} cache`] : []),
+    ...(usage.cacheWriteTokens !== undefined
+      ? [`${formatTokenCount(usage.cacheWriteTokens)} cache write`]
+      : []),
+    ...(usage.reasoningTokens !== undefined ? [`${formatTokenCount(usage.reasoningTokens)} reasoning`] : []),
+  ];
+  return (
+    <span className="attempt-usage">
+      {parts.join(' · ')}
+      {cost !== undefined ? ` · ${formatUsd(cost)} est.` : ''}
+    </span>
+  );
+}
+
 function NodeDetails({
   node,
   run,
@@ -657,6 +804,11 @@ function NodeDetails({
                 {attempt.model ? ` · ${attempt.model}` : ''} ·{' '}
                 {invocation.outcome === 'failure' ? 'failed' : attempt.state}
               </p>
+              <AttemptUsage
+                attemptNumber={attempt.number}
+                invocationSequence={invocation.sequence}
+                run={run}
+              />
               {attempt.failure ? (
                 <div className="invocation-failure">
                   <strong>{attempt.failure.kind.replaceAll('_', ' ')}</strong>
@@ -768,6 +920,12 @@ function TranscriptCard({
                   <dd>{entry.model}</dd>
                 </>
               ) : null}
+              {entry.reasoningEffort ? (
+                <>
+                  <dt>Effort</dt>
+                  <dd>{entry.reasoningEffort}</dd>
+                </>
+              ) : null}
             </dl>
             {entry.task ? (
               <section>
@@ -783,7 +941,11 @@ function TranscriptCard({
             ) : null}
             <section>
               <span className="field-label">
-                {entry.status === 'failed' ? 'Failure' : 'Structured output'}
+                {entry.status === 'failed'
+                  ? 'Failure'
+                  : entry.status === 'running'
+                    ? 'Status'
+                    : 'Structured output'}
               </span>
               <MarkdownContent content={markdown ?? entry.text} />
             </section>
@@ -1403,6 +1565,7 @@ const autoRefreshEvents = new Set([
   'attempt.resumed',
   'attempt.resume_token_recorded',
   'attempt.artifact_published',
+  'attempt.usage_recorded',
   'attempt.failed',
   'attempt.interrupt_requested',
   'attempt.interrupted',
@@ -1429,7 +1592,8 @@ const autoRefreshEvents = new Set([
 
 function storedDiagramMode(): DiagramMode {
   try {
-    return localStorage.getItem('kouro:diagram-mode') === 'graph' ? 'graph' : 'flowchart';
+    const stored = localStorage.getItem('kouro:diagram-mode');
+    return stored === 'graph' || stored === 'timeline' ? stored : 'flowchart';
   } catch {
     return 'flowchart';
   }
@@ -1594,7 +1758,7 @@ function ExecutionConsole({ initialRunId }: { readonly initialRunId?: string }) 
 
   const nodes = useMemo(
     () =>
-      run
+      run && diagramMode !== 'timeline'
         ? diagramMode === 'graph'
           ? networkGraphNodes(run)
           : flowchartNodes(run, diagramDirection)
@@ -1602,7 +1766,7 @@ function ExecutionConsole({ initialRunId }: { readonly initialRunId?: string }) 
     [diagramDirection, diagramMode, run],
   );
   const edges = useMemo(
-    () => (run ? graphEdges(run, diagramMode, diagramDirection) : []),
+    () => (run && diagramMode !== 'timeline' ? graphEdges(run, diagramMode, diagramDirection) : []),
     [diagramDirection, diagramMode, run],
   );
   const node = run?.nodes.find(({ id }) => id === selectedNode) ?? null;
@@ -1888,6 +2052,7 @@ function ExecutionConsole({ initialRunId }: { readonly initialRunId?: string }) 
                   <span className={stateClass(run.status)}>{run.status}</span>
                   <small>{run.eventCount} durable events</small>
                 </div>
+                <RunCostStat run={run} />
                 {isTerminalRun(run) ? (
                   <button
                     className="danger-button"
@@ -1903,7 +2068,7 @@ function ExecutionConsole({ initialRunId }: { readonly initialRunId?: string }) 
             <section className="graph">
               <div className="graph-toolbar">
                 <div aria-label="Diagram style" className="segmented-control" role="group">
-                  {(['flowchart', 'graph'] as const).map((mode) => (
+                  {(['flowchart', 'graph', 'timeline'] as const).map((mode) => (
                     <button
                       aria-pressed={diagramMode === mode}
                       className={diagramMode === mode ? 'active' : ''}
@@ -1912,6 +2077,7 @@ function ExecutionConsole({ initialRunId }: { readonly initialRunId?: string }) 
                         setDiagramMode(mode);
                         storeDiagramPreference('kouro:diagram-mode', mode);
                       }}
+                      title={mode === 'timeline' ? 'Swimlane waterfall of invocations in activation order' : mode}
                       type="button"
                     >
                       {mode}
@@ -1923,7 +2089,7 @@ function ExecutionConsole({ initialRunId }: { readonly initialRunId?: string }) 
                     <button
                       aria-pressed={diagramDirection === direction}
                       className={diagramDirection === direction ? 'active' : ''}
-                      disabled={diagramMode === 'graph'}
+                      disabled={diagramMode !== 'flowchart'}
                       key={direction}
                       onClick={() => {
                         setDiagramDirection(direction);
@@ -1937,25 +2103,36 @@ function ExecutionConsole({ initialRunId }: { readonly initialRunId?: string }) 
                   ))}
                 </div>
               </div>
-              <ReactFlow
-                edges={edges}
-                edgeTypes={workflowEdgeTypes}
-                fitView
-                fitViewOptions={{ padding: 0.24 }}
-                key={`${run.id}:${diagramMode}:${diagramDirection}`}
-                nodes={nodes}
-                nodeTypes={workflowNodeTypes}
-                nodesConnectable={false}
-                nodesDraggable={false}
-                onNodeClick={(_, selected) => {
-                  setSelectedNode(selected.id);
-                  setTab('details');
-                }}
-              >
-                <Background color="#30363d" gap={24} />
-                <MiniMap nodeColor="#388bfd" pannable zoomable />
-                <Controls showInteractive={false} />
-              </ReactFlow>
+              {diagramMode === 'timeline' ? (
+                <RunTimeline
+                  onSelectNode={(nodeId) => {
+                    setSelectedNode(nodeId);
+                    setTab('details');
+                  }}
+                  run={run}
+                  selectedNodeId={selectedNode}
+                />
+              ) : (
+                <ReactFlow
+                  edges={edges}
+                  edgeTypes={workflowEdgeTypes}
+                  fitView
+                  fitViewOptions={{ padding: 0.24 }}
+                  key={`${run.id}:${diagramMode}:${diagramDirection}`}
+                  nodes={nodes}
+                  nodeTypes={workflowNodeTypes}
+                  nodesConnectable={false}
+                  nodesDraggable={false}
+                  onNodeClick={(_, selected) => {
+                    setSelectedNode(selected.id);
+                    setTab('details');
+                  }}
+                >
+                  <Background color="#30363d" gap={24} />
+                  <MiniMap nodeColor="#388bfd" pannable zoomable />
+                  <Controls showInteractive={false} />
+                </ReactFlow>
+              )}
             </section>
             <section className="inspector">
               <div
@@ -2137,9 +2314,50 @@ const boardColumns = [
   'cancelled',
 ] as const;
 
+const RELATIONSHIP_LABELS = {
+  blocks: 'blocks',
+  blocked_by: 'blocked by',
+  parent: 'parent of',
+  child: 'child of',
+  related: 'related to',
+} as const satisfies Record<TicketDetails['relationships'][number]['kind'], string>;
+
+function relationshipKindLabel(kind: TicketDetails['relationships'][number]['kind']): string {
+  return RELATIONSHIP_LABELS[kind];
+}
+
 function TicketHistory({ details }: { readonly details: TicketDetails }) {
+  const { ticket, relationships } = details;
+  const outgoing = relationships.filter(({ sourceTicketId }) => sourceTicketId === ticket.id);
+  const incoming = relationships.filter(({ targetTicketId }) => targetTicketId === ticket.id);
   return (
     <div className="ticket-history">
+      <section>
+        <h4>Relationships</h4>
+        {relationships.length === 0 ? <p className="empty">No linked tickets.</p> : null}
+        {outgoing.map((relationship) => (
+          <article className="ticket-relationship" key={`${relationship.sourceTicketId}:${relationship.kind}:${relationship.targetTicketId}`}>
+            <strong>{relationshipKindLabel(relationship.kind)}</strong>
+            <code>{relationship.targetTicketId}</code>
+          </article>
+        ))}
+        {incoming.map((relationship) => (
+          <article className="ticket-relationship" key={`${relationship.sourceTicketId}:${relationship.kind}:${relationship.targetTicketId}`}>
+            <strong>{
+              relationship.kind === 'blocks'
+                ? 'blocked by'
+                : relationship.kind === 'blocked_by'
+                  ? 'blocks'
+                  : relationship.kind === 'parent'
+                    ? 'child of'
+                    : relationship.kind === 'child'
+                      ? 'parent of'
+                      : 'related to'
+            }</strong>
+            <code>{relationship.sourceTicketId}</code>
+          </article>
+        ))}
+      </section>
       <section>
         <h4>Comments</h4>
         {details.comments.length === 0 ? <p className="empty">No comments.</p> : null}
@@ -2163,6 +2381,17 @@ function TicketHistory({ details }: { readonly details: TicketDetails }) {
             <span className={stateClass(run.execution?.column ?? 'unavailable')}>
               {run.execution?.column ?? 'unavailable'}
             </span>
+            {run.execution?.usage ? (
+              <span className="ticket-run-cost">
+                {formatTokenCount(
+                  run.execution.usage.inputTokens + run.execution.usage.outputTokens,
+                )}{' '}
+                tokens
+                {run.execution.costUsd !== undefined
+                  ? ` · ${formatUsd(run.execution.costUsd)} est.`
+                  : ''}
+              </span>
+            ) : null}
             <time>{run.createdAt}</time>
           </article>
         ))}
@@ -2530,6 +2759,11 @@ function TicketBoard({
                 <strong>{ticket.title}</strong>
                 <span>{ticket.priority ?? 'no priority'}</span>
                 {activeRun ? <span>{activeRun.runId}</span> : null}
+                {activeRun?.costUsd !== undefined ? (
+                  <span className="ticket-card-cost">
+                    {formatUsd(activeRun.costUsd)} est.
+                  </span>
+                ) : null}
               </button>
             ))}
           </section>

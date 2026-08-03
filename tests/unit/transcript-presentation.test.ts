@@ -293,6 +293,95 @@ describe('transcript presentation', () => {
     ]);
   });
 
+  test('updates parallel live subagent sessions by stable call ID', () => {
+    const architectureChunk = `${JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Inspecting the API boundary.' }],
+      },
+    })}\n`;
+    const testsChunk = `${JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Inspecting the test suite.' }],
+      },
+    })}\n`;
+    const metadata = {
+      task: 'Inspect independently.',
+      harnessId: 'claude-code',
+      model: 'claude-opus-4-1',
+      reasoningEffort: 'high',
+    };
+    const transcript = [
+      {
+        type: 'kouro.subagent.started',
+        sequence: 1,
+        callId: 'architecture:1',
+        subagentId: 'architecture',
+        ...metadata,
+      },
+      {
+        type: 'kouro.subagent.started',
+        sequence: 2,
+        callId: 'tests:2',
+        subagentId: 'tests',
+        ...metadata,
+      },
+      {
+        type: 'kouro.subagent.chunk',
+        sequence: 2,
+        callId: 'tests:2',
+        subagentId: 'tests',
+        chunk: testsChunk,
+        ...metadata,
+      },
+      {
+        type: 'kouro.subagent.chunk',
+        sequence: 1,
+        callId: 'architecture:1',
+        subagentId: 'architecture',
+        chunk: architectureChunk,
+        ...metadata,
+      },
+      {
+        type: 'kouro.subagent.finished',
+        sequence: 2,
+        callId: 'tests:2',
+        subagentId: 'tests',
+        success: true,
+        output: { files: ['test.ts'] },
+        ...metadata,
+      },
+    ]
+      .map((event) => JSON.stringify(event))
+      .join('\n');
+
+    const entries = parseTranscript(transcript);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({
+      kind: 'subagent',
+      callId: 'architecture:1',
+      status: 'running',
+      reasoningEffort: 'high',
+      childTranscript: architectureChunk,
+    });
+    expect(entries[1]).toMatchObject({
+      kind: 'subagent',
+      callId: 'tests:2',
+      status: 'completed',
+      text: '{\n  "files": [\n    "test.ts"\n  ]\n}',
+      childTranscript: testsChunk,
+    });
+    expect(parseTranscript(entries[0]?.childTranscript ?? '')).toContainEqual(
+      expect.objectContaining({ kind: 'agent', text: 'Inspecting the API boundary.' }),
+    );
+    expect(parseTranscript(entries[1]?.childTranscript ?? '')).toContainEqual(
+      expect.objectContaining({ kind: 'agent', text: 'Inspecting the test suite.' }),
+    );
+  });
+
   test('formats structured tool data as readable Markdown fields', () => {
     expect(
       structuredValueMarkdown({

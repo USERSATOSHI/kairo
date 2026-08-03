@@ -157,6 +157,21 @@ function hasNumber(record: Readonly<Record<string, unknown>>, key: string): bool
   return typeof record[key] === 'number';
 }
 
+function isTokenUsage(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const counts = [
+    value.inputTokens,
+    value.outputTokens,
+    ...(value.cacheReadTokens === undefined ? [] : [value.cacheReadTokens]),
+    ...(value.cacheWriteTokens === undefined ? [] : [value.cacheWriteTokens]),
+    ...(value.reasoningTokens === undefined ? [] : [value.reasoningTokens]),
+  ];
+  return (
+    counts.length >= 2 &&
+    counts.every((count) => typeof count === 'number' && Number.isSafeInteger(count) && count >= 0)
+  );
+}
+
 function isArtifactReference(value: unknown): value is ArtifactReference {
   if (!isRecord(value)) return false;
   return (
@@ -225,6 +240,12 @@ function isRunEvent(value: unknown): value is RunEvent {
         hasNumber(value, 'invocationSequence') &&
         hasNumber(value, 'attemptNumber') &&
         isArtifactReference(value.artifact)
+      );
+    case 'attempt.usage_recorded':
+      return (
+        hasNumber(value, 'invocationSequence') &&
+        hasNumber(value, 'attemptNumber') &&
+        isTokenUsage(value.usage)
       );
     case 'run.artifact_published':
       return isArtifactReference(value.artifact);

@@ -10,6 +10,7 @@ import type {
   OrchestrationIntent,
   RunEventInput,
   SkipBinding,
+  TokenUsage,
 } from '@kouro/domain';
 import { agentHarnessesForNode, scheduleRun } from '@kouro/runtime';
 import { ok, type Result } from '@usersatoshi/results';
@@ -390,6 +391,39 @@ function completeAgentInvocation(
       },
     }),
   );
+}
+
+function recordAttemptUsage(
+  store: RunStore,
+  aggregate: RunAggregate,
+  invocationSequence: number,
+  attemptNumber: number,
+  usage: TokenUsage,
+): Result<RunAggregate, ExecutorError> {
+  if (!validTokenUsage(usage)) return ok(aggregate);
+  return fromStore(
+    store.appendEvent({
+      runId: aggregate.runId,
+      expectedSequence: aggregate.nextEventSequence,
+      idempotencyKey: `agent:usage:${invocationSequence}:${attemptNumber}`,
+      event: {
+        type: 'attempt.usage_recorded',
+        invocationSequence,
+        attemptNumber,
+        usage,
+      },
+    }),
+  );
+}
+
+function validTokenUsage(usage: TokenUsage): boolean {
+  return [
+    usage.inputTokens,
+    usage.outputTokens,
+    ...(usage.cacheReadTokens === undefined ? [] : [usage.cacheReadTokens]),
+    ...(usage.cacheWriteTokens === undefined ? [] : [usage.cacheWriteTokens]),
+    ...(usage.reasoningTokens === undefined ? [] : [usage.reasoningTokens]),
+  ].every((count) => Number.isSafeInteger(count) && count >= 0);
 }
 
 function intentKey(intent: OrchestrationIntent): string {
@@ -1169,9 +1203,19 @@ export class RunCoordinator {
       result.artifacts,
     );
     if (published.isErr()) return published;
+    const withUsage = result.usage
+      ? recordAttemptUsage(
+          this.store,
+          published.unwrap(),
+          invocationSequence,
+          attemptNumber,
+          result.usage,
+        )
+      : ok(published.unwrap());
+    if (withUsage.isErr()) return withUsage;
     return completeAgentInvocation(
       this.store,
-      published.unwrap(),
+      withUsage.unwrap(),
       invocationSequence,
       attemptNumber,
       result.output,

@@ -1,4 +1,9 @@
-import type { ArtifactReference, JsonValue, SourceSubagentDefinition } from '@kouro/domain';
+import type {
+  ArtifactReference,
+  JsonValue,
+  SourceSubagentDefinition,
+  TokenUsage,
+} from '@kouro/domain';
 import { err, ok, type Result } from '@usersatoshi/results';
 
 import type {
@@ -40,6 +45,7 @@ export interface AgentAttemptExecution {
   readonly output: JsonValue;
   readonly resumeToken?: string;
   readonly artifacts: readonly ArtifactReference[];
+  readonly usage?: TokenUsage;
 }
 
 export interface ExecuteAgentAttemptInput extends HarnessExecutionRequest {
@@ -65,6 +71,53 @@ interface SubagentTranscriptRecord {
   readonly output?: JsonValue;
   readonly error?: string;
   readonly transcript?: string;
+}
+
+interface SubagentActivityMetadata {
+  readonly sequence: number;
+  readonly callId: string;
+  readonly subagentId: string;
+  readonly task: string;
+  readonly harnessId: string;
+  readonly model?: string;
+  readonly reasoningEffort?: SourceSubagentDefinition['reasoningEffort'];
+}
+
+type SubagentActivityEvent =
+  | (SubagentActivityMetadata & { readonly type: 'kouro.subagent.started' })
+  | (SubagentActivityMetadata & {
+      readonly type: 'kouro.subagent.chunk';
+      readonly chunk: string;
+    })
+  | (SubagentActivityMetadata & {
+      readonly type: 'kouro.subagent.finished';
+      readonly success: boolean;
+      readonly output?: JsonValue;
+      readonly error?: string;
+    });
+
+type SubagentActivityObserver = (event: SubagentActivityEvent) => Promise<void>;
+
+async function reportFailedSubagent(
+  records: SubagentTranscriptRecord[],
+  activity: SubagentActivityObserver | undefined,
+  metadata: SubagentActivityMetadata,
+  error: string,
+  transcript?: string,
+): Promise<SubagentInvocationResult> {
+  records.push({
+    ...metadata,
+    success: false,
+    error,
+    ...(transcript ? { transcript } : {}),
+  });
+  await activity?.({
+    type: 'kouro.subagent.finished',
+    ...metadata,
+    success: false,
+    error,
+  });
+  return failedSubagent(metadata.callId, error);
 }
 
 function serializeJson(value: JsonValue): string {
@@ -99,8 +152,6 @@ export class AgentExecutor {
       });
     }
     const harness = resolved.unwrap();
-    const subagentRecords: SubagentTranscriptRecord[] = [];
-    const subagents = this.createSubagentController(input, subagentRecords);
     const activitySession: InvocationActivitySession = {
       runId: input.runId,
       invocationSequence: input.invocationSequence,
@@ -110,6 +161,18 @@ export class AgentExecutor {
       prompt: input.prompt,
     };
     await this.observeActivity(() => this.activity?.start(activitySession));
+    let activityWrites = Promise.resolve();
+    const appendActivity = (chunk: string): Promise<void> => {
+      activityWrites = activityWrites.then(() =>
+        this.observeActivity(() => this.activity?.append(activitySession, chunk)),
+      );
+      return activityWrites;
+    };
+    const observeSubagent: SubagentActivityObserver | undefined = this.activity
+      ? (event) => appendActivity(`${JSON.stringify(event)}\n`)
+      : undefined;
+    const subagentRecords: SubagentTranscriptRecord[] = [];
+    const subagents = this.createSubagentController(input, subagentRecords, observeSubagent);
     const request: HarnessExecutionRequest = {
       runId: input.runId,
       invocationSequence: input.invocationSequence,
@@ -123,8 +186,7 @@ export class AgentExecutor {
       ...(input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema }),
       ...(this.activity
         ? {
-            onTranscriptChunk: (chunk: string) =>
-              this.observeActivity(() => this.activity?.append(activitySession, chunk)),
+            onTranscriptChunk: appendActivity,
           }
         : {}),
       ...(input.onResumeToken ? { onResumeToken: input.onResumeToken } : {}),
@@ -137,6 +199,7 @@ export class AgentExecutor {
           ? await harness.resume(request, input.resumeToken)
           : await harness.execute(request);
       } finally {
+        await activityWrites;
         await this.observeActivity(() => this.activity?.finish(activitySession));
       }
     })();
@@ -188,6 +251,7 @@ export class AgentExecutor {
     return ok({
       output: validated.output,
       ...(completed.resumeToken ? { resumeToken: completed.resumeToken } : {}),
+      ...(completed.usage ? { usage: completed.usage } : {}),
       artifacts,
     });
   }
@@ -195,6 +259,7 @@ export class AgentExecutor {
   private createSubagentController(
     input: ExecuteAgentAttemptInput,
     records: SubagentTranscriptRecord[],
+    activity?: SubagentActivityObserver,
   ): SubagentExecutionController | undefined {
     if (!input.subagentDefinitions?.length) return undefined;
     const definitions = new Map(
@@ -257,6 +322,7 @@ export class AgentExecutor {
             task,
             records,
             signal,
+            activity,
           );
         } finally {
           state.active -= 1;
@@ -273,25 +339,25 @@ export class AgentExecutor {
     task: string,
     records: SubagentTranscriptRecord[],
     signal?: AbortSignal,
+    activity?: SubagentActivityObserver,
   ): Promise<SubagentInvocationResult> {
     const harnessId = definition.harness ?? parent.harnessId;
     const model = definition.models?.[harnessId];
     const reasoningEffort = definition.reasoningEffort ?? parent.reasoningEffort;
+    const activityMetadata: SubagentActivityMetadata = {
+      sequence,
+      callId,
+      subagentId: definition.id,
+      task,
+      harnessId,
+      ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    };
+    await activity?.({ type: 'kouro.subagent.started', ...activityMetadata });
     const resolved = this.registry.get(harnessId);
     if (resolved.isErr()) {
       const error = harnessErrorText(resolved.error);
-      records.push({
-        sequence,
-        callId,
-        subagentId: definition.id,
-        task,
-        harnessId,
-        ...(model ? { model } : {}),
-        ...(reasoningEffort ? { reasoningEffort } : {}),
-        success: false,
-        error,
-      });
-      return failedSubagent(callId, error);
+      return reportFailedSubagent(records, activity, activityMetadata, error);
     }
 
     const execution = await resolved.unwrap().execute({
@@ -307,22 +373,17 @@ export class AgentExecutor {
       ...(definition.outputSchemaValue === undefined
         ? {}
         : { outputSchema: definition.outputSchemaValue }),
+      ...(activity
+        ? {
+            onTranscriptChunk: (chunk: string) =>
+              activity({ type: 'kouro.subagent.chunk', ...activityMetadata, chunk }),
+          }
+        : {}),
       ...(signal ? { controls: signalControl(signal) } : {}),
     });
     if (execution.isErr()) {
       const error = harnessErrorText(execution.error);
-      records.push({
-        sequence,
-        callId,
-        subagentId: definition.id,
-        task,
-        harnessId,
-        ...(model ? { model } : {}),
-        ...(reasoningEffort ? { reasoningEffort } : {}),
-        success: false,
-        error,
-      });
-      return failedSubagent(callId, error);
+      return reportFailedSubagent(records, activity, activityMetadata, error);
     }
 
     const completed = execution.unwrap();
@@ -334,32 +395,20 @@ export class AgentExecutor {
       const error = `Subagent output is invalid at ${validated.issue?.path ?? '$'}: ${
         validated.issue?.message ?? 'structured output is invalid'
       }`;
-      records.push({
-        sequence,
-        callId,
-        subagentId: definition.id,
-        task,
-        harnessId,
-        ...(model ? { model } : {}),
-        ...(reasoningEffort ? { reasoningEffort } : {}),
-        success: false,
-        error,
-        transcript: completed.transcript,
-      });
-      return failedSubagent(callId, error);
+      return reportFailedSubagent(records, activity, activityMetadata, error, completed.transcript);
     }
 
     records.push({
-      sequence,
-      callId,
-      subagentId: definition.id,
-      task,
-      harnessId,
-      ...(model ? { model } : {}),
-      ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...activityMetadata,
       success: true,
       output: validated.output,
       transcript: completed.transcript,
+    });
+    await activity?.({
+      type: 'kouro.subagent.finished',
+      ...activityMetadata,
+      success: true,
+      output: validated.output,
     });
     return { callId, success: true, output: validated.output };
   }

@@ -16,6 +16,7 @@ export interface TranscriptEntry {
   readonly subagentId?: string;
   readonly harnessId?: string;
   readonly model?: string;
+  readonly reasoningEffort?: string;
   readonly task?: string;
   readonly childTranscript?: string;
 }
@@ -260,6 +261,66 @@ function parseOpenCodePart(
   return true;
 }
 
+function liveSubagentEntry(
+  event: Readonly<Record<string, unknown>>,
+  id: string,
+  entries: TranscriptEntry[],
+): TranscriptEntry {
+  const callId = stringAt(event, 'callId') ?? id;
+  const reasoningEffort = stringAt(event, 'reasoningEffort');
+  const existing = entries.find((entry) => entry.kind === 'subagent' && entry.callId === callId);
+  if (existing) return existing;
+  const entry: TranscriptEntry = {
+    id,
+    kind: 'subagent',
+    callId,
+    subagentId: stringAt(event, 'subagentId') ?? 'subagent',
+    harnessId: stringAt(event, 'harnessId'),
+    model: stringAt(event, 'model'),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    task: stringAt(event, 'task'),
+    status: 'running',
+    text: 'Subagent is running',
+  };
+  entries.push(entry);
+  return entry;
+}
+
+function parseLiveSubagentEvent(
+  event: Readonly<Record<string, unknown>>,
+  id: string,
+  entries: TranscriptEntry[],
+): boolean {
+  const eventType = stringAt(event, 'type') ?? '';
+  if (
+    !['kouro.subagent.started', 'kouro.subagent.chunk', 'kouro.subagent.finished'].includes(
+      eventType,
+    )
+  ) {
+    return false;
+  }
+  const current = liveSubagentEntry(event, id, entries);
+  const index = entries.indexOf(current);
+  if (eventType === 'kouro.subagent.chunk') {
+    entries[index] = {
+      ...current,
+      childTranscript: `${current.childTranscript ?? ''}${stringAt(event, 'chunk') ?? ''}`,
+    };
+    return true;
+  }
+  if (eventType === 'kouro.subagent.finished') {
+    const success = event.success === true;
+    entries[index] = {
+      ...current,
+      status: success ? 'completed' : 'failed',
+      text: success
+        ? display(event.output) || 'Completed without structured output'
+        : stringAt(event, 'error') || 'Subagent failed',
+    };
+  }
+  return true;
+}
+
 function parseEvent(
   event: Readonly<Record<string, unknown>>,
   id: string,
@@ -267,9 +328,11 @@ function parseEvent(
   calls: Set<string>,
 ): void {
   const eventType = stringAt(event, 'type') ?? '';
+  if (parseLiveSubagentEvent(event, id, entries)) return;
   if (eventType === 'kouro.subagent') {
     const subagentId = stringAt(event, 'subagentId') ?? 'subagent';
     const success = event.success === true;
+    const reasoningEffort = stringAt(event, 'reasoningEffort');
     entries.push({
       id,
       kind: 'subagent',
@@ -277,6 +340,7 @@ function parseEvent(
       subagentId,
       harnessId: stringAt(event, 'harnessId'),
       model: stringAt(event, 'model'),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
       task: stringAt(event, 'task'),
       status: success ? 'completed' : 'failed',
       text: success

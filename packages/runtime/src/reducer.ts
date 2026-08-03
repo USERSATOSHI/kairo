@@ -8,6 +8,7 @@ import type {
   NodeAttempt,
   NodeInvocation,
   RunEvent,
+  TokenUsage,
   RunState,
   SkipBinding,
 } from '@kouro/domain';
@@ -36,6 +37,17 @@ function validArtifactReference(artifact: ArtifactReference): boolean {
     Number.isSafeInteger(artifact.size) &&
     artifact.size >= 0
   );
+}
+
+function validTokenUsage(usage: TokenUsage): boolean {
+  const counts = [
+    usage.inputTokens,
+    usage.outputTokens,
+    ...(usage.cacheReadTokens !== undefined ? [usage.cacheReadTokens] : []),
+    ...(usage.cacheWriteTokens !== undefined ? [usage.cacheWriteTokens] : []),
+    ...(usage.reasoningTokens !== undefined ? [usage.reasoningTokens] : []),
+  ];
+  return counts.length >= 2 && counts.every((count) => Number.isSafeInteger(count) && count >= 0);
 }
 
 function validDeliveryMetadata(metadata: DeliveryMetadata): boolean {
@@ -572,6 +584,32 @@ function reduceEvent(
           candidate.number === attempt.number
             ? { ...candidate, artifacts: [...(candidate.artifacts ?? []), event.artifact] }
             : candidate,
+        ),
+      });
+    });
+  }
+
+  if (event.type === 'attempt.usage_recorded') {
+    return replaceInvocation(state, event.invocationSequence, (invocation) => {
+      const attempt = invocation.attempts.at(-1);
+      const definition = artifact.bundle.nodes.find(({ id }) => id === invocation.nodeId);
+      if (
+        definition?.type !== 'agent' ||
+        invocation.state !== 'active' ||
+        !attempt ||
+        attempt.number !== event.attemptNumber ||
+        !validTokenUsage(event.usage)
+      ) {
+        return toRuntimeError(RuntimeErrorKind.IllegalStateTransition, {
+          entity: `attempt:${event.attemptNumber}`,
+          from: invocation.state,
+          event: event.type,
+        });
+      }
+      return ok({
+        ...invocation,
+        attempts: invocation.attempts.map((candidate) =>
+          candidate.number === attempt.number ? { ...candidate, usage: event.usage } : candidate,
         ),
       });
     });

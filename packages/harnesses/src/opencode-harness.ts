@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 
 import { createOpencode, type Config } from '@opencode-ai/sdk/v2';
 import { err, fromAsync, ok, type Result } from '@usersatoshi/results';
+import type { TokenUsage } from '@kouro/domain';
 import { SandboxRuntimeAgentCommandSandbox } from '@kouro/sandbox-worktree';
 
 import type {
@@ -25,6 +26,7 @@ export interface OpenCodeSdkSession {
   steer(text: string): Promise<void>;
   interrupt(): Promise<void>;
   messages(): Promise<readonly unknown[]>;
+  usage(): Promise<TokenUsage | undefined>;
   subscribe(listener: (event: unknown) => Promise<void>): Promise<() => Promise<void>>;
   close(): void;
 }
@@ -289,6 +291,11 @@ const defaultSdk: OpenCodeAgentSdk = {
         if (messages.error) throw new Error(failureMessage(messages.error));
         return messages.data?.data ?? [];
       },
+      async usage() {
+        const info = await client.v2.session.get({ sessionID: sessionId });
+        if (info.error) return undefined;
+        return usageFromOpenCodeSession(info.data?.data);
+      },
       async subscribe(listener) {
         const events = await client.v2.session.events({ sessionID: sessionId });
         let stopped = false;
@@ -337,6 +344,32 @@ function finalOutput(messages: readonly unknown[]): Result<unknown, HarnessError
 
 function noopUnsubscribe(): Promise<void> {
   return Promise.resolve();
+}
+
+function usageFromOpenCodeSession(value: unknown): TokenUsage | undefined {
+  if (!isRecord(value) || !isRecord(value.tokens)) return undefined;
+  const tokens = value.tokens;
+  const input = numberField(tokens, 'input');
+  const output = numberField(tokens, 'output');
+  if (input === undefined && output === undefined) return undefined;
+  const reasoning = numberField(tokens, 'reasoning');
+  const cache = isRecord(tokens.cache)
+    ? {
+        read: numberField(tokens.cache, 'read'),
+        write: numberField(tokens.cache, 'write'),
+      }
+    : undefined;
+  return {
+    inputTokens: input ?? 0,
+    outputTokens: output ?? 0,
+    ...(reasoning === undefined ? {} : { reasoningTokens: reasoning }),
+    ...(cache?.read === undefined ? {} : { cacheReadTokens: cache.read }),
+    ...(cache?.write === undefined ? {} : { cacheWriteTokens: cache.write }),
+  };
+}
+
+function numberField(value: Readonly<Record<string, unknown>>, key: string): number | undefined {
+  return typeof value[key] === 'number' && Number.isFinite(value[key]) ? value[key] : undefined;
 }
 
 async function applyControls(
@@ -430,10 +463,17 @@ export class OpenCodeHarness implements AgentHarness {
       if (messages.isErr()) return messages;
       const output = finalOutput(messages.unwrap());
       if (output.isErr()) return output;
+      let usage: TokenUsage | undefined;
+      try {
+        usage = await session.usage();
+      } catch {
+        usage = undefined;
+      }
       return ok({
         output: output.unwrap(),
         transcript: transcript.join('\n'),
         resumeToken: session.sessionId,
+        ...(usage ? { usage } : {}),
       });
     } finally {
       await unsubscribe();

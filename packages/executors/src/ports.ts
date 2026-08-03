@@ -6,6 +6,7 @@ import type {
   RunEvent,
   RunEventInput,
   RunState,
+  TokenUsage,
 } from '@kouro/domain';
 import type { Result } from '@usersatoshi/results';
 
@@ -218,6 +219,8 @@ export interface HarnessExecution {
   readonly output: unknown;
   readonly transcript: string;
   readonly resumeToken?: string;
+  /** Token usage reported by the provider; optional and best-effort per harness. */
+  readonly usage?: TokenUsage;
 }
 
 export interface AgentHarness {

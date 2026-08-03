@@ -6,6 +6,7 @@ import type {
   HarnessExecution,
   HarnessExecutionRequest,
 } from '@kouro/executors';
+import type { TokenUsage } from '@kouro/domain';
 import {
   DefaultCodexAppServerTransportFactory,
   type CodexAppServerMessage,
@@ -139,21 +140,26 @@ async function answerServerRequest(
   transport.respond(message.id, { action: 'decline', content: null });
 }
 
+interface TurnCompletion {
+  readonly text: string;
+  readonly usage?: TokenUsage;
+}
+
 function observeTurn(
   transport: CodexAppServerTransport,
   request: HarnessExecutionRequest,
 ): {
-  readonly completion: Promise<Result<string, HarnessError>>;
+  readonly completion: Promise<Result<TurnCompletion, HarnessError>>;
   readonly setTurnId: (id: string) => void;
   readonly dispose: () => void;
 } {
   let turnId: string | undefined;
   let streamedText = '';
-  let resolveCompletion: ((result: Result<string, HarnessError>) => void) | undefined;
-  const completion = new Promise<Result<string, HarnessError>>((resolve) => {
+  let resolveCompletion: ((result: Result<TurnCompletion, HarnessError>) => void) | undefined;
+  const completion = new Promise<Result<TurnCompletion, HarnessError>>((resolve) => {
     resolveCompletion = resolve;
   });
-  function finish(result: Result<string, HarnessError>): void {
+  function finish(result: Result<TurnCompletion, HarnessError>): void {
     if (!resolveCompletion) throw new Error('Codex turn observer is not initialized');
     resolveCompletion(result);
   }
@@ -194,7 +200,10 @@ function observeTurn(
     const finalText = finalAgentText(turn) ?? streamedText;
     finish(
       finalText
-        ? ok(finalText)
+        ? ok({
+            text: finalText,
+            ...(usageFromCodexTurn(turn) === undefined ? {} : { usage: usageFromCodexTurn(turn) }),
+          })
         : err(invalidResponse('Codex turn has no final agent message', transport.transcript())),
     );
   });
@@ -291,11 +300,31 @@ async function openThread(
   return ok(threadId);
 }
 
+function usageFromCodexTurn(value: unknown): TokenUsage | undefined {
+  if (!isRecord(value) || !isRecord(value.tokens)) return undefined;
+  const tokens = value.tokens;
+  const input = numberField(tokens, 'input');
+  const output = numberField(tokens, 'output');
+  if (input === undefined && output === undefined) return undefined;
+  const reasoning = numberField(tokens, 'reasoning');
+  const cacheRead = numberField(tokens, 'cached_input');
+  return {
+    inputTokens: input ?? 0,
+    outputTokens: output ?? 0,
+    ...(reasoning === undefined ? {} : { reasoningTokens: reasoning }),
+    ...(cacheRead === undefined ? {} : { cacheReadTokens: cacheRead }),
+  };
+}
+
+function numberField(value: Readonly<Record<string, unknown>>, key: string): number | undefined {
+  return typeof value[key] === 'number' && Number.isFinite(value[key]) ? value[key] : undefined;
+}
+
 async function executeTurn(
   transport: CodexAppServerTransport,
   request: HarnessExecutionRequest,
   threadId: string,
-): Promise<Result<string, HarnessError>> {
+): Promise<Result<TurnCompletion, HarnessError>> {
   const observed = observeTurn(transport, request);
   try {
     const turn = await transport.request('turn/start', {
@@ -318,7 +347,7 @@ async function executeTurn(
     let stopped = false;
     const controls = applyControls(transport, request, threadId, turnId, () => stopped);
     const controlFailure = controls.then(
-      () => new Promise<Result<string, HarnessError>>(() => undefined),
+      () => new Promise<Result<TurnCompletion, HarnessError>>(() => undefined),
       (cause: unknown) =>
         err(processFailure(`Codex control channel failed: ${unknownErrorMessage(cause)}`)),
     );
@@ -366,10 +395,12 @@ export class CodexHarness implements AgentHarness {
       const threadId = thread.unwrap();
       const completed = await executeTurn(transport, request, threadId);
       if (completed.isErr()) return completed;
+      const turn = completed.unwrap();
       return ok({
-        output: parseHarnessOutput(completed.unwrap()),
+        output: parseHarnessOutput(turn.text),
         transcript: transport.transcript(),
         resumeToken: threadId,
+        ...(turn.usage ? { usage: turn.usage } : {}),
       });
     } finally {
       await transport.dispose();

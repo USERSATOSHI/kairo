@@ -167,6 +167,7 @@ class ControlledOpenCodeSdk implements OpenCodeAgentSdk {
             content: [],
           },
         ]),
+      usage: () => Promise.resolve({ inputTokens: 120, outputTokens: 40 }),
       subscribe: () => Promise.resolve(() => Promise.resolve()),
       close: () => undefined,
     });
@@ -201,6 +202,10 @@ class ControlledPiSdk implements PiAgentSdk {
         completed.resolve();
         return Promise.resolve();
       },
+      getSessionStats: () => ({
+        tokens: { input: 120, output: 40, cacheRead: 0, cacheWrite: 0, total: 160 },
+        cost: 0.001,
+      }),
       subscribe: () => () => undefined,
       dispose: () => undefined,
     });
@@ -273,6 +278,7 @@ describe('ADR-0029: provider SDK harness control', () => {
                 content: [],
               },
             ]),
+          usage: () => Promise.resolve(undefined),
           subscribe: () => Promise.resolve(() => Promise.resolve()),
           close: () => undefined,
         }),
@@ -293,6 +299,10 @@ describe('ADR-0029: provider SDK harness control', () => {
           prompt: () => Promise.resolve(),
           steer: () => Promise.resolve(),
           abort: () => Promise.resolve(),
+          getSessionStats: () => ({
+            tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            cost: 0,
+          }),
           subscribe: () => () => undefined,
           dispose: () => undefined,
         }),
@@ -303,6 +313,34 @@ describe('ADR-0029: provider SDK harness control', () => {
       expect(result.isErr()).toBe(true);
       if (result.isErr()) expect(result.error.kind).toBe(HarnessErrorKind.ProcessFailure);
     }
+  });
+
+  test('does not fail a successful Pi attempt when usage statistics are unavailable', async () => {
+    const piSdk: PiAgentSdk = {
+      create: () =>
+        Promise.resolve({
+          sessionId: 'pi-no-stats-session',
+          sessionFile: '/sessions/pi-no-stats-session.jsonl',
+          messages: [
+            {
+              role: 'assistant',
+              content: [{ type: 'text', text: '{"summary":"complete"}' }],
+            },
+          ],
+          prompt: () => Promise.resolve(),
+          steer: () => Promise.resolve(),
+          abort: () => Promise.resolve(),
+          getSessionStats: () => {
+            throw new Error('statistics unavailable');
+          },
+          subscribe: () => () => undefined,
+          dispose: () => undefined,
+        }),
+    };
+
+    const result = await new PiHarness(piSdk).execute(request());
+    expect(result.isOk()).toBe(true);
+    if (result.isOk()) expect(result.unwrap().usage).toBeUndefined();
   });
 
   test('configures Claude command and file tools to fail closed', async () => {

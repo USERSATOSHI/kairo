@@ -63,6 +63,10 @@ harness transcript artifact. Because the initial feature permits read-only
 children only, replay after interruption cannot duplicate repository
 side-effects. Durable independently recoverable child attempts are deferred.
 
+ADR-0035 subsequently adds best-effort child lifecycle and transcript chunks
+to the parent's ephemeral invocation activity. This does not make subagents
+independent graph attempts or durable recovery inputs.
+
 ## Consequences
 
 - Workflow authors can declare multiple typed subagent roles per parent agent.

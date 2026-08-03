@@ -6,6 +6,7 @@ import {
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import { err, fromAsync, ok, type Result } from '@usersatoshi/results';
+import type { TokenUsage } from '@kouro/domain';
 import { WorktreePathGuard } from '@kouro/sandbox-worktree';
 import { z } from 'zod';
 
@@ -150,7 +151,12 @@ async function* inputMessages(
 
 function resultFrom(
   message: unknown,
-): Result<{ readonly output: unknown; readonly sessionId: string }, HarnessError> | undefined {
+):
+  | Result<
+      { readonly output: unknown; readonly sessionId: string; readonly usage?: TokenUsage },
+      HarnessError
+    >
+  | undefined {
   if (!isRecord(message) || message.type !== 'result') return undefined;
   if (message.subtype !== 'success') {
     const errors = Array.isArray(message.errors)
@@ -167,7 +173,29 @@ function resultFrom(
         ? parseHarnessOutput(typeof message.result === 'string' ? message.result : '')
         : message.structured_output,
     sessionId: message.session_id,
+    ...(usageFromClaudeResult(message.usage) === undefined
+      ? {}
+      : { usage: usageFromClaudeResult(message.usage) }),
   });
+}
+
+function usageFromClaudeResult(value: unknown): TokenUsage | undefined {
+  if (!isRecord(value)) return undefined;
+  const inputTokens = numberField(value, 'input_tokens');
+  const outputTokens = numberField(value, 'output_tokens');
+  if (inputTokens === undefined && outputTokens === undefined) return undefined;
+  const cacheRead = numberField(value, 'cache_read_input_tokens');
+  const cacheWrite = numberField(value, 'cache_creation_input_tokens');
+  return {
+    inputTokens: inputTokens ?? 0,
+    outputTokens: outputTokens ?? 0,
+    ...(cacheRead === undefined ? {} : { cacheReadTokens: cacheRead }),
+    ...(cacheWrite === undefined ? {} : { cacheWriteTokens: cacheWrite }),
+  };
+}
+
+function numberField(value: Readonly<Record<string, unknown>>, key: string): number | undefined {
+  return typeof value[key] === 'number' && Number.isFinite(value[key]) ? value[key] : undefined;
 }
 
 function optionsFor(request: HarnessExecutionRequest, resumeToken?: string): Options {
@@ -333,6 +361,7 @@ export class ClaudeCodeHarness implements AgentHarness {
       output: completed.output,
       transcript: transcript.join('\n'),
       resumeToken: completed.sessionId,
+      ...(completed.usage ? { usage: completed.usage } : {}),
     });
   }
 }

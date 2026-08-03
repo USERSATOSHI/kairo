@@ -159,6 +159,9 @@ stable call ID, harness/model selection, status, and transcript are appended to
 the parent transcript artifact. Children are subordinate read-only effects of
 the parent attempt, not independently scheduled graph attempts, and do not
 receive a nested subagent controller.
+While a child is active, its start, provider transcript chunks, and completion
+are also copied into the parent's best-effort activity stream. Parallel child
+updates carry stable call IDs so presentation can keep their sessions separate.
 
 When a graph activates the same agent node again, `RunCoordinator` resumes its
 latest successful session for the selected harness unless the node declares

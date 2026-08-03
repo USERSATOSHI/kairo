@@ -12,9 +12,11 @@ import {
   type HarnessError,
   type HarnessExecution,
   type HarnessExecutionRequest,
+  type InvocationActivitySession,
+  type InvocationActivitySink,
   type SubagentInvocationResult,
 } from '@kouro/executors';
-import { HarnessRegistry, LocalArtifactWriter, ScriptedFakeHarness } from '@kouro/harnesses';
+import { HarnessRegistry, LocalArtifactWriter } from '@kouro/harnesses';
 
 class DelegatingParentHarness implements AgentHarness {
   readonly id = 'parent';
@@ -52,19 +54,63 @@ class DelegatingParentHarness implements AgentHarness {
   }
 }
 
+class StreamingChildHarness implements AgentHarness {
+  readonly id = 'scout';
+  readonly calls: { readonly request: HarnessExecutionRequest }[] = [];
+
+  async execute(request: HarnessExecutionRequest): Promise<Result<HarnessExecution, HarnessError>> {
+    this.calls.push({ request });
+    const transcript = JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: `Inspecting as ${request.role}` }],
+      },
+    });
+    await request.onTranscriptChunk?.(`${transcript}\n`);
+    return ok({
+      output: request.role === 'test-scout' ? { files: ['test.ts'] } : { scope: request.role },
+      transcript,
+    });
+  }
+
+  resume(request: HarnessExecutionRequest): Promise<Result<HarnessExecution, HarnessError>> {
+    return this.execute(request);
+  }
+}
+
+class RecordingActivitySink implements InvocationActivitySink {
+  readonly chunks: string[] = [];
+  starts = 0;
+  finishes = 0;
+
+  start(_session: InvocationActivitySession): Promise<void> {
+    this.starts += 1;
+    return Promise.resolve();
+  }
+
+  append(_session: InvocationActivitySession, chunk: string): Promise<void> {
+    this.chunks.push(chunk);
+    return Promise.resolve();
+  }
+
+  finish(_session: InvocationActivitySession): Promise<void> {
+    this.finishes += 1;
+    return Promise.resolve();
+  }
+}
+
 describe('bounded workflow subagents', () => {
   test('runs multiple definitions, enforces limits, and records nested transcripts', async () => {
     const directory = await mkdtemp(resolve(tmpdir(), 'kouro-subagents-'));
     try {
       const parent = new DelegatingParentHarness();
-      const child = new ScriptedFakeHarness('scout', [
-        { output: { scope: 'domain' }, transcript: '{"child":"domain"}' },
-        { output: { scope: 'executor' }, transcript: '{"child":"executor"}' },
-        { output: { files: ['test.ts'] }, transcript: '{"child":"tests"}' },
-      ]);
+      const child = new StreamingChildHarness();
+      const activity = new RecordingActivitySink();
       const executor = new AgentExecutor(
         new HarnessRegistry([parent, child]),
         new LocalArtifactWriter(directory),
+        activity,
       );
 
       const executed = await executor.execute({
@@ -130,6 +176,14 @@ describe('bounded workflow subagents', () => {
         'low',
         'medium',
       ]);
+      expect(activity.starts).toBe(1);
+      expect(activity.finishes).toBe(1);
+      const liveTranscript = activity.chunks.join('');
+      expect(liveTranscript).toContain('"type":"kouro.subagent.started"');
+      expect(liveTranscript).toContain('"type":"kouro.subagent.chunk"');
+      expect(liveTranscript).toContain('"type":"kouro.subagent.finished"');
+      expect(liveTranscript).toContain('"callId":"architecture:1"');
+      expect(liveTranscript).toContain('"callId":"tests:3"');
 
       const runDirectory = createHash('sha256').update('run-subagents').digest('hex');
       const transcript = await readFile(
