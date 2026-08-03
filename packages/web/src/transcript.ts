@@ -1,4 +1,10 @@
-export type TranscriptEntryKind = 'user' | 'agent' | 'reasoning' | 'tool_call' | 'tool_result';
+export type TranscriptEntryKind =
+  | 'user'
+  | 'agent'
+  | 'reasoning'
+  | 'tool_call'
+  | 'tool_result'
+  | 'subagent';
 
 export interface TranscriptEntry {
   readonly id: string;
@@ -7,6 +13,11 @@ export interface TranscriptEntry {
   readonly callId?: string;
   readonly toolName?: string;
   readonly status?: string;
+  readonly subagentId?: string;
+  readonly harnessId?: string;
+  readonly model?: string;
+  readonly task?: string;
+  readonly childTranscript?: string;
 }
 
 export interface TranscriptGroup {
@@ -50,6 +61,17 @@ function contentText(content: unknown, kind: 'text' | 'reasoning'): string {
     .join('\n');
 }
 
+function toolResultText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return display(content);
+  return content
+    .map((block) =>
+      isRecord(block) ? (stringAt(block, 'text') ?? display(block)) : display(block),
+    )
+    .filter(Boolean)
+    .join('\n');
+}
+
 function addToolCall(
   entries: TranscriptEntry[],
   calls: Set<string>,
@@ -82,7 +104,18 @@ function parseMessageBlocks(
   if (text) entries.push({ id: `${id}:text`, kind: role, text });
   if (!Array.isArray(message.content)) return;
   for (const [index, block] of message.content.entries()) {
-    if (!isRecord(block) || !['toolCall', 'tool_use'].includes(String(block.type))) continue;
+    if (!isRecord(block)) continue;
+    if (block.type === 'tool_result') {
+      entries.push({
+        id: `${id}:result:${index}`,
+        kind: 'tool_result',
+        callId: stringAt(block, 'tool_use_id', 'toolCallId', 'id') ?? `${id}:tool:${index}`,
+        status: block.is_error === true ? 'failed' : 'completed',
+        text: toolResultText(block.content) || 'No output',
+      });
+      continue;
+    }
+    if (!['toolCall', 'tool_use'].includes(String(block.type))) continue;
     const callId = stringAt(block, 'id', 'toolCallId', 'tool_use_id') ?? `${id}:tool:${index}`;
     addToolCall(
       entries,
@@ -234,15 +267,38 @@ function parseEvent(
   calls: Set<string>,
 ): void {
   const eventType = stringAt(event, 'type') ?? '';
+  if (eventType === 'kouro.subagent') {
+    const subagentId = stringAt(event, 'subagentId') ?? 'subagent';
+    const success = event.success === true;
+    entries.push({
+      id,
+      kind: 'subagent',
+      callId: stringAt(event, 'callId') ?? id,
+      subagentId,
+      harnessId: stringAt(event, 'harnessId'),
+      model: stringAt(event, 'model'),
+      task: stringAt(event, 'task'),
+      status: success ? 'completed' : 'failed',
+      text: success
+        ? display(event.output) || 'Completed without structured output'
+        : stringAt(event, 'error') || 'Subagent failed',
+      childTranscript: stringAt(event, 'transcript'),
+    });
+    return;
+  }
   if (isRecord(event.item) && parseCodexItem(eventType, event.item, id, entries, calls)) return;
   if (parseToolEvent(event, id, entries, calls)) return;
   if (isRecord(event.part) && parseOpenCodePart(event.part, id, entries, calls)) return;
-  if (eventType === 'message_end' && isRecord(event.message)) {
+  if (['assistant', 'user', 'message_end'].includes(eventType) && isRecord(event.message)) {
     parseMessageBlocks(event.message, id, entries, calls);
     return;
   }
   if (typeof event.result === 'string') {
-    entries.push({ id, kind: 'agent', text: event.result });
+    const result = event.result;
+    const previousAgent = entries.findLast((entry) => entry.kind === 'agent');
+    if (!previousAgent || normalizedMessage(previousAgent.text) !== normalizedMessage(result)) {
+      entries.push({ id, kind: 'agent', text: result });
+    }
     return;
   }
   if (event.role === 'user' || event.role === 'assistant') {
@@ -283,7 +339,7 @@ export function parseTranscript(content: string, userPrompt?: string): readonly 
 export function groupTranscript(entries: readonly TranscriptEntry[]): readonly TranscriptGroup[] {
   const resultsByCall = new Map<string, TranscriptEntry[]>();
   for (const entry of entries) {
-    if (entry.kind !== 'tool_result' || !entry.callId) continue;
+    if (!['tool_result', 'subagent'].includes(entry.kind) || !entry.callId) continue;
     const results = resultsByCall.get(entry.callId) ?? [];
     results.push(entry);
     resultsByCall.set(entry.callId, results);
@@ -295,7 +351,9 @@ export function groupTranscript(entries: readonly TranscriptEntry[]): readonly T
       .map(({ id }) => id),
   );
   return entries
-    .filter((entry) => entry.kind !== 'tool_result' || !matchedResults.has(entry.id))
+    .filter(
+      (entry) => !['tool_result', 'subagent'].includes(entry.kind) || !matchedResults.has(entry.id),
+    )
     .map((entry) => ({
       primary: entry,
       results:

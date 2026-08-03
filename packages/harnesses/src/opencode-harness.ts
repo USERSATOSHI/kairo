@@ -150,6 +150,7 @@ function configFor(request: HarnessExecutionRequest, pluginUrl?: string): Config
     agent: {
       kouro: {
         mode: 'primary',
+        ...(request.reasoningEffort ? { variant: request.reasoningEffort } : {}),
         tools: {
           read: true,
           glob: true,
@@ -227,12 +228,18 @@ const defaultSdk: OpenCodeAgentSdk = {
     }
     const { client, server } = clientAndServer;
     const model = modelFor(request);
+    const selectedModel = model
+      ? {
+          ...model,
+          ...(request.reasoningEffort ? { variant: request.reasoningEffort } : {}),
+        }
+      : undefined;
     const sessionResponse = resumeToken
       ? await client.v2.session.get({ sessionID: resumeToken })
       : await client.v2.session.create({
           agent: 'kouro',
           location: { directory: request.workingDirectory },
-          ...(model ? { model } : {}),
+          ...(selectedModel ? { model: selectedModel } : {}),
         });
     if (sessionResponse.error) {
       server.close();

@@ -402,19 +402,41 @@ export class LocalKouroHost {
   }
 
   async create(request: CreateRunRequest): Promise<Result<CreateRunResponse, CliError>> {
+    return this.createRequest(request, true);
+  }
+
+  private async createFromApi(
+    request: CreateRunRequest,
+  ): Promise<Result<CreateRunResponse, CliError>> {
+    return this.createRequest(request, false);
+  }
+
+  private async createRequest(
+    request: CreateRunRequest,
+    advanceUntilStable: boolean,
+  ): Promise<Result<CreateRunResponse, CliError>> {
     const ticket = request.ticket?.trim();
     if (ticket?.startsWith('kouro:')) {
-      return this.createTicketRun(request, ticket.slice('kouro:'.length).trim());
+      return this.createTicketRun(
+        request,
+        ticket.slice('kouro:'.length).trim(),
+        advanceUntilStable,
+      );
     }
     if (ticket?.startsWith('kairo:')) {
-      return this.createTicketRun(request, ticket.slice('kairo:'.length).trim());
+      return this.createTicketRun(
+        request,
+        ticket.slice('kairo:'.length).trim(),
+        advanceUntilStable,
+      );
     }
-    return this.createRun(request);
+    return this.createRun(request, undefined, advanceUntilStable);
   }
 
   private async createRun(
     request: CreateRunRequest,
     suppliedWorkItem?: import('@kouro/domain').WorkItemSnapshot,
+    advanceUntilStable = true,
   ): Promise<Result<CreateRunResponse, CliError>> {
     if (!this.initialized) {
       return cliErr(
@@ -519,6 +541,7 @@ export class LocalKouroHost {
         adw: request.adw,
         agentHarnesses: harnesses,
         ...(request.harnessesByNode ? { agentHarnessesByNode: request.harnessesByNode } : {}),
+        ...(request.reasoningEffort ? { agentReasoningEffort: request.reasoningEffort } : {}),
         ...(workItem?.isOk() ? { workItem: workItemConfiguration(workItem.unwrap()) } : {}),
         requestedPermissions: compiled.unwrap().bundle.permissions ?? [],
         repositoryId: repoId,
@@ -534,6 +557,10 @@ export class LocalKouroHost {
     if (created.isErr()) {
       return cliErr(CliErrorKind.Persistence, 'run_creation_failed', message(created.error));
     }
+    if (!advanceUntilStable) {
+      this.worker.start();
+      return ok({ runId: id, status: created.unwrap().state.status });
+    }
     const stable = await this.worker.runUntilStable(id);
     return ok({ runId: id, status: stable.state.status });
   }
@@ -541,6 +568,7 @@ export class LocalKouroHost {
   private async createTicketRun(
     request: CreateRunRequest,
     ticketId: string,
+    advanceUntilStable: boolean,
   ): Promise<Result<CreateRunResponse, CliError>> {
     if (!ticketId) {
       return cliErr(
@@ -573,6 +601,7 @@ export class LocalKouroHost {
           const created = await this.createRun(
             { ...request, ticket: undefined },
             workItem.unwrap(),
+            advanceUntilStable,
           );
           if (created.isErr()) {
             return toTicketError(TicketErrorKind.InvalidInput, {
@@ -838,32 +867,33 @@ export class LocalKouroHost {
   }
 
   app(repositoryPath?: string): KouroApp {
-    const scopeId = repositoryPath ? repositoryIdForPath(repositoryPath) : undefined;
+    const scopedRepository = repositoryPath
+      ? { id: repositoryIdForPath(repositoryPath), path: resolve(repositoryPath) }
+      : undefined;
+    const scopeId = scopedRepository?.id;
     const runs = scopeId ? new RepositoryScopedRunStore(this.store, scopeId) : this.store;
     return createKouroApp({
       runs,
       coordinator: this.coordinator(),
       artifacts: new LocalArtifactContentReader(this.paths.artifactDirectory),
       activities: this.activityStore,
-      repositories: scopeId
+      repositories: scopedRepository
         ? {
-            list: async () => (await this.list()).filter((repository) => repository.id === scopeId),
+            list: async () => [scopedRepository],
           }
         : this,
-      runCreator: scopeId
-        ? {
-            create: (request) =>
-              repositoryIdForPath(request.repositoryPath) === scopeId
-                ? this.create(request)
-                : Promise.resolve(
-                    cliErr(
-                      CliErrorKind.InvalidArguments,
-                      'repository_scope_mismatch',
-                      'The requested repository is outside this server scope',
-                    ),
-                  ),
-          }
-        : this,
+      runCreator: {
+        create: (request) =>
+          scopeId && repositoryIdForPath(request.repositoryPath) !== scopeId
+            ? Promise.resolve(
+                cliErr(
+                  CliErrorKind.InvalidArguments,
+                  'repository_scope_mismatch',
+                  'The requested repository is outside this server scope',
+                ),
+              )
+            : this.createFromApi(request),
+      },
       runDeleter: this,
       runPublisher: this,
       tickets: {

@@ -305,6 +305,7 @@ async function executeTurn(
       approvalPolicy: 'on-request',
       sandboxPolicy: sandboxPolicy(request),
       ...(request.model ? { model: request.model } : {}),
+      ...(request.reasoningEffort ? { effort: request.reasoningEffort } : {}),
       ...(request.outputSchema ? { outputSchema: request.outputSchema } : {}),
     });
     if (turn.isErr()) return turn;

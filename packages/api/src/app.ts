@@ -88,6 +88,9 @@ export function createKouroApp(services: ApiServices) {
               t.Array(t.String({ minLength: 1 }), { minItems: 1 }),
             ),
           ),
+          reasoningEffort: t.Optional(
+            t.Union([t.Literal('low'), t.Literal('medium'), t.Literal('high')]),
+          ),
           actor: t.String({ minLength: 1 }),
           base: t.Optional(t.String({ minLength: 1 })),
         }),

@@ -4,11 +4,14 @@ import type {
   ApprovalDecisionResponse,
   ApprovalView,
   ArtifactView,
+  CreateRunRequest,
+  CreateRunResponse,
   DeleteRunResponse,
   InvocationActivityView,
   LifecycleRequest,
   LifecycleResponse,
   PublishRunResponse,
+  RepositorySummary,
   RunDetails,
   RunSummary,
   TicketDetails,
@@ -108,6 +111,14 @@ function isLifecycleResponse(value: unknown): value is LifecycleResponse {
   return isRecord(value) && typeof value.runId === 'string' && typeof value.status === 'string';
 }
 
+function isCreateRunResponse(value: unknown): value is CreateRunResponse {
+  return isRecord(value) && typeof value.runId === 'string' && typeof value.status === 'string';
+}
+
+function isRepositorySummary(value: unknown): value is RepositorySummary {
+  return isRecord(value) && typeof value.id === 'string' && typeof value.path === 'string';
+}
+
 function isTicketListItem(value: unknown): value is TicketListItem {
   return (
     isRecord(value) &&
@@ -166,6 +177,28 @@ export async function fetchRuns(): Promise<readonly RunSummary[]> {
   const value = await json(await fetch('/api/runs'));
   if (!Array.isArray(value) || !value.every(isRunSummary)) {
     throw new Error('Kouro API returned malformed run summaries');
+  }
+  return value;
+}
+
+export async function fetchRepositories(): Promise<readonly RepositorySummary[]> {
+  const value = await json(await fetch('/api/repositories'));
+  if (!Array.isArray(value) || !value.every(isRepositorySummary)) {
+    throw new Error('Kouro API returned malformed repository summaries');
+  }
+  return value;
+}
+
+export async function createRun(request: CreateRunRequest): Promise<CreateRunResponse> {
+  const value = await json(
+    await fetch('/api/runs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(request),
+    }),
+  );
+  if (!isCreateRunResponse(value)) {
+    throw new Error('Kouro API returned a malformed run creation response');
   }
   return value;
 }

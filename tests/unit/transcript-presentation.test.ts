@@ -112,6 +112,77 @@ describe('transcript presentation', () => {
     ]);
   });
 
+  test('normalizes Claude assistant envelopes and tool results', () => {
+    const transcript = [
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'I need to inspect the API.' },
+            { type: 'text', text: 'I will read the application boundary.' },
+            {
+              type: 'tool_use',
+              id: 'tool-claude-1',
+              name: 'Read',
+              input: { file_path: 'packages/api/src/app.ts' },
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'tool-claude-1',
+              content: [{ type: 'text', text: 'export function createKouroApp() {}' }],
+            },
+          ],
+        },
+      }),
+    ].join('\n');
+
+    expect(groupTranscript(parseTranscript(transcript))).toEqual([
+      {
+        primary: {
+          id: 'event-0:reasoning',
+          kind: 'reasoning',
+          text: 'I need to inspect the API.',
+        },
+        results: [],
+      },
+      {
+        primary: {
+          id: 'event-0:text',
+          kind: 'agent',
+          text: 'I will read the application boundary.',
+        },
+        results: [],
+      },
+      {
+        primary: {
+          id: 'event-0:tool:2',
+          kind: 'tool_call',
+          callId: 'tool-claude-1',
+          toolName: 'Read',
+          text: '{\n  "file_path": "packages/api/src/app.ts"\n}',
+        },
+        results: [
+          {
+            id: 'event-1:result:0',
+            kind: 'tool_result',
+            callId: 'tool-claude-1',
+            status: 'completed',
+            text: 'export function createKouroApp() {}',
+          },
+        ],
+      },
+    ]);
+  });
+
   test('correlates parallel tool results by call ID instead of completion order', () => {
     const transcript = [
       JSON.stringify({
@@ -166,6 +237,59 @@ describe('transcript presentation', () => {
       { callId: 'call-a', command: 'bun test a', result: 'A passed' },
       { callId: 'call-b', command: 'bun test b', result: 'B passed' },
       { callId: 'call-c', command: 'bun test c', result: 'C passed' },
+    ]);
+  });
+
+  test('presents each Kouro subagent as a readable nested session', () => {
+    const childTranscript = [
+      JSON.stringify({
+        type: 'item.completed',
+        item: { id: 'reason-1', type: 'reasoning', text: 'Inspect the package boundary.' },
+      }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: { id: 'message-1', type: 'agent_message', text: 'The API lives in packages/api.' },
+      }),
+    ].join('\n');
+    const transcript = JSON.stringify({
+      type: 'kouro.subagent',
+      sequence: 1,
+      callId: 'architecture:1',
+      subagentId: 'architecture',
+      task: 'Map the API boundary.',
+      harnessId: 'codex',
+      model: 'gpt-5.4',
+      success: true,
+      output: { boundary: 'packages/api' },
+      transcript: childTranscript,
+    });
+
+    expect(parseTranscript(transcript)).toEqual([
+      {
+        id: 'event-0',
+        kind: 'subagent',
+        callId: 'architecture:1',
+        subagentId: 'architecture',
+        harnessId: 'codex',
+        model: 'gpt-5.4',
+        task: 'Map the API boundary.',
+        status: 'completed',
+        text: '{\n  "boundary": "packages/api"\n}',
+        childTranscript,
+      },
+    ]);
+    expect(parseTranscript(childTranscript, 'Map the API boundary.')).toEqual([
+      { id: 'user-prompt', kind: 'user', text: 'Map the API boundary.' },
+      {
+        id: 'event-0',
+        kind: 'reasoning',
+        text: 'Inspect the package boundary.',
+      },
+      {
+        id: 'event-1',
+        kind: 'agent',
+        text: 'The API lives in packages/api.',
+      },
     ]);
   });
 

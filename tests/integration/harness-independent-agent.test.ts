@@ -394,7 +394,10 @@ async function runAdapter(
         runId,
         artifact: artifact(),
         startingCommit: 'abc123',
-        configuration: { agentHarnesses: [harness.id] },
+        configuration: {
+          agentHarnesses: [harness.id],
+          agentReasoningEffort: 'high',
+        },
         idempotencyKey: 'create',
       })
       .unwrap();
@@ -574,19 +577,23 @@ describe('M4 harness-independent agent execution', () => {
     );
     expect(claudeSdk.calls[0]?.options).toMatchObject({
       model: 'claude-model',
+      effort: 'high',
       outputFormat: { type: 'json_schema' },
       tools: ['Read', 'Glob', 'Grep'],
     });
     expect(codexRunner.calls.map(({ method }) => method)).toContain('turn/start');
     expect(codexRunner.calls.find(({ method }) => method === 'turn/start')?.params).toMatchObject({
       model: 'codex-model',
+      effort: 'high',
       outputSchema: expect.any(Object),
       sandboxPolicy: { type: 'readOnly', networkAccess: false },
     });
     expect(openCodeSdk.calls[0]?.request.model).toBe('provider/opencode-model');
+    expect(openCodeSdk.calls[0]?.request.reasoningEffort).toBe('high');
     expect(openCodeSdk.calls[0]?.request.outputSchema).toBeDefined();
     expect(piSdk.calls[0]?.request.capabilities).toEqual(['repository.read']);
     expect(piSdk.calls[0]?.request.model).toBe('provider/pi-model');
+    expect(piSdk.calls[0]?.request.reasoningEffort).toBe('high');
   });
 
   test('OpenCode and Pi resume the exact recorded session', async () => {

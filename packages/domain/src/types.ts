@@ -5,6 +5,9 @@ export type JsonValue =
   | readonly JsonValue[]
   | { readonly [key: string]: JsonValue };
 
+/** Portable reasoning-depth policy snapshotted for every agent in one run. */
+export type AgentReasoningEffort = 'low' | 'medium' | 'high';
+
 export interface WorkItemSnapshot {
   readonly schemaVersion: 1;
   readonly kind: 'inline' | 'ticket';

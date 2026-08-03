@@ -1009,6 +1009,42 @@ button:disabled {
   padding: 16px;
 }
 
+.approval-proposal {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--canvas-inset);
+  padding: 16px;
+}
+
+.approval-proposal > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.approval-proposal h4 {
+  margin: 0 0 4px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.approval-proposal header span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.approval-proposal-content {
+  min-width: 0;
+  border-top: 1px solid var(--border-muted);
+  padding-top: 12px;
+  color: #c9d1d9;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .definition h3,
 .approval-card h3 {
   margin: 6px 0;
@@ -1807,6 +1843,14 @@ button:disabled {
   gap: 24px;
 }
 
+.ticket-inspector-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .ticket-inspector h2 {
   max-width: 860px;
   margin-bottom: 16px;
@@ -1954,6 +1998,117 @@ button:disabled {
   line-height: 1.45;
 }
 
+.ticket-run-dialog {
+  width: min(760px, 94vw);
+  height: auto;
+  max-height: 92vh;
+}
+
+.modal-content.ticket-run-modal {
+  padding: 0;
+}
+
+.ticket-run-form {
+  display: grid;
+  min-width: 0;
+}
+
+.ticket-run-summary {
+  border-bottom: 1px solid var(--border);
+  background: var(--canvas-inset);
+  padding: 20px 24px;
+}
+
+.ticket-run-summary strong {
+  display: block;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.ticket-run-summary p:last-child {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.ticket-run-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  padding: 24px;
+}
+
+.ticket-run-fields label {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 7px;
+}
+
+.ticket-run-fields label > span {
+  color: #c9d1d9;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ticket-run-fields input,
+.ticket-run-fields select {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #21262d;
+  padding: 7px 10px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.ticket-run-fields label > small {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.ticket-run-error {
+  margin: 0 24px 18px;
+  border: 1px solid rgb(248 81 73 / 48%);
+  border-radius: var(--radius);
+  background: var(--danger-muted);
+  padding: 10px 12px;
+  color: #ffb3ad;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.ticket-run-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  background: var(--canvas-subtle);
+  padding: 14px 24px;
+}
+
+.ticket-run-actions button {
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: #21262d;
+  padding: 7px 14px;
+  color: #c9d1d9;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ticket-run-actions .primary-button {
+  border-color: #238636;
+  background: #238636;
+  color: #fff;
+}
+
 .ticket-empty {
   display: grid;
   min-height: 300px;
@@ -2013,10 +2168,65 @@ button:disabled {
   background: var(--canvas-inset);
 }
 
+.message-subagent {
+  border-left: 3px solid var(--accent);
+  background: rgb(31 111 235 / 8%);
+}
+
 .message-tool_call,
 .message-tool_result {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
+}
+
+.subagent-session {
+  display: grid;
+  gap: 14px;
+}
+
+.subagent-session dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+}
+
+.subagent-session dt {
+  color: var(--text-muted);
+}
+
+.subagent-session dd {
+  margin: 0;
+  color: var(--text);
+}
+
+.subagent-session section {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid var(--border-muted);
+  padding-top: 12px;
+}
+
+.subagent-session details {
+  min-width: 0;
+  border-top: 1px solid var(--border-muted);
+  padding-top: 12px;
+}
+
+.subagent-session details > summary {
+  margin-bottom: 10px;
+  color: #58a6ff;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.subagent-session .transcript-viewer {
+  max-height: 56vh;
+  overflow: auto;
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius);
+  background: var(--canvas);
+  padding: 10px;
 }
 
 .tool-results {
@@ -2663,6 +2873,28 @@ button:disabled {
     align-items: flex-start;
     flex-direction: column;
     gap: 8px;
+  }
+
+  .ticket-inspector-actions {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .ticket-run-fields {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 18px 16px;
+  }
+
+  .ticket-run-summary {
+    padding: 18px 16px;
+  }
+
+  .ticket-run-error {
+    margin: 0 16px 16px;
+  }
+
+  .ticket-run-actions {
+    padding: 12px 16px;
   }
 
   .ticket-metadata {

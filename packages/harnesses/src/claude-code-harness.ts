@@ -247,6 +247,7 @@ function optionsFor(request: HarnessExecutionRequest, resumeToken?: string): Opt
         }
       : {}),
     ...(request.model ? { model: request.model } : {}),
+    ...(request.reasoningEffort ? { effort: request.reasoningEffort } : {}),
     ...(outputSchema
       ? { outputFormat: { type: 'json_schema' as const, schema: outputSchema } }
       : {}),

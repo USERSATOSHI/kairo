@@ -84,6 +84,8 @@ ability to read previously compiled IR version 1 bundles.
 records normalized inline or provider-backed ticket content, its external
 revision when available, and a `sha256:` checksum. The snapshot lives in
 durable run configuration so replay and resume never refetch a mutable ticket.
+Optional `agentReasoningEffort` is likewise snapshotted as `low`, `medium`, or
+`high`; it influences harness inference without changing orchestration replay.
 
 ## State Machine Types
 

@@ -35,7 +35,7 @@ The `createKouroApp(services)` factory produces an Elysia instance with **21 rou
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/runs` | List all runs |
-| `POST` | `/runs` | Create a new run |
+| `POST` | `/runs` | Create a run with work item, harness routing, and optional reasoning effort |
 | `GET` | `/runs/:runId` | Get run details with graph view |
 | `DELETE` | `/runs/:runId` | Permanently delete a terminal local run |
 | `GET` | `/runs/:runId/events` | SSE event stream (optional `?after=`) |

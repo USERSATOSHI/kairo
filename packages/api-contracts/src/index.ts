@@ -1,8 +1,10 @@
 import type {
+  AgentReasoningEffort,
   ApprovalBinding,
   ArtifactReference,
   CompiledWorkflowBundle,
   DeliveryMetadata,
+  JsonValue,
   RunEvent,
   RunState,
 } from '@kouro/domain';
@@ -110,6 +112,11 @@ export interface ApprovalView {
   readonly state: RunState['invocations'][number]['state'];
   readonly binding: ApprovalBinding;
   readonly expectedEventSequence: number;
+  readonly proposal?: {
+    readonly nodeId: string;
+    readonly invocationSequence: number;
+    readonly output: JsonValue;
+  };
 }
 
 export interface ApprovalDecisionRequest {
@@ -135,6 +142,7 @@ export interface CreateRunRequest {
   readonly ticket?: string;
   readonly harnesses?: readonly string[];
   readonly harnessesByNode?: Readonly<Record<string, readonly string[]>>;
+  readonly reasoningEffort?: AgentReasoningEffort;
   readonly actor: string;
   readonly base?: string;
 }

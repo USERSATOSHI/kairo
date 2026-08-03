@@ -26,6 +26,10 @@ tool exchanges above in-context steering and stop controls.
 - **Switchable workflow layout** — Operators can use a layered top-to-bottom or left-to-right flowchart, or a compact network graph
 - **Derived ticket columns** — The API supplies planning and runtime-owned execution projections; React never persists board state
 - **Markdown ticket details** — Ticket descriptions and comments render headings, lists, links, quotes, inline code, and fenced code without accepting raw HTML
+- **Ticket-scoped workflow launch** — Ticket details launch a workflow against a selected repository with immutable ticket input, optional base-branch and harness routing, and direct navigation to the created run
+- **Portable reasoning effort** — Ticket launch can snapshot provider-default, low, medium, or high effort for every parent agent and bounded subagent in the run
+- **Nested subagent sessions** — Completed Kouro subagents render as separate readable sessions with delegated task, harness/model metadata, reasoning, tool activity, and structured output instead of embedded JSONL
+- **Approval proposal context** — Generic approvals include the exact source invocation output, so a plan can be reviewed without leaving the approval workspace
 - **Server-resolved provider secrets** — Provider configuration responses contain status and non-secret scope only
 
 ## Quick Start
@@ -81,6 +85,7 @@ App (root component)
 8. **Active attempt** → `fetchInvocationActivity()` polls the worker's best-effort transcript while the durable attempt remains active
 9. **Run control** → `controlRun()` persists pause, resume, or cancel and refreshes the complete execution read model
 10. **Invocation control** → The Control tab opens the exact agent session; its transcript-adjacent composer and stop action call `controlInvocation()`, while retry and skip remain in the recovery surface
+11. **Ticket launch** → Repository selection and ticket identity are submitted to `createRun()`; the server durably snapshots and links the ticket, returns the new run immediately, and lets the local worker continue execution while the UI opens its execution view
 
 ## API Client
 
@@ -88,7 +93,9 @@ The `api.ts` module provides:
 
 ```typescript
 import {
+  createRun,
   fetchRuns,
+  fetchRepositories,
   fetchRun,
   fetchApprovals,
   fetchArtifacts,
@@ -98,6 +105,17 @@ import {
   decideApproval,
   reconnectEvents,
 } from '@kouro/web/api';
+
+const [repository] = await fetchRepositories();
+if (repository) {
+  await createRun({
+    adw: 'feature-development',
+    repositoryPath: repository.path,
+    ticket: 'kouro:ticket-abc',
+    reasoningEffort: 'high',
+    actor: 'web-user',
+  });
+}
 
 // List all runs
 const runs = await fetchRuns();

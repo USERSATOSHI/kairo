@@ -5,11 +5,16 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 
 import { compileWorkflow } from '@kouro/adw';
-import { createKouroApp, LocalArtifactContentReader, type ArtifactContentReader } from '@kouro/api';
+import {
+  createKouroApp,
+  listApprovals,
+  LocalArtifactContentReader,
+  type ArtifactContentReader,
+} from '@kouro/api';
 import type { ArtifactReference, WorkflowSourceBundle } from '@kouro/domain';
 import type { CommandExecution, CommandRunner, CommandRunnerError } from '@kouro/executors';
-import { RunCoordinator } from '@kouro/executors';
-import { LocalArtifactWriter } from '@kouro/harnesses';
+import { AgentExecutor, RunCoordinator } from '@kouro/executors';
+import { HarnessRegistry, LocalArtifactWriter, ScriptedFakeHarness } from '@kouro/harnesses';
 import { SqliteEventStore } from '@kouro/persistence-sqlite';
 import { ok, type Result } from '@usersatoshi/results';
 
@@ -58,6 +63,38 @@ function approvalWorkflow(): WorkflowSourceBundle {
   };
 }
 
+function planApprovalWorkflow(): WorkflowSourceBundle {
+  return {
+    manifest: { id: 'plan-approval', version: '1.0.0' },
+    semanticVersions: { compiler: '0.1.0', ir: '1', expressions: '1' },
+    entryNodeId: 'plan',
+    nodes: [
+      {
+        id: 'plan',
+        type: 'agent',
+        role: 'planner',
+        prompt: 'Create the implementation plan.',
+        recoveryPolicy: 'resume_supported',
+      },
+      { id: 'approve', type: 'approval', title: 'Approve the plan' },
+      { id: 'complete', type: 'complete' },
+    ],
+    transitions: [
+      {
+        id: 'plan.success.approve',
+        from: { nodeId: 'plan', outcome: 'success' },
+        toNodeId: 'approve',
+      },
+      {
+        id: 'approve.approved.complete',
+        from: { nodeId: 'approve', outcome: 'approved' },
+        toNodeId: 'complete',
+      },
+    ],
+    counterLimits: {},
+  };
+}
+
 function responseJson(response: Response): Promise<unknown> {
   return response.json();
 }
@@ -69,6 +106,62 @@ afterEach(() => {
 });
 
 describe('M6 observable Elysia and web MVP', () => {
+  test('projects the source plan into its approval read model', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'kouro-plan-approval-'));
+    const store = new SqliteEventStore(join(directory, 'runs.sqlite'));
+    const initialized = store.initialize();
+    if (initialized.isErr()) throw new Error(JSON.stringify(initialized.error));
+    disposals.push(() => {
+      store.dispose();
+      rmSync(directory, { recursive: true, force: true });
+    });
+    const harness = new ScriptedFakeHarness('fake', [
+      {
+        output: {
+          summary: 'Add the ticket launcher',
+          steps: ['Extend the API contract', 'Render the launch dialog'],
+        },
+        transcript: '{}',
+      },
+    ]);
+    const coordinator = new RunCoordinator(
+      store,
+      new UnusedCommandRunner(),
+      new AgentExecutor(
+        new HarnessRegistry([harness]),
+        new LocalArtifactWriter(join(directory, 'artifacts')),
+      ),
+      directory,
+    );
+    coordinator
+      .createRun({
+        runId: 'plan-run',
+        artifact: compileWorkflow(planApprovalWorkflow()).unwrap(),
+        startingCommit: 'abc123',
+        configuration: { agentHarnesses: ['fake'] },
+        idempotencyKey: 'create-plan-run',
+      })
+      .unwrap();
+    for (let step = 0; step < 4; step += 1) {
+      const advanced = await coordinator.advance('plan-run');
+      if (advanced.isErr()) throw new Error(JSON.stringify(advanced.error));
+    }
+
+    expect(listApprovals({ runs: store, coordinator }, 'plan-run').unwrap()).toEqual([
+      expect.objectContaining({
+        nodeId: 'approve',
+        proposal: {
+          nodeId: 'plan',
+          invocationSequence: 1,
+          output: {
+            summary: 'Add the ticket launcher',
+            steps: ['Extend the API contract', 'Render the launch dialog'],
+          },
+        },
+      }),
+    ]);
+  });
+
   test('local artifact reads verify durable size and checksum metadata', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'kouro-m6-artifact-'));
     disposals.push(() => rmSync(directory, { recursive: true, force: true }));

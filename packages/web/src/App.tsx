@@ -4,6 +4,7 @@ import type {
   ApprovalView,
   ArtifactView,
   InvocationActivityView,
+  RepositorySummary,
   RunDetails,
   RunSummary,
   TicketDetails,
@@ -32,6 +33,7 @@ import {
 } from '@xyflow/react';
 import {
   type CSSProperties,
+  type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -42,6 +44,7 @@ import {
 } from 'react';
 
 import {
+  createRun,
   controlInvocation,
   controlRun,
   decideApproval,
@@ -50,6 +53,7 @@ import {
   fetchArtifact,
   fetchArtifacts,
   fetchInvocationActivity,
+  fetchRepositories,
   fetchRun,
   fetchRuns,
   fetchTicket,
@@ -726,6 +730,8 @@ function entryLabel(entry: TranscriptEntry): string {
       return entry.toolName ? `Tool call · ${entry.toolName}` : 'Tool call';
     case 'tool_result':
       return entry.toolName ? `Tool result · ${entry.toolName}` : 'Tool result';
+    case 'subagent':
+      return entry.subagentId ? `Subagent · ${entry.subagentId}` : 'Subagent';
   }
   return 'Activity';
 }
@@ -747,7 +753,42 @@ function TranscriptCard({
         {entry.status ? <span className="tool-status">{entry.status}</span> : null}
       </header>
       <div className="message-text">
-        {shellInput ? (
+        {entry.kind === 'subagent' ? (
+          <div className="subagent-session">
+            <dl>
+              {entry.harnessId ? (
+                <>
+                  <dt>Harness</dt>
+                  <dd>{entry.harnessId}</dd>
+                </>
+              ) : null}
+              {entry.model ? (
+                <>
+                  <dt>Model</dt>
+                  <dd>{entry.model}</dd>
+                </>
+              ) : null}
+            </dl>
+            {entry.task ? (
+              <section>
+                <span className="field-label">Delegated task</span>
+                <MarkdownContent content={entry.task} />
+              </section>
+            ) : null}
+            {entry.childTranscript ? (
+              <details open>
+                <summary>Subagent session</summary>
+                <TranscriptViewer content={entry.childTranscript} userPrompt={entry.task} />
+              </details>
+            ) : null}
+            <section>
+              <span className="field-label">
+                {entry.status === 'failed' ? 'Failure' : 'Structured output'}
+              </span>
+              <MarkdownContent content={markdown ?? entry.text} />
+            </section>
+          </div>
+        ) : shellInput ? (
           <CodeViewer
             compact
             content={entry.text}
@@ -898,36 +939,50 @@ function InspectorModal({
   metadata,
   onClose,
   contentClassName,
+  modalClassName,
+  closeDisabled = false,
   children,
 }: {
   readonly title: string;
   readonly metadata: string;
   readonly onClose: () => void;
   readonly contentClassName?: string;
+  readonly modalClassName?: string;
+  readonly closeDisabled?: boolean;
   readonly children: ReactNode;
 }) {
   useEffect(() => {
     function closeOnEscape(event: KeyboardEvent): void {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape' && !closeDisabled) onClose();
     }
     document.addEventListener('keydown', closeOnEscape);
     return () => document.removeEventListener('keydown', closeOnEscape);
-  }, [onClose]);
+  }, [closeDisabled, onClose]);
   return (
     <div
       className="modal-backdrop"
       onMouseDown={(event) => {
-        if (event.currentTarget === event.target) onClose();
+        if (event.currentTarget === event.target && !closeDisabled) onClose();
       }}
       role="presentation"
     >
-      <section aria-modal="true" className="inspector-modal" role="dialog">
+      <section
+        aria-modal="true"
+        className={`inspector-modal${modalClassName ? ` ${modalClassName}` : ''}`}
+        role="dialog"
+      >
         <header className="modal-header">
           <div>
             <p className="eyebrow">{metadata}</p>
             <h2>{title}</h2>
           </div>
-          <button aria-label="Close" className="modal-close" onClick={onClose} type="button">
+          <button
+            aria-label="Close"
+            className="modal-close"
+            disabled={closeDisabled}
+            onClick={onClose}
+            type="button"
+          >
             ×
           </button>
         </header>
@@ -1281,6 +1336,21 @@ function ApprovalControl({
           </section>
         </div>
       ) : null}
+      {!deliveryReview && approval.proposal ? (
+        <section className="approval-proposal">
+          <header>
+            <div>
+              <h4>Plan to review</h4>
+              <span>
+                {approval.proposal.nodeId} · invocation {approval.proposal.invocationSequence}
+              </span>
+            </div>
+          </header>
+          <div className="approval-proposal-content">
+            <MarkdownContent content={structuredValueMarkdown(approval.proposal.output)} />
+          </div>
+        </section>
+      ) : null}
       {approval.state === 'waiting_for_approval' ? (
         <footer className="approval-decision">
           <label>
@@ -1404,9 +1474,9 @@ function workspaceStyle(inspectorHeight: number): WorkspaceStyle {
   return { '--inspector-height': `${inspectorHeight}px` };
 }
 
-function ExecutionConsole() {
+function ExecutionConsole({ initialRunId }: { readonly initialRunId?: string }) {
   const [runs, setRuns] = useState<readonly RunSummary[]>([]);
-  const [selectedRunId, setSelectedRunId] = useState<string>();
+  const [selectedRunId, setSelectedRunId] = useState<string | undefined>(initialRunId);
   const [run, setRun] = useState<RunDetails>();
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('details');
@@ -1425,6 +1495,10 @@ function ExecutionConsole() {
     useState<DiagramDirection>(storedDiagramDirection);
   const [inspectorHeight, setInspectorHeight] = useState(storedInspectorHeight);
   const drawerDragRef = useRef<DrawerDrag | undefined>(undefined);
+
+  useEffect(() => {
+    if (initialRunId) setSelectedRunId(initialRunId);
+  }, [initialRunId]);
 
   useEffect(() => {
     fetchRuns()
@@ -2138,8 +2212,17 @@ function TicketHistory({ details }: { readonly details: TicketDetails }) {
   );
 }
 
-function TicketInspector({ details }: { readonly details: TicketDetails }) {
+function TicketInspector({
+  details,
+  onLaunch,
+  onOpenRun,
+}: {
+  readonly details: TicketDetails;
+  readonly onLaunch: () => void;
+  readonly onOpenRun: (runId: string) => void;
+}) {
   const { ticket } = details;
+  const activeRun = details.activeRun;
   return (
     <aside className="ticket-inspector">
       <header>
@@ -2149,7 +2232,22 @@ function TicketInspector({ details }: { readonly details: TicketDetails }) {
           </p>
           <h2>{ticket.title}</h2>
         </div>
-        <span className={stateClass(details.column)}>{details.column.replaceAll('_', ' ')}</span>
+        <div className="ticket-inspector-actions">
+          <span className={stateClass(details.column)}>{details.column.replaceAll('_', ' ')}</span>
+          {activeRun ? (
+            <button
+              className="primary-button"
+              onClick={() => onOpenRun(activeRun.runId)}
+              type="button"
+            >
+              Open active run
+            </button>
+          ) : (
+            <button className="primary-button" onClick={onLaunch} type="button">
+              Run workflow
+            </button>
+          )}
+        </div>
       </header>
       <div className="ticket-description">
         <MarkdownContent content={ticket.description || 'No description provided.'} />
@@ -2205,6 +2303,203 @@ function ProviderConfigurations({
   );
 }
 
+interface TicketRunOptions {
+  readonly workflow: string;
+  readonly repositoryPath: string;
+  readonly harness: string;
+  readonly reasoningEffort: string;
+  readonly base: string;
+}
+
+function portableReasoningEffort(value: string): 'low' | 'medium' | 'high' | undefined {
+  return value === 'low' || value === 'medium' || value === 'high' ? value : undefined;
+}
+
+function TicketRunFields({
+  busy,
+  options,
+  repositories,
+  onChange,
+}: {
+  readonly busy: boolean;
+  readonly options: TicketRunOptions;
+  readonly repositories: readonly RepositorySummary[];
+  readonly onChange: (field: keyof TicketRunOptions, value: string) => void;
+}) {
+  return (
+    <div className="ticket-run-fields">
+      <label>
+        <span>Workflow</span>
+        <input
+          disabled={busy}
+          list="ticket-workflow-options"
+          onChange={(event) => onChange('workflow', event.target.value)}
+          placeholder="Bundled workflow ID or local package path"
+          required
+          value={options.workflow}
+        />
+        <small>Use the bundled workflow ID or a package path visible to the Kouro host.</small>
+      </label>
+      <datalist id="ticket-workflow-options">
+        <option value="feature-development">Feature development</option>
+      </datalist>
+      <label>
+        <span>Repository</span>
+        <select
+          disabled={busy || repositories.length === 0}
+          onChange={(event) => onChange('repositoryPath', event.target.value)}
+          required
+          value={options.repositoryPath}
+        >
+          {repositories.length === 0 ? <option value="">No repository available</option> : null}
+          {repositories.map((repository) => (
+            <option key={repository.id} value={repository.path}>
+              {repository.path}
+            </option>
+          ))}
+        </select>
+        <small>The run and its worktree stay scoped to this repository.</small>
+      </label>
+      <label>
+        <span>Harness routing</span>
+        <select
+          disabled={busy}
+          onChange={(event) => onChange('harness', event.target.value)}
+          value={options.harness}
+        >
+          <option value="automatic">Automatic fallback</option>
+          <option value="codex">Codex</option>
+          <option value="claude-code">Claude Code</option>
+          <option value="opencode">OpenCode</option>
+          <option value="pi">Pi</option>
+        </select>
+        <small>Workflow-level harness pins still take precedence.</small>
+      </label>
+      <label>
+        <span>Reasoning effort</span>
+        <select
+          disabled={busy}
+          onChange={(event) => onChange('reasoningEffort', event.target.value)}
+          value={options.reasoningEffort}
+        >
+          <option value="automatic">Provider default</option>
+          <option value="low">Low · faster</option>
+          <option value="medium">Medium · balanced</option>
+          <option value="high">High · deeper</option>
+        </select>
+        <small>Applied to every parent agent and bounded subagent in this run.</small>
+      </label>
+      <label>
+        <span>Base branch</span>
+        <input
+          disabled={busy}
+          onChange={(event) => onChange('base', event.target.value)}
+          placeholder="Current branch at launch"
+          value={options.base}
+        />
+        <small>Leave empty to snapshot the repository's current named branch.</small>
+      </label>
+    </div>
+  );
+}
+
+function TicketRunDialog({
+  details,
+  repositories,
+  onClose,
+  onCreated,
+}: {
+  readonly details: TicketDetails;
+  readonly repositories: readonly RepositorySummary[];
+  readonly onClose: () => void;
+  readonly onCreated: (runId: string) => void;
+}) {
+  const [options, setOptions] = useState<TicketRunOptions>({
+    workflow: 'feature-development',
+    repositoryPath: repositories[0]?.path ?? '',
+    harness: 'automatic',
+    reasoningEffort: 'automatic',
+    base: '',
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+
+  function updateOption(field: keyof TicketRunOptions, value: string): void {
+    setOptions((current) => ({ ...current, [field]: value }));
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    const selectedWorkflow = options.workflow.trim();
+    if (busy || !selectedWorkflow || !options.repositoryPath) return;
+    setBusy(true);
+    setError(undefined);
+    const reasoningEffort = portableReasoningEffort(options.reasoningEffort);
+    try {
+      const created = await createRun({
+        adw: selectedWorkflow,
+        repositoryPath: options.repositoryPath,
+        ticket: `kouro:${details.ticket.id}`,
+        ...(options.harness === 'automatic' ? {} : { harnesses: [options.harness] }),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        actor: 'web-user',
+        ...(options.base.trim() ? { base: options.base.trim() } : {}),
+      });
+      onCreated(created.runId);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Workflow launch failed');
+      setBusy(false);
+    }
+  }
+
+  return (
+    <InspectorModal
+      closeDisabled={busy}
+      contentClassName="ticket-run-modal"
+      metadata={`${details.ticket.id} · revision ${details.ticket.revision}`}
+      modalClassName="ticket-run-dialog"
+      onClose={onClose}
+      title="Run workflow"
+    >
+      <form className="ticket-run-form" onSubmit={(event) => void submit(event)}>
+        <section className="ticket-run-summary">
+          <p className="eyebrow">Immutable work item</p>
+          <strong>{details.ticket.title}</strong>
+          <p>
+            Kouro snapshots this ticket revision before creating the worktree. Later ticket edits do
+            not change the active run.
+          </p>
+        </section>
+        <TicketRunFields
+          busy={busy}
+          onChange={updateOption}
+          options={options}
+          repositories={repositories}
+        />
+        {repositories.length === 0 ? (
+          <p className="ticket-run-error">
+            Serve a repository with <code>kouro serve --repo &lt;path&gt;</code> or register one before
+            launching.
+          </p>
+        ) : null}
+        {error ? <p className="ticket-run-error">{error}</p> : null}
+        <footer className="ticket-run-actions">
+          <button disabled={busy} onClick={onClose} type="button">
+            Cancel
+          </button>
+          <button
+            className="primary-button"
+            disabled={busy || !options.workflow.trim() || !options.repositoryPath}
+            type="submit"
+          >
+            {busy ? 'Starting workflow…' : 'Start workflow'}
+          </button>
+        </footer>
+      </form>
+    </InspectorModal>
+  );
+}
+
 function TicketBoard({
   tickets,
   selectedTicketId,
@@ -2244,21 +2539,28 @@ function TicketBoard({
   );
 }
 
-function TicketConsole() {
+function TicketConsole({ onOpenRun }: { readonly onOpenRun: (runId: string) => void }) {
   const [projects, setProjects] = useState<readonly TicketProjectView[]>([]);
   const [projectId, setProjectId] = useState<string>();
   const [tickets, setTickets] = useState<readonly TicketListItem[]>([]);
   const [selectedTicketId, setSelectedTicketId] = useState<string>();
   const [details, setDetails] = useState<TicketDetails>();
   const [providers, setProviders] = useState<readonly TicketProviderConfigurationView[]>([]);
+  const [repositories, setRepositories] = useState<readonly RepositorySummary[]>([]);
+  const [launchOpen, setLaunchOpen] = useState(false);
   const [error, setError] = useState<string>();
   const detailsPanelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    Promise.all([fetchTicketProjects(), fetchTicketProviderConfigurations()])
-      .then(([nextProjects, nextProviders]) => {
+    Promise.all([
+      fetchTicketProjects(),
+      fetchTicketProviderConfigurations(),
+      fetchRepositories(),
+    ])
+      .then(([nextProjects, nextProviders, nextRepositories]) => {
         setProjects(nextProjects);
         setProviders(nextProviders);
+        setRepositories(nextRepositories);
         setProjectId((current) => current ?? nextProjects[0]?.id);
       })
       .catch((cause: unknown) =>
@@ -2289,13 +2591,22 @@ function TicketConsole() {
   useEffect(() => {
     if (!selectedTicketId) {
       setDetails(undefined);
-      return;
+      return undefined;
     }
+    let cancelled = false;
+    setDetails(undefined);
     fetchTicket(selectedTicketId)
-      .then(setDetails)
-      .catch((cause: unknown) =>
-        setError(cause instanceof Error ? cause.message : 'Ticket detail load failed'),
-      );
+      .then((nextDetails) => {
+        if (!cancelled) setDetails(nextDetails);
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) {
+          setError(cause instanceof Error ? cause.message : 'Ticket detail load failed');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedTicketId]);
 
   useEffect(() => {
@@ -2330,19 +2641,38 @@ function TicketConsole() {
         />
         <div className="ticket-lower" ref={detailsPanelRef}>
           {details ? (
-            <TicketInspector details={details} />
+            <TicketInspector
+              details={details}
+              onLaunch={() => setLaunchOpen(true)}
+              onOpenRun={onOpenRun}
+            />
           ) : (
             <div className="ticket-empty">Select a ticket to inspect its durable history.</div>
           )}
           <ProviderConfigurations configurations={providers} />
         </div>
       </div>
+      {launchOpen && details ? (
+        <TicketRunDialog
+          details={details}
+          onClose={() => setLaunchOpen(false)}
+          onCreated={onOpenRun}
+          repositories={repositories}
+        />
+      ) : null}
     </div>
   );
 }
 
 export function App() {
   const [surface, setSurface] = useState<'tickets' | 'runs'>('tickets');
+  const [targetRunId, setTargetRunId] = useState<string>();
+
+  function openRun(runId: string): void {
+    setTargetRunId(runId);
+    setSurface('runs');
+  }
+
   return (
     <main className="app-shell">
       <header className="surface-nav">
@@ -2365,7 +2695,10 @@ export function App() {
           <button
             aria-current={surface === 'runs' ? 'page' : undefined}
             className={surface === 'runs' ? 'active' : ''}
-            onClick={() => setSurface('runs')}
+            onClick={() => {
+              setTargetRunId(undefined);
+              setSurface('runs');
+            }}
             type="button"
           >
             Actions
@@ -2376,7 +2709,11 @@ export function App() {
           Local
         </span>
       </header>
-      {surface === 'tickets' ? <TicketConsole /> : <ExecutionConsole />}
+      {surface === 'tickets' ? (
+        <TicketConsole onOpenRun={openRun} />
+      ) : (
+        <ExecutionConsole initialRunId={targetRunId} />
+      )}
     </main>
   );
 }

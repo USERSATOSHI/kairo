@@ -335,21 +335,44 @@ export function listApprovals(
   const loaded = fromStore(services.runs.loadRun(runId));
   if (loaded.isErr()) return loaded;
   const aggregate = loaded.unwrap();
+  function proposalFor(invocationSequence: number): ApprovalView['proposal'] {
+    const activation = aggregate.events.find(
+      (event) =>
+        event.type === 'invocation.activated' && event.invocationSequence === invocationSequence,
+    );
+    if (
+      activation?.type !== 'invocation.activated' ||
+      activation.sourceInvocationSequence === undefined
+    ) {
+      return undefined;
+    }
+    const source = aggregate.state.invocations.find(
+      ({ sequence }) => sequence === activation.sourceInvocationSequence,
+    );
+    return source?.output === undefined
+      ? undefined
+      : {
+          nodeId: source.nodeId,
+          invocationSequence: source.sequence,
+          output: source.output,
+        };
+  }
   return ok(
-    aggregate.state.invocations.flatMap((invocation) =>
-      invocation.approval
-        ? [
-            {
-              runId,
-              nodeId: invocation.nodeId,
-              invocationSequence: invocation.sequence,
-              state: invocation.state,
-              binding: invocation.approval,
-              expectedEventSequence: aggregate.nextEventSequence,
-            },
-          ]
-        : [],
-    ),
+    aggregate.state.invocations.flatMap((invocation) => {
+      if (!invocation.approval) return [];
+      const proposal = proposalFor(invocation.sequence);
+      return [
+        {
+          runId,
+          nodeId: invocation.nodeId,
+          invocationSequence: invocation.sequence,
+          state: invocation.state,
+          binding: invocation.approval,
+          expectedEventSequence: aggregate.nextEventSequence,
+          ...(proposal ? { proposal } : {}),
+        },
+      ];
+    }),
   );
 }
 

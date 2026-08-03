@@ -193,17 +193,23 @@ describe('ticket CLI composition', () => {
           description: 'Launch this durable ticket.',
         })
         .unwrap();
-      const created = await host.create({
-        adw: 'feature-development',
-        repositoryPath: repository,
-        ticket: `kouro:${ticket.id}`,
-        harnesses: ['fake'],
-        actor: 'operator',
-      });
-      expect(created.isOk()).toBe(true);
-      const details = await host
-        .app()
-        .handle(new Request(`http://kouro.test/tickets/${ticket.id}`));
+      const app = host.app(repository);
+      const launch = await app.handle(
+        new Request('http://kouro.test/runs', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            adw: 'feature-development',
+            repositoryPath: repository,
+            ticket: `kouro:${ticket.id}`,
+            harnesses: ['fake'],
+            actor: 'web-user',
+          }),
+        }),
+      );
+      expect(launch.status).toBe(200);
+      const created: { readonly runId: string; readonly status: string } = await launch.json();
+      const details = await app.handle(new Request(`http://kouro.test/tickets/${ticket.id}`));
       const body: {
         readonly runs: readonly {
           readonly ticketId: string;
@@ -216,17 +222,18 @@ describe('ticket CLI composition', () => {
       expect(body.runs).toContainEqual(
         expect.objectContaining({
           ticketId: ticket.id,
-          runId: created.unwrap().runId,
+          runId: created.runId,
           kind: 'implementation',
           createdAt: expect.any(String),
         }),
       );
       expect(body.snapshots).toContainEqual(
         expect.objectContaining({
-          runId: created.unwrap().runId,
+          runId: created.runId,
           title: 'Stored ticket run',
         }),
       );
+      await host.worker.runUntilStable(created.runId);
     } finally {
       host.dispose();
     }

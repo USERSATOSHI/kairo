@@ -75,6 +75,7 @@ describe('bounded workflow subagents', () => {
         workingDirectory: directory,
         role: 'planner',
         prompt: 'Create a plan.',
+        reasoningEffort: 'high',
         capabilities: ['repository.read'],
         subagentDefinitions: [
           {
@@ -122,6 +123,7 @@ describe('bounded workflow subagents', () => {
         'Inspect tests.\n\nDelegated task:\nFind the lowest useful tests',
       ]);
       expect(child.calls.every(({ request }) => request.subagents === undefined)).toBe(true);
+      expect(child.calls.every(({ request }) => request.reasoningEffort === 'high')).toBe(true);
 
       const runDirectory = createHash('sha256').update('run-subagents').digest('hex');
       const transcript = await readFile(
@@ -131,6 +133,7 @@ describe('bounded workflow subagents', () => {
       expect(transcript).toContain('"type":"kouro.subagent"');
       expect(transcript).toContain('"callId":"architecture:1"');
       expect(transcript).toContain('"callId":"tests:4"');
+      expect(transcript).toContain('"task":"Find the lowest useful tests"');
       expect(transcript).toContain('Subagent is not authorized: unknown');
     } finally {
       await rm(directory, { recursive: true, force: true });

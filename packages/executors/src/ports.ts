@@ -1,4 +1,5 @@
 import type {
+  AgentReasoningEffort,
   ArtifactReference,
   CompiledWorkflowArtifact,
   JsonValue,
@@ -188,6 +189,7 @@ export interface HarnessExecutionRequest {
   readonly prompt: string;
   readonly capabilities: readonly string[];
   readonly model?: string;
+  readonly reasoningEffort?: AgentReasoningEffort;
   readonly outputSchema?: JsonValue;
   readonly onTranscriptChunk?: (chunk: string) => Promise<void>;
   readonly onResumeToken?: (token: string) => Promise<void>;

@@ -1,8 +1,63 @@
 import { describe, expect, test } from 'bun:test';
 
-import { controlInvocation, controlRun, publishRun } from '../../packages/web/src/api.ts';
+import {
+  controlInvocation,
+  controlRun,
+  createRun,
+  fetchRepositories,
+  publishRun,
+} from '../../packages/web/src/api.ts';
 
 describe('web control API client', () => {
+  test('creates a ticket-scoped run in a listed repository', async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: { readonly url: string; readonly init?: RequestInit }[] = [];
+    globalThis.fetch = Object.assign(
+      (...args: Parameters<typeof fetch>): ReturnType<typeof fetch> => {
+        const [input, init] = args;
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        requests.push({ url, ...(init ? { init } : {}) });
+        return Promise.resolve(
+          url === '/api/repositories'
+            ? Response.json([{ id: 'repo-1', path: '/repositories/kouro' }])
+            : Response.json({ runId: 'run-ticket-1', status: 'running' }),
+        );
+      },
+      {
+        preconnect: (...args: Parameters<typeof fetch.preconnect>) =>
+          originalFetch.preconnect(...args),
+      },
+    );
+    try {
+      expect(await fetchRepositories()).toEqual([{ id: 'repo-1', path: '/repositories/kouro' }]);
+      expect(
+        await createRun({
+          adw: 'feature-development',
+          repositoryPath: '/repositories/kouro',
+          ticket: 'kouro:ticket-1',
+          harnesses: ['codex'],
+          reasoningEffort: 'high',
+          actor: 'web-user',
+        }),
+      ).toEqual({ runId: 'run-ticket-1', status: 'running' });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(requests.map(({ url }) => url)).toEqual(['/api/repositories', '/api/runs']);
+    expect(requests[1]?.init?.body).toBe(
+      JSON.stringify({
+        adw: 'feature-development',
+        repositoryPath: '/repositories/kouro',
+        ticket: 'kouro:ticket-1',
+        harnesses: ['codex'],
+        reasoningEffort: 'high',
+        actor: 'web-user',
+      }),
+    );
+  });
+
   test('sends idempotent run and exact-invocation control requests', async () => {
     const originalFetch = globalThis.fetch;
     const requests: { readonly url: string; readonly init?: RequestInit }[] = [];

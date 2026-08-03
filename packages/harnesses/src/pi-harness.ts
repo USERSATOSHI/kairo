@@ -95,6 +95,7 @@ const defaultSdk: PiAgentSdk = {
       cwd: request.workingDirectory,
       modelRuntime,
       ...(model ? { model } : {}),
+      ...(request.reasoningEffort ? { thinkingLevel: request.reasoningEffort } : {}),
       tools: toolsFor(request.capabilities),
       customTools: createPiSandboxTools(
         request.workingDirectory,

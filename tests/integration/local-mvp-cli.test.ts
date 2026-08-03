@@ -28,6 +28,7 @@ import { ok, type Result } from '@usersatoshi/results';
 class BlockingHarness implements AgentHarness {
   readonly id = 'blocking';
   readonly started: Promise<void>;
+  request: HarnessExecutionRequest | undefined;
   private resolveStarted: (() => void) | undefined;
   private resolveExecution: (() => void) | undefined;
 
@@ -38,6 +39,7 @@ class BlockingHarness implements AgentHarness {
   }
 
   async execute(request: HarnessExecutionRequest): Promise<Result<HarnessExecution, HarnessError>> {
+    this.request = request;
     await request.onTranscriptChunk?.(
       `${JSON.stringify({
         type: 'item.completed',
@@ -504,6 +506,75 @@ inspect.on('failure').to(failed);`,
       expect(page.status).toBe(200);
       expect(await page.text()).toContain('<!doctype html>');
     } finally {
+      host.dispose();
+    }
+  });
+
+  test('a repository-scoped app exposes its launch target before the first run', async () => {
+    const root = await mkdtemp(resolve(tmpdir(), 'kouro-web-launch-target-'));
+    roots.push(root);
+    const repository = resolve(root, 'repository');
+    await createRepository(repository);
+    const host = new LocalKouroHost(localPaths(root), []);
+    try {
+      expect((await host.initialize()).isOk()).toBe(true);
+      const response = await host
+        .app(repository)
+        .handle(new Request('http://kouro.local/repositories'));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual([
+        { id: expect.stringMatching(/^repo-/), path: repository },
+      ]);
+    } finally {
+      host.dispose();
+    }
+  });
+
+  test('web run creation returns while the local worker continues in the background', async () => {
+    const root = await mkdtemp(resolve(tmpdir(), 'kouro-web-background-run-'));
+    roots.push(root);
+    const repository = resolve(root, 'repository');
+    await createRepository(repository);
+    const harness = new BlockingHarness();
+    const host = new LocalKouroHost(localPaths(root), [harness]);
+    try {
+      expect((await host.initialize()).isOk()).toBe(true);
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const response = await Promise.race([
+        host.app(repository).handle(
+          new Request('http://kouro.local/runs', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              adw: 'feature-development',
+              repositoryPath: repository,
+              task: 'Return before the blocking planner completes.',
+              harnesses: ['blocking'],
+              reasoningEffort: 'high',
+              actor: 'web-user',
+            }),
+          }),
+        ),
+        new Promise<Response>((_resolveResponse, rejectResponse) => {
+          timeout = setTimeout(
+            () => rejectResponse(new Error('Web run creation did not return')),
+            1_000,
+          );
+        }),
+      ]);
+      if (timeout) clearTimeout(timeout);
+      expect(response.status).toBe(200);
+      const created: { readonly runId: string; readonly status: string } = await response.json();
+      expect(created).toEqual({
+        runId: expect.stringMatching(/^run-/),
+        status: 'running',
+      });
+      await harness.started;
+      expect(harness.request?.reasoningEffort).toBe('high');
+      harness.release();
+      await host.worker.runUntilStable(created.runId);
+    } finally {
+      harness.release();
       host.dispose();
     }
   });

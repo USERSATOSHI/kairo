@@ -140,6 +140,7 @@ describe('ADR-0028: Codex App Server harness', () => {
     const result = await new CodexHarness(factory).execute(
       request({
         model: 'gpt-test',
+        reasoningEffort: 'high',
         outputSchema: {
           type: 'object',
           properties: { summary: { type: 'string' } },
@@ -167,6 +168,7 @@ describe('ADR-0028: Codex App Server harness', () => {
     ).toMatchObject({
       threadId: 'thread-1',
       model: 'gpt-test',
+      effort: 'high',
       approvalPolicy: 'on-request',
       sandboxPolicy: {
         type: 'workspaceWrite',

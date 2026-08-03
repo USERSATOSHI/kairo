@@ -1,4 +1,5 @@
 import type {
+  AgentReasoningEffort,
   ApprovalBinding,
   ArtifactReference,
   DeliveryMetadata,
@@ -106,6 +107,20 @@ function agentHarnesses(
     });
   }
   return ok(configured);
+}
+
+function agentReasoningEffort(
+  aggregate: RunAggregate,
+): Result<{ readonly value?: AgentReasoningEffort }, ExecutorError> {
+  const configured = aggregate.state.configuration.agentReasoningEffort;
+  if (configured === undefined) return ok({});
+  if (configured === 'low' || configured === 'medium' || configured === 'high') {
+    return ok({ value: configured });
+  }
+  return toExecutorError(ExecutorErrorKind.InvalidInput, {
+    field: 'configuration.agentReasoningEffort',
+    reason: 'agent reasoning effort must be low, medium, or high',
+  });
 }
 
 function reusableAgentSession(
@@ -1049,6 +1064,9 @@ export class RunCoordinator {
       invocationSequence,
       attemptNumber,
     );
+    const effort = agentReasoningEffort(aggregate);
+    if (effort.isErr()) return effort;
+    const reasoningEffort = effort.unwrap().value;
     const subagentDefinitions = (definition.allowedSubagents ?? []).map((subagentId) => {
       const subagent = aggregate.artifact.bundle.subagents?.find(({ id }) => id === subagentId);
       if (!subagent) {
@@ -1074,6 +1092,7 @@ export class RunCoordinator {
       prompt,
       capabilities: definition.capabilities ?? [],
       ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(outputSchema === undefined ? {} : { outputSchema }),
       ...(resumeToken ? { resumeToken } : {}),
       ...(subagentDefinitions.length > 0 ? { subagentDefinitions } : {}),

@@ -57,6 +57,7 @@ interface SubagentTranscriptRecord {
   readonly sequence: number;
   readonly callId: string;
   readonly subagentId: string;
+  readonly task: string;
   readonly harnessId: string;
   readonly model?: string;
   readonly success: boolean;
@@ -117,6 +118,7 @@ export class AgentExecutor {
       prompt: input.prompt,
       capabilities: input.capabilities,
       ...(input.model === undefined ? {} : { model: input.model }),
+      ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }),
       ...(input.outputSchema === undefined ? {} : { outputSchema: input.outputSchema }),
       ...(this.activity
         ? {
@@ -216,6 +218,7 @@ export class AgentExecutor {
             sequence: callSequence,
             callId,
             subagentId,
+            task,
             harnessId,
             success: false,
             error,
@@ -279,6 +282,7 @@ export class AgentExecutor {
         sequence,
         callId,
         subagentId: definition.id,
+        task,
         harnessId,
         ...(model ? { model } : {}),
         success: false,
@@ -296,6 +300,7 @@ export class AgentExecutor {
       prompt: `${definition.prompt}\n\nDelegated task:\n${task}`,
       capabilities: definition.capabilities,
       ...(model ? { model } : {}),
+      ...(parent.reasoningEffort ? { reasoningEffort: parent.reasoningEffort } : {}),
       ...(definition.outputSchemaValue === undefined
         ? {}
         : { outputSchema: definition.outputSchemaValue }),
@@ -307,6 +312,7 @@ export class AgentExecutor {
         sequence,
         callId,
         subagentId: definition.id,
+        task,
         harnessId,
         ...(model ? { model } : {}),
         success: false,
@@ -328,6 +334,7 @@ export class AgentExecutor {
         sequence,
         callId,
         subagentId: definition.id,
+        task,
         harnessId,
         ...(model ? { model } : {}),
         success: false,
@@ -341,6 +348,7 @@ export class AgentExecutor {
       sequence,
       callId,
       subagentId: definition.id,
+      task,
       harnessId,
       ...(model ? { model } : {}),
       success: true,
