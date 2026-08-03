@@ -1,6 +1,6 @@
 {
   "name": "@kouro/runtime",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -17,8 +17,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@kouro/adw": "0.1.14",
-    "@kouro/domain": "0.1.14",
+    "@kouro/adw": "0.1.15",
+    "@kouro/domain": "0.1.15",
     "@usersatoshi/results": "^1.0.0"
   }
 }
