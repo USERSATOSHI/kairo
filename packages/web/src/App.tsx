@@ -2067,6 +2067,19 @@ function TicketHistory({ details }: { readonly details: TicketDetails }) {
   return (
     <div className="ticket-history">
       <section>
+        <h4>Comments</h4>
+        {details.comments.length === 0 ? <p className="empty">No comments.</p> : null}
+        {details.comments.map((comment) => (
+          <article className="ticket-comment" key={comment.id}>
+            <strong>{comment.author}</strong>
+            <time>{comment.updatedAt ?? comment.createdAt}</time>
+            <div className="ticket-comment-body">
+              <MarkdownContent content={comment.body} />
+            </div>
+          </article>
+        ))}
+      </section>
+      <section>
         <h4>Runs</h4>
         {details.runs.length === 0 ? <p className="empty">No linked runs.</p> : null}
         {details.runs.map((run) => (
@@ -2138,7 +2151,9 @@ function TicketInspector({ details }: { readonly details: TicketDetails }) {
         </div>
         <span className={stateClass(details.column)}>{details.column.replaceAll('_', ' ')}</span>
       </header>
-      <p className="ticket-description">{ticket.description || 'No description provided.'}</p>
+      <div className="ticket-description">
+        <MarkdownContent content={ticket.description || 'No description provided.'} />
+      </div>
       <dl className="ticket-metadata">
         <dt>Priority</dt>
         <dd>{ticket.priority ?? 'none'}</dd>
@@ -2237,6 +2252,7 @@ function TicketConsole() {
   const [details, setDetails] = useState<TicketDetails>();
   const [providers, setProviders] = useState<readonly TicketProviderConfigurationView[]>([]);
   const [error, setError] = useState<string>();
+  const detailsPanelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     Promise.all([fetchTicketProjects(), fetchTicketProviderConfigurations()])
@@ -2282,6 +2298,10 @@ function TicketConsole() {
       );
   }, [selectedTicketId]);
 
+  useEffect(() => {
+    detailsPanelRef.current?.scrollTo({ top: 0 });
+  }, [selectedTicketId]);
+
   return (
     <div className="ticket-console">
       {error ? <div className="error-banner">{error}</div> : null}
@@ -2302,18 +2322,20 @@ function TicketConsole() {
           </select>
         </label>
       </header>
-      <TicketBoard
-        tickets={tickets}
-        selectedTicketId={selectedTicketId}
-        onSelect={setSelectedTicketId}
-      />
-      <div className="ticket-lower">
-        {details ? (
-          <TicketInspector details={details} />
-        ) : (
-          <div className="ticket-empty">Select a ticket to inspect its durable history.</div>
-        )}
-        <ProviderConfigurations configurations={providers} />
+      <div className="ticket-workspace">
+        <TicketBoard
+          tickets={tickets}
+          selectedTicketId={selectedTicketId}
+          onSelect={setSelectedTicketId}
+        />
+        <div className="ticket-lower" ref={detailsPanelRef}>
+          {details ? (
+            <TicketInspector details={details} />
+          ) : (
+            <div className="ticket-empty">Select a ticket to inspect its durable history.</div>
+          )}
+          <ProviderConfigurations configurations={providers} />
+        </div>
       </div>
     </div>
   );

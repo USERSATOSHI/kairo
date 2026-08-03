@@ -25,6 +25,7 @@ tool exchanges above in-context steering and stop controls.
 - **Prompt deduplication** — The invocation prompt is added only when the provider transcript did not already emit the same user message
 - **Switchable workflow layout** — Operators can use a layered top-to-bottom or left-to-right flowchart, or a compact network graph
 - **Derived ticket columns** — The API supplies planning and runtime-owned execution projections; React never persists board state
+- **Markdown ticket details** — Ticket descriptions and comments render headings, lists, links, quotes, inline code, and fenced code without accepting raw HTML
 - **Server-resolved provider secrets** — Provider configuration responses contain status and non-secret scope only
 
 ## Quick Start
@@ -152,10 +153,12 @@ status pills, code surfaces, and color-coded state indicators:
 
 On wide screens, runs use an IDE-style repository explorer, flexible workflow
 canvas, resizable control/inspection drawer, and compact status bar. Tickets use
-a horizontally scrollable project board above a durable-history workspace.
-Tablet layouts move provider information below ticket details. Mobile layouts
-use touch-safe horizontal run and ticket selectors, stacked control/detail
-panels, and full-screen transcript and artifact inspectors.
+a horizontally scrollable project board beside an independently scrolling
+detail and durable-history workspace. Each ticket column scrolls vertically so
+large backlogs do not push the selected ticket out of view. Tablet and mobile
+layouts stack the bounded-height board above ticket details, use touch-safe
+horizontal run and ticket selectors, and provide full-screen transcript and
+artifact inspectors.
 
 Node positions derive from graph reachability rather than declaration index, so
 branches share a layer and bounded loop edges route back to earlier layers.

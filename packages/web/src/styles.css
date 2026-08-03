@@ -1657,7 +1657,11 @@ button:disabled {
 }
 
 .ticket-console {
+  display: grid;
+  height: calc(100vh - 64px);
   min-height: calc(100vh - 64px);
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
   background: var(--canvas);
 }
 
@@ -1689,13 +1693,23 @@ button:disabled {
   font-size: 12px;
 }
 
+.ticket-workspace {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr) clamp(380px, 34vw, 520px);
+}
+
 .ticket-board {
   display: grid;
   grid-auto-columns: minmax(230px, 268px);
   grid-auto-flow: column;
+  grid-template-rows: minmax(0, 1fr);
   gap: 12px;
-  min-height: 336px;
+  min-width: 0;
+  min-height: 0;
   overflow-x: auto;
+  overflow-y: hidden;
+  border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   background: var(--canvas-inset);
   padding: 20px 24px 24px;
@@ -1704,8 +1718,11 @@ button:disabled {
 }
 
 .ticket-column {
-  align-self: start;
-  min-height: 112px;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  align-self: stretch;
+  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--canvas-subtle);
@@ -1715,11 +1732,14 @@ button:disabled {
 
 .ticket-column > header {
   position: sticky;
+  z-index: 1;
   top: 0;
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
   min-height: 34px;
+  background: var(--canvas-subtle);
   color: #c9d1d9;
   font-size: 11px;
   text-transform: capitalize;
@@ -1727,6 +1747,7 @@ button:disabled {
 
 .ticket-card {
   display: grid;
+  flex: 0 0 auto;
   width: 100%;
   min-width: 0;
   gap: 7px;
@@ -1767,14 +1788,15 @@ button:disabled {
 }
 
 .ticket-lower {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
-  min-height: 430px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--canvas);
 }
 
 .ticket-inspector {
   min-width: 0;
-  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   padding: 28px clamp(20px, 3vw, 40px) 40px;
 }
 
@@ -1795,14 +1817,15 @@ button:disabled {
 .ticket-description {
   max-width: 900px;
   color: #c9d1d9;
+}
+
+.ticket-description .markdown-content {
   font-size: 14px;
-  line-height: 1.65;
-  white-space: pre-wrap;
 }
 
 .ticket-metadata {
   display: grid;
-  grid-template-columns: 90px minmax(0, 1fr) 90px minmax(0, 1fr);
+  grid-template-columns: 84px minmax(0, 1fr);
   gap: 8px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1824,7 +1847,7 @@ button:disabled {
 
 .ticket-history {
   display: grid;
-  grid-template-columns: repeat(2, minmax(240px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   margin-top: 24px;
 }
@@ -1867,6 +1890,24 @@ button:disabled {
 .ticket-history article time {
   grid-column: 1 / -1;
   font-size: 10px;
+}
+
+.ticket-history .ticket-comment {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.ticket-history .ticket-comment time {
+  grid-column: auto;
+}
+
+.ticket-comment-body {
+  min-width: 0;
+  grid-column: 1 / -1;
+}
+
+.ticket-comment-body .markdown-content {
+  font-size: 11px;
+  line-height: 1.55;
 }
 
 .provider-configurations {
@@ -1917,7 +1958,7 @@ button:disabled {
   display: grid;
   min-height: 300px;
   place-items: center;
-  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   padding: 24px;
   color: var(--text-muted);
   font-size: 13px;
@@ -2259,12 +2300,35 @@ button:disabled {
     grid-template-columns: 240px minmax(0, 1fr);
   }
 
+  .ticket-console {
+    display: block;
+    height: auto;
+    overflow: visible;
+  }
+
+  .ticket-workspace {
+    display: block;
+  }
+
+  .ticket-board {
+    height: clamp(320px, 52vh, 480px);
+    border-right: 0;
+  }
+
   .ticket-lower {
-    grid-template-columns: minmax(0, 1fr);
+    overflow: visible;
   }
 
   .ticket-inspector {
     border-right: 0;
+  }
+
+  .ticket-metadata {
+    grid-template-columns: 90px minmax(0, 1fr) 90px minmax(0, 1fr);
+  }
+
+  .ticket-history {
+    grid-template-columns: repeat(2, minmax(240px, 1fr));
   }
 
   .provider-configurations {
@@ -2585,6 +2649,7 @@ button:disabled {
 
   .ticket-board {
     grid-auto-columns: minmax(240px, 84vw);
+    height: clamp(300px, 50vh, 420px);
     padding: 16px;
     scroll-padding: 16px;
     scroll-snap-type: x mandatory;
@@ -2615,7 +2680,7 @@ button:disabled {
   }
 
   .ticket-empty {
-    border-right: 0;
+    border-bottom: 0;
   }
 }
 
